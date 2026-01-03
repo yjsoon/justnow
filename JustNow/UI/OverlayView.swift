@@ -4,7 +4,7 @@
 //
 
 import SwiftUI
-import CoreVideo
+import CoreGraphics
 import Observation
 
 @Observable
@@ -105,7 +105,7 @@ struct ContentAreaView: View {
             Spacer()
 
             if let frame = viewModel.frames[safe: viewModel.selectedIndex] {
-                FramePreviewView(pixelBuffer: frame.pixelBuffer)
+                FramePreviewView(image: frame.image)
                     .padding(.horizontal, 60)
                     .padding(.top, 40)
 
@@ -156,10 +156,10 @@ struct InstructionsOverlay: View {
 }
 
 struct FramePreviewView: View {
-    let pixelBuffer: CVPixelBuffer
+    let image: CGImage
 
     var body: some View {
-        Image(nsImage: imageFromPixelBuffer(pixelBuffer))
+        Image(nsImage: imageFromCGImage(image))
             .resizable()
             .aspectRatio(contentMode: .fit)
             .clipShape(.rect(cornerRadius: 12))

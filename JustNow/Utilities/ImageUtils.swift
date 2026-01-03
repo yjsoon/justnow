@@ -7,31 +7,40 @@ import AppKit
 import CoreImage
 import CoreVideo
 
-/// Fast thumbnail generation using Core Graphics
-func thumbnailFromPixelBuffer(_ buffer: CVPixelBuffer, maxSize: CGFloat) -> NSImage {
-    let ciImage = CIImage(cvPixelBuffer: buffer)
-    let context = CIContext(options: [.useSoftwareRenderer: false])
-
-    let scale = maxSize / max(ciImage.extent.width, ciImage.extent.height)
-    let scaledImage = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-
-    guard let cgImage = context.createCGImage(scaledImage, from: scaledImage.extent) else {
-        return NSImage()
-    }
-
+/// Convert CGImage to NSImage
+func imageFromCGImage(_ cgImage: CGImage) -> NSImage {
     return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
 }
 
-/// Convert CVPixelBuffer to NSImage at full resolution
-func imageFromPixelBuffer(_ buffer: CVPixelBuffer) -> NSImage {
-    let ciImage = CIImage(cvPixelBuffer: buffer)
-    let context = CIContext(options: [.useSoftwareRenderer: false])
+/// Fast thumbnail generation from CGImage
+func thumbnailFromCGImage(_ cgImage: CGImage, maxSize: CGFloat) -> NSImage {
+    let originalWidth = CGFloat(cgImage.width)
+    let originalHeight = CGFloat(cgImage.height)
+    let scale = maxSize / max(originalWidth, originalHeight)
 
-    guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
-        return NSImage()
+    let newWidth = Int(originalWidth * scale)
+    let newHeight = Int(originalHeight * scale)
+
+    guard let context = CGContext(
+        data: nil,
+        width: newWidth,
+        height: newHeight,
+        bitsPerComponent: 8,
+        bytesPerRow: 0,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else {
+        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
     }
 
-    return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+    context.interpolationQuality = .medium
+    context.draw(cgImage, in: CGRect(x: 0, y: 0, width: newWidth, height: newHeight))
+
+    guard let scaledImage = context.makeImage() else {
+        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+    }
+
+    return NSImage(cgImage: scaledImage, size: NSSize(width: newWidth, height: newHeight))
 }
 
 extension Collection {

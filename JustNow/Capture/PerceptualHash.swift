@@ -3,37 +3,43 @@
 //  JustNow
 //
 
-import CoreVideo
+import CoreGraphics
 import CoreImage
-import Accelerate
 
 struct PerceptualHash {
-    /// Compute a 64-bit perceptual hash from a CVPixelBuffer
+    private static let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+
+    /// Compute a 64-bit perceptual hash from a CGImage
     /// Uses average hash algorithm: resize to 8x8, convert to grayscale, threshold by mean
-    static func compute(from pixelBuffer: CVPixelBuffer) -> UInt64 {
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+    static func compute(from cgImage: CGImage) -> UInt64 {
+        // Create an 8x8 grayscale bitmap context
+        let width = 8
+        let height = 8
+        var pixelData = [UInt8](repeating: 0, count: width * height)
 
-        // Resize to 8x8
-        let scale = 8.0 / max(ciImage.extent.width, ciImage.extent.height)
-        let resized = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        guard let context = CGContext(
+            data: &pixelData,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width,
+            space: CGColorSpaceCreateDeviceGray(),
+            bitmapInfo: CGImageAlphaInfo.none.rawValue
+        ) else {
+            return 0
+        }
 
-        // Create grayscale version
-        let grayscale = resized.applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0])
-
-        let context = CIContext(options: [.useSoftwareRenderer: false])
-        var bitmap = [UInt8](repeating: 0, count: 64)
-
-        // Render 8x8 grayscale
-        let rect = CGRect(x: 0, y: 0, width: 8, height: 8)
-        context.render(grayscale, toBitmap: &bitmap, rowBytes: 8, bounds: rect, format: .L8, colorSpace: CGColorSpaceCreateDeviceGray())
+        // Draw the image scaled to 8x8
+        context.interpolationQuality = .low
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
 
         // Calculate mean
-        let sum = bitmap.reduce(0) { $0 + Int($1) }
-        let mean = UInt8(sum / 64)
+        let sum = pixelData.reduce(0) { $0 + Int($1) }
+        let mean = UInt8(sum / (width * height))
 
         // Build hash: 1 if pixel > mean, else 0
         var hash: UInt64 = 0
-        for (index, pixel) in bitmap.enumerated() {
+        for (index, pixel) in pixelData.enumerated() {
             if pixel > mean {
                 hash |= (1 << index)
             }
