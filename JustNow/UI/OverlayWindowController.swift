@@ -6,48 +6,79 @@
 import AppKit
 import SwiftUI
 
-class OverlayWindowController {
-    private var panel: NSPanel?
+class OverlayWindowController: NSObject {
+    private var window: OverlayWindow?
     private let frameBuffer: FrameBuffer
+    private var eventMonitor: Any?
 
     init(frameBuffer: FrameBuffer) {
         self.frameBuffer = frameBuffer
+        super.init()
     }
 
     func showOverlay() {
-        guard panel == nil, let screen = NSScreen.main else { return }
+        guard window == nil, let screen = NSScreen.main else { return }
 
-        let panel = NSPanel(
+        let window = OverlayWindow(
             contentRect: screen.frame,
-            styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
+            styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
 
-        panel.level = .screenSaver
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        panel.isOpaque = false
-        panel.backgroundColor = NSColor.black.withAlphaComponent(0.9)
-        panel.hasShadow = false
+        window.level = .statusBar + 1
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.isOpaque = false
+        window.backgroundColor = NSColor.black.withAlphaComponent(0.92)
+        window.hasShadow = false
+        window.ignoresMouseEvents = false
+        window.acceptsMouseMovedEvents = true
 
         let overlayView = OverlayView(
             frames: frameBuffer.getFrames(),
             onDismiss: { [weak self] in self?.hideOverlay() }
         )
 
-        panel.contentView = NSHostingView(rootView: overlayView.ignoresSafeArea())
-        panel.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        let hostingView = NSHostingView(rootView: overlayView)
+        hostingView.frame = window.contentView?.bounds ?? screen.frame
+        hostingView.autoresizingMask = [.width, .height]
+        window.contentView = hostingView
 
-        self.panel = panel
+        window.setFrame(screen.frame, display: true)
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+
+        // Monitor for ESC key
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.keyCode == 53 { // ESC
+                self?.hideOverlay()
+                return nil
+            }
+            return event
+        }
+
+        self.window = window
+
+        // Activate the app to ensure keyboard events work
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func hideOverlay() {
-        panel?.orderOut(nil)
-        panel = nil
+        if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
+            eventMonitor = nil
+        }
+        window?.orderOut(nil)
+        window = nil
     }
 
     var isVisible: Bool {
-        panel != nil
+        window != nil && window!.isVisible
     }
+}
+
+// Custom window that can become key
+class OverlayWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
 }

@@ -15,25 +15,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     private var overlayController: OverlayWindowController?
     private var hotKey: HotKey?
     private var appNapPreventer = AppNapPreventer()
+    private var settingsWindow: NSWindow?
 
     @AppStorage("captureInterval") private var captureInterval: Double = 1.0
     @AppStorage("maxFrames") private var maxFrames: Int = 600
     @AppStorage("reduceCaptureOnBattery") private var reduceCaptureOnBattery: Bool = true
 
-    private var powerObserver: Any?
+    private var powerCheckTimer: Timer?
+    private var frameCountTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
         setupHotKey()
         setupCapture()
-        setupPowerObserver()
+        setupTimers()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         appNapPreventer.stopActivity()
-        if let observer = powerObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
+        powerCheckTimer?.invalidate()
+        frameCountTimer?.invalidate()
     }
 
     // MARK: - Setup
@@ -47,28 +48,40 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
         }
 
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Show Timeline (⌘⌥R)", action: #selector(showOverlay), keyEquivalent: ""))
+
+        let showItem = NSMenuItem(title: "Show Timeline", action: #selector(showOverlay), keyEquivalent: "")
+        showItem.target = self
+        showItem.keyEquivalentModifierMask = [.command, .option]
+        menu.addItem(showItem)
+
         menu.addItem(NSMenuItem.separator())
 
         let frameCountItem = NSMenuItem(title: "Frames: 0", action: nil, keyEquivalent: "")
         frameCountItem.tag = 100
+        frameCountItem.isEnabled = false
         menu.addItem(frameCountItem)
 
+        let captureStatusItem = NSMenuItem(title: "Capture: Starting...", action: nil, keyEquivalent: "")
+        captureStatusItem.tag = 101
+        captureStatusItem.isEnabled = false
+        menu.addItem(captureStatusItem)
+
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Settings...", action: #selector(showSettings), keyEquivalent: ","))
+
+        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(showSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+
+        let quitItem = NSMenuItem(title: "Quit JustNow", action: #selector(quitApp), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
 
         statusItem.menu = menu
-
-        // Update frame count periodically
-        Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-            self?.updateFrameCountMenuItem()
-        }
     }
 
     private func setupHotKey() {
-        // Cmd+Option+R to show overlay
         hotKey = HotKey(key: .r, modifiers: [.command, .option])
         hotKey?.keyDownHandler = { [weak self] in
             self?.toggleOverlay()
@@ -86,26 +99,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
             do {
                 try await captureManager.startCapture()
                 appNapPreventer.startActivity()
+                updateCaptureStatus("Active")
                 updateCaptureInterval()
             } catch CaptureError.permissionDenied {
+                updateCaptureStatus("No Permission")
                 showPermissionAlert()
             } catch {
+                updateCaptureStatus("Error")
                 showErrorAlert(error)
             }
         }
     }
 
-    private func setupPowerObserver() {
-        powerObserver = NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("com.apple.system.config.network_change"),
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.updateCaptureInterval()
+    private func setupTimers() {
+        // Update frame count every 2 seconds
+        frameCountTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            self?.updateFrameCountMenuItem()
         }
 
-        // Also check periodically
-        Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
+        // Check power state every minute
+        powerCheckTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
             self?.updateCaptureInterval()
         }
     }
@@ -134,17 +147,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     }
 
     @objc private func showSettings() {
-        let settingsWindow = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 350),
+        if let window = settingsWindow, window.isVisible {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 380),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
-        settingsWindow.title = "JustNow Settings"
-        settingsWindow.contentView = NSHostingView(rootView: SettingsView())
-        settingsWindow.center()
-        settingsWindow.makeKeyAndOrderFront(nil)
+        window.title = "JustNow Settings"
+        window.contentView = NSHostingView(rootView: SettingsView())
+        window.center()
+        window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+
+        settingsWindow = window
+    }
+
+    @objc private func quitApp() {
+        NSApp.terminate(nil)
     }
 
     // MARK: - Helpers
@@ -155,7 +180,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
         Task {
             let interval: Double
             if PowerManager.isOnBattery() {
-                interval = captureInterval * 2.0 // Slower on battery
+                interval = captureInterval * 2.0
             } else {
                 interval = captureInterval
             }
@@ -166,25 +191,36 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     }
 
     private func updateFrameCountMenuItem() {
-        if let menu = statusItem.menu,
-           let item = menu.item(withTag: 100) {
-            item.title = "Frames: \(frameBuffer.frameCount)"
+        guard let menu = statusItem.menu else { return }
+
+        if let item = menu.item(withTag: 100) {
+            let count = frameBuffer.frameCount
+            item.title = "Frames: \(count)"
         }
+    }
+
+    private func updateCaptureStatus(_ status: String) {
+        guard let menu = statusItem.menu,
+              let item = menu.item(withTag: 101) else { return }
+        item.title = "Capture: \(status)"
     }
 
     private func showPermissionAlert() {
         let alert = NSAlert()
         alert.messageText = "Screen Recording Permission Required"
-        alert.informativeText = "JustNow needs screen recording permission to capture your screen history. Please grant permission in System Settings → Privacy & Security → Screen Recording."
+        alert.informativeText = "JustNow needs screen recording permission to capture your screen history.\n\nPlease grant permission in System Settings → Privacy & Security → Screen Recording, then restart the app."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Open System Settings")
         alert.addButton(withTitle: "Quit")
 
+        NSApp.activate(ignoringOtherApps: true)
+
         if alert.runModal() == .alertFirstButtonReturn {
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
-        } else {
-            NSApp.terminate(nil)
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                NSWorkspace.shared.open(url)
+            }
         }
+        NSApp.terminate(nil)
     }
 
     private func showErrorAlert(_ error: Error) {
@@ -192,6 +228,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
         alert.messageText = "Capture Error"
         alert.informativeText = error.localizedDescription
         alert.alertStyle = .critical
+
+        NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
     }
 }
