@@ -2,16 +2,16 @@
 //  JustNowApp.swift
 //  JustNow
 //
-//  Created by YJ Soon on 3/1/26.
-//
 
 import SwiftUI
 
 @main
 struct JustNowApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+
     var body: some Scene {
-        WindowGroup {
-            ContentView()
+        Settings {
+            SettingsView()
         }
     }
 }
