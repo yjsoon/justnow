@@ -6,6 +6,8 @@
 	<string></string>
 	<key>CFBundleSignature</key>
 	<string></string>
+	<key>LSUIElement</key>
+	<true/>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>JustNow needs screen recording permission to capture your screen history.</string>
 </dict>
