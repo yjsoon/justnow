@@ -5,10 +5,11 @@
 
 import SwiftUI
 import CoreVideo
-import Combine
+import Observation
 
-class OverlayViewModel: ObservableObject {
-    @Published var selectedIndex: Int = 0
+@Observable
+class OverlayViewModel {
+    var selectedIndex: Int = 0
     let frames: [StoredFrame]
     let onDismiss: () -> Void
 
@@ -45,111 +46,111 @@ class OverlayViewModel: ObservableObject {
     func goToEnd() {
         selectedIndex = max(0, frames.count - 1)
     }
+
+    func scrollBy(_ delta: CGFloat) {
+        let step = delta > 0 ? -1 : 1
+        let newIndex = selectedIndex + step
+        selectedIndex = max(0, min(frames.count - 1, newIndex))
+    }
 }
 
 struct OverlayView: View {
-    @StateObject private var viewModel: OverlayViewModel
+    var viewModel: OverlayViewModel
 
     init(frames: [StoredFrame], onDismiss: @escaping () -> Void) {
-        _viewModel = StateObject(wrappedValue: OverlayViewModel(frames: frames, onDismiss: onDismiss))
+        self.viewModel = OverlayViewModel(frames: frames, onDismiss: onDismiss)
     }
 
     var body: some View {
-        KeyboardHandlingView(viewModel: viewModel) {
-            ZStack {
-                // Semi-transparent background
-                Color.black.opacity(0.92)
-                    .ignoresSafeArea()
+        ZStack {
+            Color.black.opacity(0.92)
+                .ignoresSafeArea()
 
-                // Background tap to dismiss
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture { viewModel.onDismiss() }
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { viewModel.onDismiss() }
 
-                if viewModel.frames.isEmpty {
-                    emptyStateView
-                } else {
-                    contentView
-                }
-
-                instructionsOverlay
+            if viewModel.frames.isEmpty {
+                EmptyStateView()
+            } else {
+                ContentAreaView(viewModel: viewModel)
             }
+
+            InstructionsOverlay()
         }
     }
+}
 
-    private var emptyStateView: some View {
+struct EmptyStateView: View {
+    var body: some View {
         VStack(spacing: 16) {
             Image(systemName: "clock.arrow.circlepath")
                 .font(.system(size: 64))
-                .foregroundColor(.white.opacity(0.5))
+                .foregroundStyle(.white.opacity(0.5))
             Text("No frames captured yet")
                 .font(.title2)
-                .foregroundColor(.white.opacity(0.7))
+                .foregroundStyle(.white.opacity(0.7))
             Text("Keep the app running to build up history")
                 .font(.subheadline)
-                .foregroundColor(.white.opacity(0.5))
+                .foregroundStyle(.white.opacity(0.5))
         }
     }
+}
 
-    private var contentView: some View {
+struct ContentAreaView: View {
+    var viewModel: OverlayViewModel
+
+    var body: some View {
         VStack(spacing: 0) {
             Spacer()
 
-            // Main preview image
             if let frame = viewModel.frames[safe: viewModel.selectedIndex] {
                 FramePreviewView(pixelBuffer: frame.pixelBuffer)
                     .padding(.horizontal, 60)
                     .padding(.top, 40)
 
-                // Timestamp
-                Text(timeAgoString(from: frame.timestamp))
-                    .font(.system(size: 24, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white)
-                    .padding(.top, 16)
-
-                // Frame counter
-                Text("\(viewModel.selectedIndex + 1) / \(viewModel.frames.count)")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.5))
-                    .padding(.top, 4)
+                TimestampView(date: frame.timestamp)
+                    .padding(.top, 20)
             }
 
             Spacer()
 
-            // Timeline scrubber at bottom
-            TimelineScrubber(
-                frames: viewModel.frames,
-                selectedIndex: $viewModel.selectedIndex
-            )
-            .frame(height: 130)
-            .padding(.horizontal, 20)
-            .padding(.bottom, 50)
+            TimelineSlider(viewModel: viewModel)
+                .frame(height: 100)
+                .padding(.horizontal, 40)
+                .padding(.bottom, 60)
         }
     }
+}
 
-    private var instructionsOverlay: some View {
+struct TimestampView: View {
+    let date: Date
+
+    var body: some View {
+        let seconds = Int(Date().timeIntervalSince(date))
+        let text = seconds < 60 ? "\(seconds)s ago" : "\(seconds / 60)m \(seconds % 60)s ago"
+
+        Text(text)
+            .font(.system(size: 28, weight: .medium, design: .monospaced))
+            .foregroundStyle(.white)
+    }
+}
+
+struct InstructionsOverlay: View {
+    var body: some View {
         VStack {
             HStack {
                 Spacer()
                 VStack(alignment: .trailing, spacing: 4) {
                     Text("ESC to close")
                     Text("← → to navigate")
-                    Text("Scroll to browse")
+                    Text("Scroll or drag slider")
                 }
                 .font(.caption)
-                .foregroundColor(.white.opacity(0.5))
+                .foregroundStyle(.white.opacity(0.5))
                 .padding()
             }
             Spacer()
-        }
-    }
-
-    private func timeAgoString(from date: Date) -> String {
-        let seconds = Int(Date().timeIntervalSince(date))
-        if seconds < 60 {
-            return "\(seconds)s ago"
-        } else {
-            return "\(seconds / 60)m \(seconds % 60)s ago"
         }
     }
 }
@@ -161,94 +162,104 @@ struct FramePreviewView: View {
         Image(nsImage: imageFromPixelBuffer(pixelBuffer))
             .resizable()
             .aspectRatio(contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .clipShape(.rect(cornerRadius: 12))
             .shadow(color: .black.opacity(0.5), radius: 20)
     }
 }
 
-// NSViewRepresentable to handle keyboard and scroll events
-struct KeyboardHandlingView<Content: View>: NSViewRepresentable {
-    let viewModel: OverlayViewModel
-    let content: () -> Content
+struct TimelineSlider: View {
+    var viewModel: OverlayViewModel
 
-    func makeNSView(context: Context) -> KeyboardScrollView {
-        let view = KeyboardScrollView()
-        view.viewModel = viewModel
-        view.autoresizingMask = [.width, .height]
+    @State private var isDragging = false
 
-        let hostingView = NSHostingView(rootView: content())
-        hostingView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(hostingView)
+    private var frameCount: Int { viewModel.frames.count }
 
-        NSLayoutConstraint.activate([
-            hostingView.topAnchor.constraint(equalTo: view.topAnchor),
-            hostingView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            hostingView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            hostingView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
-        ])
+    var body: some View {
+        VStack(spacing: 12) {
+            TimeLabels(frames: viewModel.frames)
 
-        return view
-    }
+            SliderTrack(
+                frameCount: frameCount,
+                selectedIndex: viewModel.selectedIndex,
+                onIndexChanged: { viewModel.selectedIndex = $0 }
+            )
+            .frame(height: 20)
 
-    func updateNSView(_ nsView: KeyboardScrollView, context: Context) {
-        nsView.viewModel = viewModel
+            Text("\(viewModel.selectedIndex + 1) / \(frameCount) frames")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.6))
+        }
     }
 }
 
-class KeyboardScrollView: NSView {
-    weak var viewModel: OverlayViewModel?
+struct TimeLabels: View {
+    let frames: [StoredFrame]
 
-    override var acceptsFirstResponder: Bool { true }
-
-    override func keyDown(with event: NSEvent) {
-        guard let viewModel = viewModel else {
-            super.keyDown(with: event)
-            return
+    var body: some View {
+        HStack {
+            if let oldest = frames.first {
+                let seconds = Int(Date().timeIntervalSince(oldest.timestamp))
+                let text = seconds < 60 ? "\(seconds)s ago" : "\(seconds / 60)m \(seconds % 60)s ago"
+                Text(text)
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+            Spacer()
+            Text("Now")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.5))
         }
+    }
+}
 
-        switch event.keyCode {
-        case 123: // Left arrow
-            if event.modifierFlags.contains(.command) {
-                viewModel.goToStart()
-            } else if event.modifierFlags.contains(.option) {
-                viewModel.jumpLeft()
-            } else {
-                viewModel.moveLeft()
+struct SliderTrack: View {
+    let frameCount: Int
+    let selectedIndex: Int
+    let onIndexChanged: (Int) -> Void
+
+    var body: some View {
+        GeometryReader { geometry in
+            let width = geometry.size.width
+
+            ZStack(alignment: .leading) {
+                // Track background
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(.white.opacity(0.2))
+                    .frame(height: 8)
+
+                // Progress fill
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(.white.opacity(0.5))
+                    .frame(width: progressWidth(in: width), height: 8)
+
+                // Thumb
+                Circle()
+                    .fill(.white)
+                    .frame(width: 20, height: 20)
+                    .shadow(radius: 4)
+                    .offset(x: thumbOffset(in: width))
             }
-        case 124: // Right arrow
-            if event.modifierFlags.contains(.command) {
-                viewModel.goToEnd()
-            } else if event.modifierFlags.contains(.option) {
-                viewModel.jumpRight()
-            } else {
-                viewModel.moveRight()
-            }
-        case 53: // ESC - handled in controller but just in case
-            viewModel.onDismiss()
-        default:
-            super.keyDown(with: event)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let percent = max(0, min(1, value.location.x / width))
+                        let newIndex = Int(percent * CGFloat(frameCount - 1))
+                        onIndexChanged(newIndex)
+                    }
+            )
         }
     }
 
-    override func scrollWheel(with event: NSEvent) {
-        guard let viewModel = viewModel else {
-            super.scrollWheel(with: event)
-            return
-        }
-
-        // Use horizontal scroll (trackpad swipe) or vertical scroll
-        let delta = event.scrollingDeltaX != 0 ? event.scrollingDeltaX : -event.scrollingDeltaY
-
-        if abs(delta) > 2 {
-            if delta > 0 {
-                viewModel.moveLeft()
-            } else {
-                viewModel.moveRight()
-            }
-        }
+    private func progressWidth(in totalWidth: CGFloat) -> CGFloat {
+        guard frameCount > 1 else { return 0 }
+        let percent = CGFloat(selectedIndex) / CGFloat(frameCount - 1)
+        return totalWidth * percent
     }
 
-    override func becomeFirstResponder() -> Bool {
-        return true
+    private func thumbOffset(in totalWidth: CGFloat) -> CGFloat {
+        guard frameCount > 1 else { return 0 }
+        let percent = CGFloat(selectedIndex) / CGFloat(frameCount - 1)
+        return (totalWidth - 20) * percent
     }
 }

@@ -26,7 +26,7 @@ struct SettingsView: View {
                     ), in: 100...1200, step: 100)
                     Text("≈ \(Int(Double(maxFrames) * captureInterval / 60)) minutes of history")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                 }
             } header: {
                 Text("Capture")
@@ -36,7 +36,7 @@ struct SettingsView: View {
                 Toggle("Reduce capture rate on battery", isOn: $reduceCaptureOnBattery)
                 Text("When enabled, capture interval doubles when on battery power")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
             } header: {
                 Text("Battery")
             }
