@@ -83,10 +83,8 @@ class FrameBuffer {
     }
 
     private func pruneFrames() {
-        // First apply retention policy
-        retentionManager.pruneFrames(frames: &frames, currentTime: Date())
-
-        // Then enforce max count
+        // Only enforce max count - retention manager was too aggressive
+        // The maxFrames limit is sufficient for memory management
         while frames.count > maxFrames {
             _ = frames.removeFirst()
         }
