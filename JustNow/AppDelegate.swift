@@ -29,6 +29,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
         setupHotKey()
         setupCapture()
         setupTimers()
+        setupSleepWakeObservers()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -120,6 +121,45 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
         // Check power state every minute
         powerCheckTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
             self?.updateCaptureInterval()
+        }
+    }
+
+    private func setupSleepWakeObservers() {
+        let workspace = NSWorkspace.shared.notificationCenter
+
+        workspace.addObserver(
+            self,
+            selector: #selector(handleWake),
+            name: NSWorkspace.didWakeNotification,
+            object: nil
+        )
+
+        workspace.addObserver(
+            self,
+            selector: #selector(handleSleep),
+            name: NSWorkspace.willSleepNotification,
+            object: nil
+        )
+    }
+
+    @objc private func handleSleep() {
+        updateCaptureStatus("Sleeping...")
+    }
+
+    @objc private func handleWake() {
+        // Restart capture after wake - stream may have been invalidated
+        Task { @MainActor in
+            await captureManager.stopCapture()
+
+            // Small delay to let system stabilise after wake
+            try? await Task.sleep(for: .seconds(1))
+
+            do {
+                try await captureManager.startCapture()
+                updateCaptureStatus("Active")
+            } catch {
+                updateCaptureStatus("Error")
+            }
         }
     }
 
