@@ -22,7 +22,7 @@ class OverlayWindowController: NSObject {
         guard window == nil, let screen = NSScreen.main else { return }
 
         let frames = frameBuffer.getFrames()
-        let vm = OverlayViewModel(frames: frames, onDismiss: { [weak self] in
+        let vm = OverlayViewModel(frames: frames, frameBuffer: frameBuffer, onDismiss: { [weak self] in
             self?.hideOverlay()
         })
         self.viewModel = vm
@@ -42,7 +42,7 @@ class OverlayWindowController: NSObject {
         window.ignoresMouseEvents = false
         window.acceptsMouseMovedEvents = true
 
-        let overlayView = OverlayView(frames: frames, onDismiss: { [weak self] in
+        let overlayView = OverlayView(frames: frames, frameBuffer: frameBuffer, onDismiss: { [weak self] in
             self?.hideOverlay()
         })
         // Replace the view's viewModel with our shared one

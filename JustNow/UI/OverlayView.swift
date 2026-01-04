@@ -11,10 +11,12 @@ import Observation
 class OverlayViewModel {
     var selectedIndex: Int = 0
     let frames: [StoredFrame]
+    let frameBuffer: FrameBuffer
     let onDismiss: () -> Void
 
-    init(frames: [StoredFrame], onDismiss: @escaping () -> Void) {
+    init(frames: [StoredFrame], frameBuffer: FrameBuffer, onDismiss: @escaping () -> Void) {
         self.frames = frames
+        self.frameBuffer = frameBuffer
         self.onDismiss = onDismiss
         self.selectedIndex = max(0, frames.count - 1)
     }
@@ -57,8 +59,8 @@ class OverlayViewModel {
 struct OverlayView: View {
     var viewModel: OverlayViewModel
 
-    init(frames: [StoredFrame], onDismiss: @escaping () -> Void) {
-        self.viewModel = OverlayViewModel(frames: frames, onDismiss: onDismiss)
+    init(frames: [StoredFrame], frameBuffer: FrameBuffer, onDismiss: @escaping () -> Void) {
+        self.viewModel = OverlayViewModel(frames: frames, frameBuffer: frameBuffer, onDismiss: onDismiss)
     }
 
     var body: some View {
@@ -105,7 +107,7 @@ struct ContentAreaView: View {
             Spacer()
 
             if let frame = viewModel.frames[safe: viewModel.selectedIndex] {
-                FramePreviewView(image: frame.image)
+                FramePreviewView(frame: frame, frameBuffer: viewModel.frameBuffer)
                     .padding(.horizontal, 60)
                     .padding(.top, 40)
 
@@ -156,14 +158,45 @@ struct InstructionsOverlay: View {
 }
 
 struct FramePreviewView: View {
-    let image: CGImage
+    let frame: StoredFrame
+    let frameBuffer: FrameBuffer
+
+    @State private var image: CGImage?
+    @State private var isLoading = false
 
     var body: some View {
-        Image(nsImage: imageFromCGImage(image))
-            .resizable()
-            .aspectRatio(contentMode: .fit)
-            .clipShape(.rect(cornerRadius: 12))
-            .shadow(color: .black.opacity(0.5), radius: 20)
+        Group {
+            if let image = image {
+                Image(nsImage: imageFromCGImage(image))
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .clipShape(.rect(cornerRadius: 12))
+                    .shadow(color: .black.opacity(0.5), radius: 20)
+            } else {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(.white.opacity(0.1))
+                    .aspectRatio(16/10, contentMode: .fit)
+                    .overlay {
+                        if isLoading {
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .tint(.white)
+                        }
+                    }
+            }
+        }
+        .task(id: frame.id) {
+            isLoading = true
+            image = nil
+
+            do {
+                image = try await frameBuffer.getFullImage(for: frame)
+            } catch {
+                print("Failed to load frame: \(error)")
+            }
+
+            isLoading = false
+        }
     }
 }
 

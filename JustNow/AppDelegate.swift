@@ -11,7 +11,7 @@ import CoreMedia
 class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     private var statusItem: NSStatusItem!
     private var captureManager: ScreenCaptureManager!
-    private var frameBuffer: FrameBuffer!
+    private var frameBuffer: FrameBuffer?
     private var overlayController: OverlayWindowController?
     private var hotKey: HotKey?
     private var appNapPreventer = AppNapPreventer()
@@ -91,10 +91,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
 
     private func setupCapture() {
         captureManager = ScreenCaptureManager()
-        frameBuffer = FrameBuffer()
-        frameBuffer.maxFrames = maxFrames
 
         Task { @MainActor in
+            // Initialize frame buffer (loads persisted frames from disk)
+            do {
+                let buffer = try await FrameBuffer()
+                buffer.maxFrames = maxFrames
+                frameBuffer = buffer
+
+                let loadedCount = buffer.frameCount
+                if loadedCount > 0 {
+                    print("Loaded \(loadedCount) frames from disk")
+                }
+            } catch {
+                print("Failed to initialize frame buffer: \(error)")
+                // Show error but don't quit
+                showErrorAlert(error)
+                return
+            }
+
             captureManager.delegate = self
 
             do {
@@ -166,7 +181,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     // MARK: - Capture Delegate
 
     func captureManager(_ manager: ScreenCaptureManager, didCaptureFrame pixelBuffer: CVPixelBuffer, at timestamp: Date) {
-        frameBuffer.addFrame(pixelBuffer, timestamp: timestamp)
+        frameBuffer?.addFrame(pixelBuffer, timestamp: timestamp)
     }
 
     // MARK: - Actions
@@ -180,6 +195,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     }
 
     @objc private func showOverlay() {
+        guard let frameBuffer = frameBuffer else { return }
+
         if overlayController == nil {
             overlayController = OverlayWindowController(frameBuffer: frameBuffer)
         }
@@ -194,13 +211,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 380),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 450),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
         window.title = "JustNow Settings"
-        window.contentView = NSHostingView(rootView: SettingsView())
+        window.contentView = NSHostingView(rootView: SettingsView(frameBuffer: frameBuffer))
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -234,7 +251,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
         guard let menu = statusItem.menu else { return }
 
         if let item = menu.item(withTag: 100) {
-            let count = frameBuffer.frameCount
+            let count = frameBuffer?.frameCount ?? 0
             item.title = "Frames: \(count)"
         }
     }
