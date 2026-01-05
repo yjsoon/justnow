@@ -19,7 +19,10 @@ struct StoredFrame: Identifiable, Sendable {
 class FrameBuffer {
     private var frames: [StoredFrame] = []
     private var lastHash: UInt64?
-    private let hashThreshold: Int = 8
+    // Hamming distance threshold: higher = more frames kept
+    // 64 bits total, so 3 means ~5% difference required (very strict)
+    // Using 3 to only skip nearly-identical consecutive frames
+    private let hashThreshold: Int = 3
 
     private let frameStore: FrameStore
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
@@ -51,17 +54,22 @@ class FrameBuffer {
         // Convert to CGImage immediately
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else {
+            print("Failed to create CGImage from pixel buffer")
             return
         }
 
         let hash = PerceptualHash.compute(from: cgImage)
 
-        // Skip if too similar to previous frame
+        // Skip if too similar to previous frame (only skip nearly-identical frames)
         if let last = lastHash {
             let distance = PerceptualHash.hammingDistance(hash, last)
             if distance <= hashThreshold {
+                // Silently skip - this is expected for static screens
                 return
             }
+            print("Frame accepted: distance=\(distance) threshold=\(hashThreshold)")
+        } else {
+            print("First frame captured")
         }
 
         // Save to disk

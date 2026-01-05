@@ -15,10 +15,15 @@ enum CaptureError: Error {
 
 protocol ScreenCaptureDelegate: AnyObject {
     func captureManager(_ manager: ScreenCaptureManager, didCaptureFrame pixelBuffer: CVPixelBuffer, at timestamp: Date)
+    func captureManagerDidStop(_ manager: ScreenCaptureManager)
+}
+
+extension ScreenCaptureDelegate {
+    func captureManagerDidStop(_ manager: ScreenCaptureManager) {}
 }
 
 @MainActor
-class ScreenCaptureManager: NSObject, SCStreamOutput {
+class ScreenCaptureManager: NSObject, SCStreamOutput, SCStreamDelegate {
     private var stream: SCStream?
     private let captureQueue = DispatchQueue(label: "sg.tk.justnow.capture", qos: .utility)
 
@@ -29,7 +34,13 @@ class ScreenCaptureManager: NSObject, SCStreamOutput {
     private var currentFilter: SCContentFilter?
 
     func startCapture() async throws {
-        guard !isCapturing else { return }
+        // Force stop any existing capture first
+        if stream != nil {
+            print("Cleaning up existing stream before starting")
+            try? await stream?.stopCapture()
+            stream = nil
+        }
+        isCapturing = false
 
         // Request permission
         guard CGRequestScreenCaptureAccess() else {
@@ -54,19 +65,24 @@ class ScreenCaptureManager: NSObject, SCStreamOutput {
         config.pixelFormat = kCVPixelFormatType_32BGRA
         currentConfig = config
 
-        stream = SCStream(filter: filter, configuration: config, delegate: nil)
+        stream = SCStream(filter: filter, configuration: config, delegate: self)
         try stream?.addStreamOutput(self, type: .screen, sampleHandlerQueue: captureQueue)
         try await stream?.startCapture()
 
         isCapturing = true
+        print("Capture started successfully")
     }
 
     func stopCapture() async {
-        guard isCapturing else { return }
+        print("Stopping capture...")
 
-        try? await stream?.stopCapture()
+        if let stream = stream {
+            try? await stream.stopCapture()
+        }
         stream = nil
         isCapturing = false
+
+        print("Capture stopped")
     }
 
     func updateCaptureInterval(_ interval: CMTime) async throws {
@@ -74,6 +90,8 @@ class ScreenCaptureManager: NSObject, SCStreamOutput {
         config.minimumFrameInterval = interval
         try await stream?.updateConfiguration(config)
     }
+
+    // MARK: - SCStreamOutput
 
     nonisolated func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard sampleBuffer.isValid,
@@ -86,6 +104,17 @@ class ScreenCaptureManager: NSObject, SCStreamOutput {
 
         Task { @MainActor in
             self.delegate?.captureManager(self, didCaptureFrame: pixelBuffer, at: timestamp)
+        }
+    }
+
+    // MARK: - SCStreamDelegate
+
+    nonisolated func stream(_ stream: SCStream, didStopWithError error: Error) {
+        print("Stream stopped with error: \(error)")
+        Task { @MainActor in
+            self.isCapturing = false
+            self.stream = nil
+            self.delegate?.captureManagerDidStop(self)
         }
     }
 }

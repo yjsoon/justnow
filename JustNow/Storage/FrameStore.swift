@@ -38,7 +38,9 @@ actor FrameStore {
         // Load or create manifest
         if fileManager.fileExists(atPath: manifestURL.path) {
             let data = try Data(contentsOf: manifestURL)
-            manifest = try JSONDecoder().decode(FrameManifest.self, from: data)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            manifest = try decoder.decode(FrameManifest.self, from: data)
         } else {
             manifest = FrameManifest()
         }

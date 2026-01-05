@@ -164,16 +164,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     @objc private func handleWake() {
         // Restart capture after wake - stream may have been invalidated
         Task { @MainActor in
+            updateCaptureStatus("Waking...")
+
             await captureManager.stopCapture()
 
-            // Small delay to let system stabilise after wake
-            try? await Task.sleep(for: .seconds(1))
+            // Longer delay to let system fully stabilise after wake
+            try? await Task.sleep(for: .seconds(2))
 
             do {
                 try await captureManager.startCapture()
                 updateCaptureStatus("Active")
+                print("Capture resumed after wake")
             } catch {
-                updateCaptureStatus("Error")
+                print("Failed to resume capture after wake: \(error)")
+                updateCaptureStatus("Error: \(error.localizedDescription)")
+
+                // Retry once more after another delay
+                try? await Task.sleep(for: .seconds(3))
+                do {
+                    try await captureManager.startCapture()
+                    updateCaptureStatus("Active")
+                    print("Capture resumed on retry")
+                } catch {
+                    print("Retry also failed: \(error)")
+                    updateCaptureStatus("Failed")
+                }
             }
         }
     }
@@ -182,6 +197,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
 
     func captureManager(_ manager: ScreenCaptureManager, didCaptureFrame pixelBuffer: CVPixelBuffer, at timestamp: Date) {
         frameBuffer?.addFrame(pixelBuffer, timestamp: timestamp)
+    }
+
+    func captureManagerDidStop(_ manager: ScreenCaptureManager) {
+        print("Capture stopped unexpectedly, attempting restart...")
+        updateCaptureStatus("Restarting...")
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+
+            do {
+                try await captureManager.startCapture()
+                updateCaptureStatus("Active")
+                print("Capture restarted successfully")
+            } catch {
+                print("Failed to restart capture: \(error)")
+                updateCaptureStatus("Stopped")
+            }
+        }
     }
 
     // MARK: - Actions
