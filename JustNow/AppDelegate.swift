@@ -7,6 +7,7 @@ import AppKit
 import SwiftUI
 import HotKey
 import CoreMedia
+import Carbon.HIToolbox
 
 class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     private var statusItem: NSStatusItem!
@@ -20,6 +21,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     @AppStorage("captureInterval") private var captureInterval: Double = 1.0
     @AppStorage("maxFrames") private var maxFrames: Int = 600
     @AppStorage("reduceCaptureOnBattery") private var reduceCaptureOnBattery: Bool = true
+    @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 15  // R key
+    @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
 
     private var powerCheckTimer: Timer?
     private var frameCountTimer: Timer?
@@ -83,7 +86,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     }
 
     private func setupHotKey() {
-        hotKey = HotKey(key: .r, modifiers: [.command, .option])
+        registerHotKey()
+    }
+
+    func registerHotKey() {
+        // Clear existing hotkey
+        hotKey = nil
+
+        // Don't register if no shortcut set
+        guard shortcutKeyCode != -1 else { return }
+
+        // Convert stored modifiers to NSEvent.ModifierFlags
+        let flags = NSEvent.ModifierFlags(rawValue: UInt(shortcutModifiers))
+        var carbonMods: UInt32 = 0
+        if flags.contains(.command) { carbonMods |= UInt32(cmdKey) }
+        if flags.contains(.option) { carbonMods |= UInt32(optionKey) }
+        if flags.contains(.control) { carbonMods |= UInt32(controlKey) }
+        if flags.contains(.shift) { carbonMods |= UInt32(shiftKey) }
+
+        hotKey = HotKey(carbonKeyCode: UInt32(shortcutKeyCode), carbonModifiers: carbonMods)
         hotKey?.keyDownHandler = { [weak self] in
             self?.toggleOverlay()
         }
@@ -250,7 +271,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
             defer: false
         )
         window.title = "JustNow Settings"
-        window.contentView = NSHostingView(rootView: SettingsView(frameBuffer: frameBuffer))
+        window.contentView = NSHostingView(rootView: SettingsView(
+            frameBuffer: frameBuffer,
+            onShortcutChanged: { [weak self] in
+                self?.registerHotKey()
+            }
+        ))
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

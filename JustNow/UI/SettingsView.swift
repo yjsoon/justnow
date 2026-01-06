@@ -9,8 +9,11 @@ struct SettingsView: View {
     @AppStorage("captureInterval") private var captureInterval: Double = 1.0
     @AppStorage("maxFrames") private var maxFrames: Int = 600
     @AppStorage("reduceCaptureOnBattery") private var reduceCaptureOnBattery: Bool = true
+    @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 15  // R key
+    @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
 
     var frameBuffer: FrameBuffer?
+    var onShortcutChanged: (() -> Void)?
 
     @State private var storageSize: Int64 = 0
     @State private var frameCount: Int = 0
@@ -70,12 +73,21 @@ struct SettingsView: View {
             }
 
             Section {
-                Text("Press **⌘⌥R** to show the timeline overlay")
-                    .font(.callout)
-                Text("Press **Escape** to dismiss")
-                    .font(.callout)
+                HStack {
+                    Text("Show Timeline")
+                    Spacer()
+                    KeyboardShortcutRecorder(
+                        keyCode: $shortcutKeyCode,
+                        modifiers: $shortcutModifiers
+                    )
+                    .onChange(of: shortcutKeyCode) { onShortcutChanged?() }
+                    .onChange(of: shortcutModifiers) { onShortcutChanged?() }
+                }
+                Text("Press **Escape** to dismiss the overlay")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             } header: {
-                Text("Keyboard Shortcuts")
+                Text("Keyboard Shortcut")
             }
         }
         .formStyle(.grouped)
