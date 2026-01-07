@@ -7,7 +7,6 @@ import SwiftUI
 
 struct SettingsView: View {
     @AppStorage("captureInterval") private var captureInterval: Double = 1.0
-    @AppStorage("maxFrames") private var maxFrames: Int = 600
     @AppStorage("reduceCaptureOnBattery") private var reduceCaptureOnBattery: Bool = true
     @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 15  // R key
     @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
@@ -27,13 +26,9 @@ struct SettingsView: View {
                     Slider(value: $captureInterval, in: 0.5...5.0, step: 0.5)
                 }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Max frames: \(maxFrames)")
-                    Slider(value: Binding(
-                        get: { Double(maxFrames) },
-                        set: { maxFrames = Int($0) }
-                    ), in: 100...1200, step: 100)
-                    Text("≈ \(Int(Double(maxFrames) * captureInterval / 60)) minutes of history")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Retention: up to 5 minutes")
+                    Text("• Last 10s: every frame\n• 10–60s: every 2nd\n• 1–5m: every 5th")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

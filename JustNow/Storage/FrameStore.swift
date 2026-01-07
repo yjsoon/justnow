@@ -118,38 +118,19 @@ actor FrameStore {
         manifest.frames
     }
 
-    func pruneExcessFrames(maxCount: Int) throws {
-        guard manifest.frames.count > maxCount else { return }
+    func pruneFrames(ids: Set<UUID>) throws {
+        guard !ids.isEmpty else { return }
 
-        // Sort by timestamp (oldest first)
-        let sorted = manifest.frames.sorted { $0.timestamp < $1.timestamp }
-        let toRemove = sorted.prefix(sorted.count - maxCount)
+        for id in ids {
+            guard let metadata = manifest.frames.first(where: { $0.id == id }) else { continue }
 
-        for frame in toRemove {
-            let fullPath = framesURL.appendingPathComponent(frame.filename)
-            let thumbPath = framesURL.appendingPathComponent(frame.thumbnailFilename)
+            let fullPath = framesURL.appendingPathComponent(metadata.filename)
+            let thumbPath = framesURL.appendingPathComponent(metadata.thumbnailFilename)
             try? fileManager.removeItem(at: fullPath)
             try? fileManager.removeItem(at: thumbPath)
         }
 
-        manifest.frames = Array(sorted.suffix(maxCount))
-        manifest.lastModified = Date()
-        try saveManifest()
-    }
-
-    func deleteFrame(id: UUID) throws {
-        guard let index = manifest.frames.firstIndex(where: { $0.id == id }) else {
-            return
-        }
-
-        let metadata = manifest.frames[index]
-        let fullPath = framesURL.appendingPathComponent(metadata.filename)
-        let thumbPath = framesURL.appendingPathComponent(metadata.thumbnailFilename)
-
-        try? fileManager.removeItem(at: fullPath)
-        try? fileManager.removeItem(at: thumbPath)
-
-        manifest.frames.remove(at: index)
+        manifest.frames.removeAll { ids.contains($0.id) }
         manifest.lastModified = Date()
         try saveManifest()
     }

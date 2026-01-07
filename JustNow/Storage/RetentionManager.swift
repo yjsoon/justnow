@@ -12,24 +12,25 @@ struct RetentionTier {
 
 class RetentionManager {
     // Retention policy: more recent = denser
+    // Tiers must be ordered by maxAge ascending
     static let tiers: [RetentionTier] = [
-        RetentionTier(maxAge: 30, keepEveryNth: 1),      // 0-30s: keep all
-        RetentionTier(maxAge: 300, keepEveryNth: 2),     // 30s-5m: every 2nd
-        RetentionTier(maxAge: 600, keepEveryNth: 5),     // 5-10m: every 5th
-        RetentionTier(maxAge: 3600, keepEveryNth: 30),   // 10m-1h: every 30th
+        RetentionTier(maxAge: 10, keepEveryNth: 1),      // 0-10s: keep all (~1s intervals)
+        RetentionTier(maxAge: 60, keepEveryNth: 2),      // 10-60s: every 2nd (~2s intervals)
+        RetentionTier(maxAge: 300, keepEveryNth: 5),     // 60s-5m: every 5th (~5s intervals)
     ]
 
-    func pruneFrames(frames: inout [StoredFrame], currentTime: Date) {
-        var result: [StoredFrame] = []
+    /// Returns IDs of frames to delete based on time-based retention policy
+    func framesToPrune(frames: [StoredFrame], currentTime: Date) -> Set<UUID> {
+        var toKeep = Set<UUID>()
         var tierFrameCounts: [Int] = Array(repeating: 0, count: Self.tiers.count)
 
         // Process newest to oldest
-        for frame in frames.reversed() {
+        for frame in frames.sorted(by: { $0.timestamp > $1.timestamp }) {
             let age = currentTime.timeIntervalSince(frame.timestamp)
 
             // Find which tier this frame belongs to
             guard let tierIndex = Self.tiers.firstIndex(where: { age <= $0.maxAge }) else {
-                // Too old, drop it (CVPixelBuffer auto-released when frame is deallocated)
+                // Too old, will be pruned
                 continue
             }
 
@@ -38,11 +39,12 @@ class RetentionManager {
 
             // Keep if it's the Nth frame for this tier
             if tierFrameCounts[tierIndex] % tier.keepEveryNth == 0 {
-                result.append(frame)
+                toKeep.insert(frame.id)
             }
-            // Frames not kept will have their CVPixelBuffer auto-released
         }
 
-        frames = result.reversed()
+        // Return IDs NOT in toKeep
+        let allIds = Set(frames.map { $0.id })
+        return allIds.subtracting(toKeep)
     }
 }

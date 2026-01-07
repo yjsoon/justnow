@@ -19,7 +19,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     private var settingsWindow: NSWindow?
 
     @AppStorage("captureInterval") private var captureInterval: Double = 1.0
-    @AppStorage("maxFrames") private var maxFrames: Int = 600
     @AppStorage("reduceCaptureOnBattery") private var reduceCaptureOnBattery: Bool = true
     @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 15  // R key
     @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
@@ -117,7 +116,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
             // Initialize frame buffer (loads persisted frames from disk)
             do {
                 let buffer = try await FrameBuffer()
-                buffer.maxFrames = maxFrames
                 frameBuffer = buffer
 
                 let loadedCount = buffer.frameCount

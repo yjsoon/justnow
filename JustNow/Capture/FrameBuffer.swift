@@ -26,16 +26,10 @@ class FrameBuffer {
 
     private let frameStore: FrameStore
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+    private let retentionManager = RetentionManager()
 
     // Thumbnail cache for quick access
     private let thumbnailCache = NSCache<NSUUID, NSImage>()
-
-    /// Maximum number of frames to keep
-    var maxFrames: Int = 600 {
-        didSet {
-            Task { await pruneIfNeeded() }
-        }
-    }
 
     init() async throws {
         self.frameStore = try FrameStore()
@@ -162,14 +156,13 @@ class FrameBuffer {
     }
 
     private func pruneIfNeeded() async {
-        guard frames.count > maxFrames else { return }
+        let toPrune = retentionManager.framesToPrune(frames: frames, currentTime: Date())
+        guard !toPrune.isEmpty else { return }
 
         do {
-            try await frameStore.pruneExcessFrames(maxCount: maxFrames)
-
-            // Update local frames array
-            let remainingIds = Set(await frameStore.getAllMetadata().map { $0.id })
-            frames = frames.filter { remainingIds.contains($0.id) }
+            try await frameStore.pruneFrames(ids: toPrune)
+            frames.removeAll { toPrune.contains($0.id) }
+            print("Pruned \(toPrune.count) frames, \(frames.count) remaining")
         } catch {
             print("Failed to prune frames: \(error)")
         }
