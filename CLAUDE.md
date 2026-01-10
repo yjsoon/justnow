@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 macOS menu bar app that continuously captures screenshots and lets you scroll back through screen history via a hotkey-triggered fullscreen overlay.
 
 - **Bundle ID:** sg.tk.JustNow
-- **Target:** macOS 13+, Swift, SwiftUI
+- **Target:** macOS 26+, Swift 6.2, SwiftUI
 - **Hotkey:** Customisable (default ⌘⌥R), Escape to dismiss
 - **Storage:** `~/Library/Application Support/JustNow/` (JPEG + manifest.json)
 - **Dependency:** [soffes/HotKey](https://github.com/soffes/HotKey) (SPM)
@@ -18,13 +18,11 @@ macOS menu bar app that continuously captures screenshots and lets you scroll ba
 # Build release
 xcodebuild -scheme JustNow -configuration Release -derivedDataPath build
 
-# Install to Applications (required - app must run from /Applications for proper permissions)
-pkill -x JustNow 2>/dev/null; cp -R build/Build/Products/Release/JustNow.app /Applications/
+# Install and launch (required - app must run from /Applications for proper permissions)
+pkill -x JustNow 2>/dev/null; cp -R build/Build/Products/Release/JustNow.app /Applications/ && open /Applications/JustNow.app
 ```
 
 **Note:** Always install to `/Applications/` before testing. The app requires Screen Recording permission which is tied to the app location.
-
-Or use XcodeBuildMCP: `build_macos()` then copy to /Applications
 
 ## Architecture
 
@@ -60,8 +58,10 @@ ScreenCaptureKit → FrameBuffer → FrameStore (disk)
 ## Implementation Notes
 
 1. **ScreenCaptureKit only** - CGWindowListCreateImage deprecated in macOS 15
-2. **NSPanel at .statusBar+1 level** - overlay appears above most apps
-3. **Pruning paused while overlay open** - prevents "Frame removed" errors
-4. **App Nap prevention** - uses `ProcessInfo.beginActivity()` during capture
-5. **Sleep/wake handling** - restarts capture stream after wake (2s delay)
-6. **Frames persist across restarts** - loaded from disk on launch via manifest
+2. **Liquid Glass UI** - overlay uses `.glassEffect()` with `GlassEffectContainer`
+3. **NSPanel at .statusBar+1 level** - overlay appears above most apps
+4. **Pruning paused while overlay open** - prevents "Frame removed" errors
+5. **@concurrent hash computation** - `PerceptualHash.compute()` runs on background thread
+6. **App Nap prevention** - uses `ProcessInfo.beginActivity()` during capture
+7. **Sleep/wake handling** - restarts capture stream after wake (2s delay)
+8. **Frames persist across restarts** - loaded from disk on launch via manifest
