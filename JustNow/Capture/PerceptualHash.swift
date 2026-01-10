@@ -6,12 +6,12 @@
 import CoreGraphics
 import CoreImage
 
-struct PerceptualHash {
-    private static let ciContext = CIContext(options: [.useSoftwareRenderer: false])
-
+nonisolated struct PerceptualHash {
     /// Compute a 64-bit perceptual hash from a CGImage
     /// Uses average hash algorithm: resize to 8x8, convert to grayscale, threshold by mean
-    static func compute(from cgImage: CGImage) -> UInt64 {
+    /// Runs on background thread to keep main actor responsive
+    @concurrent
+    static func compute(from cgImage: CGImage) async -> UInt64 {
         // Create an 8x8 grayscale bitmap context
         let width = 8
         let height = 8

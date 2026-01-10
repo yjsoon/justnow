@@ -49,12 +49,12 @@ class FrameBuffer {
             return
         }
 
-        // Compute perceptual hash for duplicate detection during browsing
-        let hash = PerceptualHash.compute(from: cgImage)
-
         // Save to disk (keep all frames, filter duplicates at display time)
+        // Hash computation runs concurrently on background thread
         Task {
             do {
+                // Compute perceptual hash on background thread (via @concurrent)
+                let hash = await PerceptualHash.compute(from: cgImage)
                 let metadata = try await frameStore.saveFrame(cgImage, timestamp: timestamp, hash: hash)
 
                 let frame = StoredFrame(
