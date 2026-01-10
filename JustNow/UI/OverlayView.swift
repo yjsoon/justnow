@@ -163,6 +163,7 @@ struct FramePreviewView: View {
 
     @State private var image: CGImage?
     @State private var isLoading = false
+    @State private var loadFailed = false
 
     var body: some View {
         Group {
@@ -174,25 +175,34 @@ struct FramePreviewView: View {
                     .shadow(color: .black.opacity(0.5), radius: 20)
             } else {
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(.white.opacity(0.1))
+                    .fill(.white.opacity(0.05))
                     .aspectRatio(16/10, contentMode: .fit)
                     .overlay {
                         if isLoading {
                             ProgressView()
                                 .progressViewStyle(.circular)
                                 .tint(.white)
+                        } else if loadFailed {
+                            VStack(spacing: 8) {
+                                Image(systemName: "photo.badge.exclamationmark")
+                                    .font(.title)
+                                Text("Frame removed")
+                                    .font(.caption)
+                            }
+                            .foregroundStyle(.white.opacity(0.3))
                         }
                     }
             }
         }
         .task(id: frame.id) {
             isLoading = true
+            loadFailed = false
             image = nil
 
             do {
                 image = try await frameBuffer.getFullImage(for: frame)
             } catch {
-                print("Failed to load frame: \(error)")
+                loadFailed = true
             }
 
             isLoading = false

@@ -18,15 +18,12 @@ struct StoredFrame: Identifiable, Sendable {
 @MainActor
 class FrameBuffer {
     private var frames: [StoredFrame] = []
-    private var lastHash: UInt64?
-    // Hamming distance threshold: higher = more frames kept
-    // 64 bits total, so 3 means ~5% difference required (very strict)
-    // Using 3 to only skip nearly-identical consecutive frames
-    private let hashThreshold: Int = 3
-
     private let frameStore: FrameStore
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
     private let retentionManager = RetentionManager()
+
+    // Pause pruning while overlay is open to prevent "Frame removed" issues
+    var isPruningPaused: Bool = false
 
     // Thumbnail cache for quick access
     private let thumbnailCache = NSCache<NSUUID, NSImage>()
@@ -52,24 +49,10 @@ class FrameBuffer {
             return
         }
 
-        let hash = PerceptualHash.compute(from: cgImage)
-
-        // Skip if too similar to previous frame (only skip nearly-identical frames)
-        if let last = lastHash {
-            let distance = PerceptualHash.hammingDistance(hash, last)
-            if distance <= hashThreshold {
-                // Silently skip - this is expected for static screens
-                return
-            }
-            print("Frame accepted: distance=\(distance) threshold=\(hashThreshold)")
-        } else {
-            print("First frame captured")
-        }
-
-        // Save to disk
+        // Save to disk (no hash filtering - keep all frames, let retention handle it)
         Task {
             do {
-                let metadata = try await frameStore.saveFrame(cgImage, timestamp: timestamp, hash: hash)
+                let metadata = try await frameStore.saveFrame(cgImage, timestamp: timestamp, hash: 0)
 
                 let frame = StoredFrame(
                     id: metadata.id,
@@ -78,7 +61,6 @@ class FrameBuffer {
                 )
 
                 frames.append(frame)
-                lastHash = hash
 
                 await pruneIfNeeded()
             } catch {
@@ -132,7 +114,6 @@ class FrameBuffer {
     func clear() async throws {
         try await frameStore.clear()
         frames.removeAll()
-        lastHash = nil
         thumbnailCache.removeAllObjects()
     }
 
@@ -148,14 +129,11 @@ class FrameBuffer {
         frames = metadata
             .sorted { $0.timestamp < $1.timestamp }
             .map { StoredFrame(id: $0.id, timestamp: $0.timestamp, hash: $0.hash) }
-
-        // Set lastHash from most recent frame
-        if let last = frames.last {
-            lastHash = last.hash
-        }
     }
 
     private func pruneIfNeeded() async {
+        guard !isPruningPaused else { return }
+
         let toPrune = retentionManager.framesToPrune(frames: frames, currentTime: Date())
         guard !toPrune.isEmpty else { return }
 

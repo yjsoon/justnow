@@ -12,20 +12,21 @@ struct RetentionTier {
 
 class RetentionManager {
     // Retention policy: more recent = denser
-    // Tiers must be ordered by maxAge ascending
+    // Tiers ordered by maxAge ascending; minInterval is seconds between kept frames
     static let tiers: [RetentionTier] = [
         RetentionTier(maxAge: 10, keepEveryNth: 1),      // 0-10s: keep all (~1s intervals)
-        RetentionTier(maxAge: 60, keepEveryNth: 2),      // 10-60s: every 2nd (~2s intervals)
-        RetentionTier(maxAge: 300, keepEveryNth: 5),     // 60s-5m: every 5th (~5s intervals)
+        RetentionTier(maxAge: 60, keepEveryNth: 2),      // 10-60s: ~2s intervals
+        RetentionTier(maxAge: 300, keepEveryNth: 5),     // 60s-5m: ~5s intervals
+        RetentionTier(maxAge: 86400, keepEveryNth: 30),  // 5m-24h: ~30s intervals (archive)
     ]
 
     /// Returns IDs of frames to delete based on time-based retention policy
     func framesToPrune(frames: [StoredFrame], currentTime: Date) -> Set<UUID> {
         var toKeep = Set<UUID>()
-        var tierFrameCounts: [Int] = Array(repeating: 0, count: Self.tiers.count)
+        var lastKeptTime: [Int: Date] = [:]  // Last kept timestamp per tier
 
-        // Process newest to oldest
-        for frame in frames.sorted(by: { $0.timestamp > $1.timestamp }) {
+        // Process OLDEST to NEWEST so spacing is stable
+        for frame in frames.sorted(by: { $0.timestamp < $1.timestamp }) {
             let age = currentTime.timeIntervalSince(frame.timestamp)
 
             // Find which tier this frame belongs to
@@ -35,11 +36,18 @@ class RetentionManager {
             }
 
             let tier = Self.tiers[tierIndex]
-            tierFrameCounts[tierIndex] += 1
+            let minInterval = TimeInterval(tier.keepEveryNth)
 
-            // Keep if it's the Nth frame for this tier
-            if tierFrameCounts[tierIndex] % tier.keepEveryNth == 0 {
+            if let lastTime = lastKeptTime[tierIndex] {
+                // Keep if enough time passed since last kept frame in this tier
+                if frame.timestamp.timeIntervalSince(lastTime) >= minInterval {
+                    toKeep.insert(frame.id)
+                    lastKeptTime[tierIndex] = frame.timestamp
+                }
+            } else {
+                // First frame in tier, always keep
                 toKeep.insert(frame.id)
+                lastKeptTime[tierIndex] = frame.timestamp
             }
         }
 

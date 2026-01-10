@@ -27,8 +27,8 @@ struct SettingsView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Retention: up to 5 minutes")
-                    Text("• Last 10s: every frame\n• 10–60s: every 2nd\n• 1–5m: every 5th")
+                    Text("Retention: up to 24 hours")
+                    Text("• Last 10s: every frame\n• 10–60s: every 2nd\n• 1–5m: every 5th\n• 5m–24h: every 30th")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

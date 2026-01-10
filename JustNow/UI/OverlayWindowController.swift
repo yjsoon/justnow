@@ -21,6 +21,9 @@ class OverlayWindowController: NSObject {
     func showOverlay() {
         guard window == nil, let screen = NSScreen.main else { return }
 
+        // Pause pruning while overlay is visible
+        frameBuffer.isPruningPaused = true
+
         let frames = frameBuffer.getFrames()
         let vm = OverlayViewModel(frames: frames, frameBuffer: frameBuffer, onDismiss: { [weak self] in
             self?.hideOverlay()
@@ -108,6 +111,9 @@ class OverlayWindowController: NSObject {
     }
 
     func hideOverlay() {
+        // Resume pruning
+        frameBuffer.isPruningPaused = false
+
         if let monitor = keyEventMonitor {
             NSEvent.removeMonitor(monitor)
             keyEventMonitor = nil
