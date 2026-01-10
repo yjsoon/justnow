@@ -49,10 +49,13 @@ class FrameBuffer {
             return
         }
 
-        // Save to disk (no hash filtering - keep all frames, let retention handle it)
+        // Compute perceptual hash for duplicate detection during browsing
+        let hash = PerceptualHash.compute(from: cgImage)
+
+        // Save to disk (keep all frames, filter duplicates at display time)
         Task {
             do {
-                let metadata = try await frameStore.saveFrame(cgImage, timestamp: timestamp, hash: 0)
+                let metadata = try await frameStore.saveFrame(cgImage, timestamp: timestamp, hash: hash)
 
                 let frame = StoredFrame(
                     id: metadata.id,
@@ -73,6 +76,36 @@ class FrameBuffer {
 
     func getFrames() -> [StoredFrame] {
         frames
+    }
+
+    /// Get frames with near-duplicates removed for smoother browsing
+    /// Uses perceptual hash comparison - frames with hamming distance <= threshold are considered duplicates
+    func getFilteredFrames(hashThreshold: Int = 3) -> [StoredFrame] {
+        guard !frames.isEmpty else { return [] }
+
+        var filtered: [StoredFrame] = []
+        var lastHash: UInt64?
+
+        for frame in frames {
+            // Skip filtering for frames without hash (legacy frames with hash=0)
+            if frame.hash == 0 {
+                filtered.append(frame)
+                lastHash = nil  // Reset so next frame isn't compared to unknown
+                continue
+            }
+
+            if let last = lastHash {
+                let distance = PerceptualHash.hammingDistance(frame.hash, last)
+                if distance <= hashThreshold {
+                    // Too similar to previous, skip
+                    continue
+                }
+            }
+            filtered.append(frame)
+            lastHash = frame.hash
+        }
+
+        return filtered
     }
 
     func getRecentFrames(within seconds: TimeInterval) -> [StoredFrame] {

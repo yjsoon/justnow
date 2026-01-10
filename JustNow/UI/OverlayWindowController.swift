@@ -24,7 +24,8 @@ class OverlayWindowController: NSObject {
         // Pause pruning while overlay is visible
         frameBuffer.isPruningPaused = true
 
-        let frames = frameBuffer.getFrames()
+        // Get frames with near-duplicates filtered out for smoother browsing
+        let frames = frameBuffer.getFilteredFrames()
         let vm = OverlayViewModel(frames: frames, frameBuffer: frameBuffer, onDismiss: { [weak self] in
             self?.hideOverlay()
         })
