@@ -65,3 +65,14 @@ ScreenCaptureKit → FrameBuffer → FrameStore (disk)
 6. **App Nap prevention** - uses `ProcessInfo.beginActivity()` during capture
 7. **Sleep/wake handling** - restarts capture stream after wake (2s delay)
 8. **Frames persist across restarts** - loaded from disk on launch via manifest
+
+## Apple Documentation Reference
+
+For macOS 26 / Swift 6.2 features, refer to Xcode's bundled docs:
+`/Applications/Xcode.app/Contents/PlugIns/IDEIntelligenceChat.framework/Versions/A/Resources/AdditionalDocumentation/`
+
+Relevant files:
+- `SwiftUI-Implementing-Liquid-Glass-Design.md` - `.glassEffect()`, `GlassEffectContainer`
+- `AppKit-Implementing-Liquid-Glass-Design.md` - `NSGlassEffectView`
+- `Swift-Concurrency-Updates.md` - `@concurrent`, approachable concurrency
+- `Swift-InlineArray-Span.md` - `InlineArray`, `Span` for performance
