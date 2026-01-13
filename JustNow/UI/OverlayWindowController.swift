@@ -46,14 +46,8 @@ class OverlayWindowController: NSObject {
         window.ignoresMouseEvents = false
         window.acceptsMouseMovedEvents = true
 
-        let overlayView = OverlayView(frames: frames, frameBuffer: frameBuffer, onDismiss: { [weak self] in
-            self?.hideOverlay()
-        })
-        // Replace the view's viewModel with our shared one
-        var view = overlayView
-        view.viewModel = vm
-
-        let hostingView = NSHostingView(rootView: view)
+        let overlayView = OverlayView(viewModel: vm)
+        let hostingView = NSHostingView(rootView: overlayView)
         hostingView.frame = screen.frame
         hostingView.autoresizingMask = [.width, .height]
         window.contentView = hostingView
