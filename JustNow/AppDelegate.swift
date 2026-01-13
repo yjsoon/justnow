@@ -292,14 +292,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
         guard reduceCaptureOnBattery else { return }
 
         Task {
-            let interval: Double
-            if PowerManager.isOnBattery() {
-                interval = captureInterval * 2.0
-            } else {
-                interval = captureInterval
-            }
-
-            let cmTime = CMTime(seconds: interval, preferredTimescale: 1)
+            let multiplier = PowerManager.isOnBattery() ? 2.0 : 1.0
+            let cmTime = CMTime(seconds: captureInterval * multiplier, preferredTimescale: 1)
             try? await captureManager.updateCaptureInterval(cmTime)
         }
     }

@@ -78,8 +78,8 @@ class FrameBuffer {
         frames
     }
 
-    /// Get frames with near-duplicates removed for smoother browsing
-    /// Uses perceptual hash comparison - frames with hamming distance <= threshold are considered duplicates
+    /// Get frames with near-duplicates removed for smoother browsing.
+    /// Uses perceptual hash comparison - frames with hamming distance <= threshold are duplicates.
     func getFilteredFrames(hashThreshold: Int = 3) -> [StoredFrame] {
         guard !frames.isEmpty else { return [] }
 
@@ -87,22 +87,19 @@ class FrameBuffer {
         var lastHash: UInt64?
 
         for frame in frames {
-            // Skip filtering for frames without hash (legacy frames with hash=0)
-            if frame.hash == 0 {
+            // Legacy frames without hash (hash=0) always kept, reset comparison chain
+            guard frame.hash != 0 else {
                 filtered.append(frame)
-                lastHash = nil  // Reset so next frame isn't compared to unknown
+                lastHash = nil
                 continue
             }
 
-            if let last = lastHash {
-                let distance = PerceptualHash.hammingDistance(frame.hash, last)
-                if distance <= hashThreshold {
-                    // Too similar to previous, skip
-                    continue
-                }
+            // Keep if different enough from last kept frame
+            let isDifferent = lastHash.map { PerceptualHash.hammingDistance(frame.hash, $0) > hashThreshold } ?? true
+            if isDifferent {
+                filtered.append(frame)
+                lastHash = frame.hash
             }
-            filtered.append(frame)
-            lastHash = frame.hash
         }
 
         return filtered
