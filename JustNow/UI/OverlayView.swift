@@ -6,6 +6,9 @@
 import SwiftUI
 import CoreGraphics
 import Observation
+import os.log
+
+private let logger = Logger(subsystem: "sg.tk.JustNow", category: "OverlayView")
 
 @Observable
 class OverlayViewModel {
@@ -14,11 +17,121 @@ class OverlayViewModel {
     let frameBuffer: FrameBuffer
     let onDismiss: () -> Void
 
+    // Search state
+    var isSearching = false
+    var searchQuery = ""
+    var searchResults: [StoredFrame] = []
+    var isSearchInProgress = false
+    var searchProgress: Double = 0
+    private var searchTask: Task<Void, Never>?
+
+    /// Frames to display (filtered if searching, all otherwise)
+    var displayedFrames: [StoredFrame] {
+        isSearching && !searchQuery.isEmpty ? searchResults : frames
+    }
+
     init(frames: [StoredFrame], frameBuffer: FrameBuffer, onDismiss: @escaping () -> Void) {
         self.frames = frames
         self.frameBuffer = frameBuffer
         self.onDismiss = onDismiss
         self.selectedIndex = max(0, frames.count - 1)
+    }
+
+    func toggleSearch() {
+        print("[JustNow] toggleSearch called, isSearching was: \(isSearching)")
+        isSearching.toggle()
+        print("[JustNow] isSearching is now: \(isSearching)")
+        if !isSearching {
+            clearSearch()
+        }
+    }
+
+    func clearSearch() {
+        searchTask?.cancel()
+        searchQuery = ""
+        searchResults = []
+        isSearchInProgress = false
+        searchProgress = 0
+        // Reset to end of full frames
+        selectedIndex = max(0, frames.count - 1)
+    }
+
+    func performSearch() {
+        print("[JustNow] performSearch() called with query: '\(searchQuery)'")
+        searchTask?.cancel()
+        guard !searchQuery.isEmpty else {
+            print("[JustNow] Query is empty, returning")
+            searchResults = []
+            return
+        }
+
+        logger.info("Starting search for: '\(self.searchQuery)' in \(self.frames.count) frames")
+        print("[JustNow] Starting search for: '\(searchQuery)' in \(frames.count) frames")
+
+        isSearchInProgress = true
+        searchProgress = 0
+        searchResults = []
+
+        let query = searchQuery // Capture locally for task
+        let framesToSearch = frames
+        let buffer = frameBuffer
+
+        searchTask = Task {
+            let total = framesToSearch.count
+            var processedCount = 0
+            var matches: [(index: Int, frame: StoredFrame)] = []
+
+            // Process frames in parallel batches
+            let batchSize = 8 // Process 8 frames concurrently
+
+            for batchStart in stride(from: 0, to: total, by: batchSize) {
+                if Task.isCancelled { break }
+
+                let batchEnd = min(batchStart + batchSize, total)
+                let batch = Array(framesToSearch[batchStart..<batchEnd])
+
+                // Process batch in parallel
+                await withTaskGroup(of: (Int, StoredFrame, Bool).self) { group in
+                    for (offset, frame) in batch.enumerated() {
+                        let globalIndex = batchStart + offset
+                        group.addTask {
+                            guard let image = try? await buffer.getFullImage(for: frame) else {
+                                return (globalIndex, frame, false)
+                            }
+                            let contains = await TextRecognitionManager.frameContainsText(query, in: image)
+                            return (globalIndex, frame, contains)
+                        }
+                    }
+
+                    for await (index, frame, contains) in group {
+                        if contains {
+                            matches.append((index, frame))
+                        }
+                    }
+                }
+
+                processedCount = batchEnd
+                await MainActor.run {
+                    searchProgress = Double(processedCount) / Double(total)
+                }
+            }
+
+            // Sort matches by index to maintain chronological order
+            matches.sort { $0.index < $1.index }
+            let sortedFrames = matches.map { $0.frame }
+
+            print("[JustNow] Search complete: \(sortedFrames.count) matches found")
+
+            await MainActor.run {
+                if !Task.isCancelled {
+                    searchResults = sortedFrames
+                    isSearchInProgress = false
+                    if !sortedFrames.isEmpty {
+                        selectedIndex = sortedFrames.count - 1
+                    }
+                }
+            }
+        }
     }
 
     func moveLeft() {
@@ -104,14 +217,34 @@ struct EmptyStateView: View {
 struct ContentAreaView: View {
     var viewModel: OverlayViewModel
 
+    private var displayedFrames: [StoredFrame] { viewModel.displayedFrames }
+
     var body: some View {
         VStack(spacing: 0) {
+            // Search bar
+            if viewModel.isSearching {
+                SearchBarView(viewModel: viewModel)
+                    .padding(.top, 60)
+                    .padding(.horizontal, 200)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
             Spacer()
 
-            if let frame = viewModel.frames[safe: viewModel.selectedIndex] {
+            if let frame = displayedFrames[safe: viewModel.selectedIndex] {
                 FramePreviewView(frame: frame, frameBuffer: viewModel.frameBuffer)
                     .padding(.horizontal, 60)
-                    .padding(.top, 40)
+                    .padding(.top, viewModel.isSearching ? 20 : 40)
+            } else if viewModel.isSearching && displayedFrames.isEmpty && !viewModel.isSearchInProgress {
+                // No results state
+                VStack(spacing: 12) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 40))
+                        .foregroundStyle(.white.opacity(0.4))
+                    Text("No matches found")
+                        .font(.headline)
+                        .foregroundStyle(.white.opacity(0.6))
+                }
             }
 
             Spacer()
@@ -121,6 +254,53 @@ struct ContentAreaView: View {
                 .padding(.horizontal, 40)
                 .padding(.bottom, 50)
         }
+        .animation(.easeInOut(duration: 0.2), value: viewModel.isSearching)
+    }
+}
+
+struct SearchBarView: View {
+    var viewModel: OverlayViewModel
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.white.opacity(0.6))
+
+            TextField("Search screen text...", text: Bindable(viewModel).searchQuery)
+                .textFieldStyle(.plain)
+                .font(.system(size: 16))
+                .foregroundStyle(.white)
+                .focused($isFocused)
+                .onSubmit {
+                    print("[JustNow] onSubmit triggered, query: '\(viewModel.searchQuery)'")
+                    viewModel.performSearch()
+                }
+
+            if viewModel.isSearchInProgress {
+                ProgressView(value: viewModel.searchProgress)
+                    .progressViewStyle(.linear)
+                    .frame(width: 60)
+                    .tint(.white)
+            } else if !viewModel.searchResults.isEmpty {
+                Text("\(viewModel.searchResults.count) found")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+
+            Button {
+                viewModel.clearSearch()
+                viewModel.isSearching = false
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .glassEffect(.regular, in: .capsule)
+        .onAppear { isFocused = true }
     }
 }
 
@@ -132,7 +312,7 @@ struct InstructionsOverlay: View {
                 HStack(spacing: 16) {
                     Label("ESC", systemImage: "escape")
                     Label("← →", systemImage: "arrow.left.arrow.right")
-                    Label("Scroll", systemImage: "scroll")
+                    Label("/", systemImage: "magnifyingglass")
                 }
                 .labelStyle(CompactInstructionLabelStyle())
                 .font(.system(size: 11, weight: .medium))
@@ -214,15 +394,16 @@ struct FramePreviewView: View {
 struct TimelineSlider: View {
     var viewModel: OverlayViewModel
 
-    private var frameCount: Int { viewModel.frames.count }
+    private var displayedFrames: [StoredFrame] { viewModel.displayedFrames }
+    private var frameCount: Int { displayedFrames.count }
 
     private var currentFrame: StoredFrame? {
-        viewModel.frames[safe: viewModel.selectedIndex]
+        displayedFrames[safe: viewModel.selectedIndex]
     }
 
     var body: some View {
         VStack(spacing: 12) {
-            TimeLabels(frames: viewModel.frames)
+            TimeLabels(frames: displayedFrames)
 
             SliderTrack(
                 frameCount: frameCount,
@@ -234,8 +415,13 @@ struct TimelineSlider: View {
             .padding(.vertical, 12)
             .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 20))
 
-            // Combined footer: frame count + timestamp
+            // Combined footer: frame count + timestamp + search indicator
             HStack(spacing: 6) {
+                if viewModel.isSearching && !viewModel.searchQuery.isEmpty {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
                 Text("\(viewModel.selectedIndex + 1) / \(frameCount)")
                     .fontWeight(.medium)
                 if let frame = currentFrame {
