@@ -3,8 +3,6 @@
 //  JustNow
 //
 
-import CoreVideo
-import CoreImage
 import AppKit
 import Foundation
 
@@ -19,7 +17,6 @@ struct StoredFrame: Identifiable, Sendable {
 class FrameBuffer {
     private var frames: [StoredFrame] = []
     private let frameStore: FrameStore
-    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
     private let retentionManager = RetentionManager()
 
     // Pause pruning while overlay is open to prevent "Frame removed" issues
@@ -48,14 +45,7 @@ class FrameBuffer {
 
     // MARK: - Capture
 
-    func addFrame(_ pixelBuffer: CVPixelBuffer, timestamp: Date) {
-        // Convert to CGImage immediately
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else {
-            print("Failed to create CGImage from pixel buffer")
-            return
-        }
-
+    func addFrame(_ cgImage: CGImage, timestamp: Date) {
         // Save to disk (keep all frames, filter duplicates at display time)
         // Hash computation runs concurrently on background thread
         Task {

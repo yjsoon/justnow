@@ -6,7 +6,6 @@
 import AppKit
 import SwiftUI
 import HotKey
-import CoreMedia
 import Carbon.HIToolbox
 
 class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
@@ -214,8 +213,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
 
     // MARK: - Capture Delegate
 
-    func captureManager(_ manager: ScreenCaptureManager, didCaptureFrame pixelBuffer: CVPixelBuffer, at timestamp: Date) {
-        frameBuffer?.addFrame(pixelBuffer, timestamp: timestamp)
+    func captureManager(_ manager: ScreenCaptureManager, didCaptureFrame image: CGImage, at timestamp: Date) {
+        frameBuffer?.addFrame(image, timestamp: timestamp)
     }
 
     func captureManagerDidStop(_ manager: ScreenCaptureManager) {
@@ -289,13 +288,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     // MARK: - Helpers
 
     private func updateCaptureInterval() {
-        guard reduceCaptureOnBattery else { return }
-
-        Task {
-            let multiplier = PowerManager.isOnBattery() ? 2.0 : 1.0
-            let cmTime = CMTime(seconds: captureInterval * multiplier, preferredTimescale: 1)
-            try? await captureManager.updateCaptureInterval(cmTime)
-        }
+        let multiplier = (reduceCaptureOnBattery && PowerManager.isOnBattery()) ? 2.0 : 1.0
+        let interval = captureInterval * multiplier
+        captureManager.updateCaptureInterval(interval)
     }
 
     private func updateFrameCountMenuItem() {
