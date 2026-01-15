@@ -75,11 +75,14 @@ class OverlayViewModel {
         let query = searchQuery // Capture locally for task
         let framesToSearch = frames
         let buffer = frameBuffer
+        let cache = frameBuffer.textCache
 
         searchTask = Task {
             let total = framesToSearch.count
             var processedCount = 0
             var matches: [(index: Int, frame: StoredFrame)] = []
+            var cacheHits = 0
+            var cacheMisses = 0
 
             // Process frames in parallel batches
             let batchSize = 8 // Process 8 frames concurrently
@@ -91,19 +94,32 @@ class OverlayViewModel {
                 let batch = Array(framesToSearch[batchStart..<batchEnd])
 
                 // Process batch in parallel
-                await withTaskGroup(of: (Int, StoredFrame, Bool).self) { group in
+                await withTaskGroup(of: (Int, StoredFrame, Bool, Bool).self) { group in
                     for (offset, frame) in batch.enumerated() {
                         let globalIndex = batchStart + offset
                         group.addTask {
-                            guard let image = try? await buffer.getFullImage(for: frame) else {
-                                return (globalIndex, frame, false)
+                            // Check cache first
+                            if let cachedText = await cache.getText(for: frame.id) {
+                                let contains = cachedText.localizedCaseInsensitiveContains(query)
+                                return (globalIndex, frame, contains, true) // true = cache hit
                             }
-                            let contains = await TextRecognitionManager.frameContainsText(query, in: image)
-                            return (globalIndex, frame, contains)
+
+                            // Cache miss - run OCR
+                            guard let image = try? await buffer.getFullImage(for: frame) else {
+                                return (globalIndex, frame, false, false)
+                            }
+                            let text = await TextRecognitionManager.extractText(from: image)
+
+                            // Cache the result
+                            await cache.setText(text, for: frame.id)
+
+                            let contains = text.localizedCaseInsensitiveContains(query)
+                            return (globalIndex, frame, contains, false) // false = cache miss
                         }
                     }
 
-                    for await (index, frame, contains) in group {
+                    for await (index, frame, contains, wasCached) in group {
+                        if wasCached { cacheHits += 1 } else { cacheMisses += 1 }
                         if contains {
                             matches.append((index, frame))
                         }
@@ -116,11 +132,14 @@ class OverlayViewModel {
                 }
             }
 
+            // Save cache periodically
+            await cache.save()
+
             // Sort matches by index to maintain chronological order
             matches.sort { $0.index < $1.index }
             let sortedFrames = matches.map { $0.frame }
 
-            print("[JustNow] Search complete: \(sortedFrames.count) matches found")
+            print("[JustNow] Search complete: \(sortedFrames.count) matches, \(cacheHits) cache hits, \(cacheMisses) OCR runs")
 
             await MainActor.run {
                 if !Task.isCancelled {

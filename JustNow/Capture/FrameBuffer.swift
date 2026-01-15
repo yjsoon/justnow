@@ -28,6 +28,9 @@ class FrameBuffer {
     // Thumbnail cache for quick access
     private let thumbnailCache = NSCache<NSUUID, NSImage>()
 
+    // OCR text cache for faster subsequent searches
+    let textCache = TextCache()
+
     init() async throws {
         self.frameStore = try FrameStore()
         thumbnailCache.countLimit = 100
@@ -37,6 +40,10 @@ class FrameBuffer {
 
         // Cleanup orphaned files
         try await frameStore.cleanupOrphans()
+
+        // Prune stale text cache entries
+        let validIDs = Set(frames.map { $0.id })
+        await textCache.prune(keepingFrameIDs: validIDs)
     }
 
     // MARK: - Capture
