@@ -160,6 +160,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     private func setupSleepWakeObservers() {
         let workspace = NSWorkspace.shared.notificationCenter
 
+        // System sleep/wake
         workspace.addObserver(
             self,
             selector: #selector(handleWake),
@@ -173,34 +174,70 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
             name: NSWorkspace.willSleepNotification,
             object: nil
         )
+
+        // Screen sleep/wake (display off while computer still running)
+        workspace.addObserver(
+            self,
+            selector: #selector(handleScreenSleep),
+            name: NSWorkspace.screensDidSleepNotification,
+            object: nil
+        )
+
+        workspace.addObserver(
+            self,
+            selector: #selector(handleScreenWake),
+            name: NSWorkspace.screensDidWakeNotification,
+            object: nil
+        )
     }
 
     @objc private func handleSleep() {
-        updateCaptureStatus("Sleeping...")
+        Task { @MainActor in
+            updateCaptureStatus("Sleeping...")
+            await captureManager.stopCapture()
+            appNapPreventer.stopActivity()
+            print("Capture paused for system sleep")
+        }
     }
 
     @objc private func handleWake() {
-        // Restart capture after wake - stream may have been invalidated
+        resumeCapture(reason: "system wake")
+    }
+
+    @objc private func handleScreenSleep() {
         Task { @MainActor in
-            updateCaptureStatus("Waking...")
-
+            updateCaptureStatus("Screen Off")
             await captureManager.stopCapture()
+            appNapPreventer.stopActivity()
+            print("Capture paused for screen sleep")
+        }
+    }
 
-            // Longer delay to let system fully stabilise after wake
+    @objc private func handleScreenWake() {
+        resumeCapture(reason: "screen wake")
+    }
+
+    private func resumeCapture(reason: String) {
+        Task { @MainActor in
+            updateCaptureStatus("Resuming...")
+
+            // Delay to let system stabilise
             try? await Task.sleep(for: .seconds(2))
 
             do {
                 try await captureManager.startCapture()
+                appNapPreventer.startActivity()
                 updateCaptureStatus("Active")
-                print("Capture resumed after wake")
+                print("Capture resumed after \(reason)")
             } catch {
-                print("Failed to resume capture after wake: \(error)")
-                updateCaptureStatus("Error: \(error.localizedDescription)")
+                print("Failed to resume capture after \(reason): \(error)")
+                updateCaptureStatus("Error")
 
                 // Retry once more after another delay
                 try? await Task.sleep(for: .seconds(3))
                 do {
                     try await captureManager.startCapture()
+                    appNapPreventer.startActivity()
                     updateCaptureStatus("Active")
                     print("Capture resumed on retry")
                 } catch {

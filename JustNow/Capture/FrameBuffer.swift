@@ -46,6 +46,12 @@ class FrameBuffer {
     // MARK: - Capture
 
     func addFrame(_ cgImage: CGImage, timestamp: Date) {
+        // Skip black frames (screen off, sleep transitions)
+        guard !isBlackFrame(cgImage) else {
+            print("Skipping black frame")
+            return
+        }
+
         // Save to disk (keep all frames, filter duplicates at display time)
         // Hash computation runs concurrently on background thread
         Task {
@@ -171,5 +177,57 @@ class FrameBuffer {
         } catch {
             print("Failed to prune frames: \(error)")
         }
+    }
+
+    /// Detect true "screen off" frames vs dark content.
+    /// Screen-off frames are uniformly black (all ~0), dark content has variation.
+    private func isBlackFrame(_ image: CGImage) -> Bool {
+        let width = image.width
+        let height = image.height
+
+        guard width > 0 && height > 0,
+              let dataProvider = image.dataProvider,
+              let data = dataProvider.data,
+              let bytes = CFDataGetBytePtr(data) else {
+            return false
+        }
+
+        let bytesPerPixel = image.bitsPerPixel / 8
+        let bytesPerRow = image.bytesPerRow
+
+        // Sample 9 points across the image
+        let samplePoints = [
+            (width / 4, height / 4),
+            (width / 2, height / 4),
+            (3 * width / 4, height / 4),
+            (width / 4, height / 2),
+            (width / 2, height / 2),
+            (3 * width / 4, height / 2),
+            (width / 4, 3 * height / 4),
+            (width / 2, 3 * height / 4),
+            (3 * width / 4, 3 * height / 4),
+        ]
+
+        var maxValue: UInt8 = 0
+        var minValue: UInt8 = 255
+
+        for (x, y) in samplePoints {
+            let offset = y * bytesPerRow + x * bytesPerPixel
+            let r = bytes[offset]
+            let g = bytes[offset + 1]
+            let b = bytes[offset + 2]
+            let brightness = max(r, g, b)
+
+            maxValue = max(maxValue, brightness)
+            minValue = min(minValue, brightness)
+        }
+
+        // True black frame: all samples very dark AND uniform
+        // - Max brightness < 5 (true black, not just dark)
+        // - Variance < 3 (uniform, no structure)
+        let isVeryDark = maxValue < 5
+        let isUniform = (maxValue - minValue) < 3
+
+        return isVeryDark && isUniform
     }
 }
