@@ -201,6 +201,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     }
 
     @objc private func handleWake() {
+        frameBuffer?.enableBlackFrameFilter(for: 5)
         resumeCapture(reason: "system wake")
     }
 
@@ -214,6 +215,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     }
 
     @objc private func handleScreenWake() {
+        frameBuffer?.enableBlackFrameFilter(for: 5)
         resumeCapture(reason: "screen wake")
     }
 

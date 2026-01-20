@@ -18,6 +18,7 @@ class FrameBuffer {
     private var frames: [StoredFrame] = []
     private let frameStore: FrameStore
     private let retentionManager = RetentionManager()
+    private var blackFrameFilterUntil: Date?
 
     // Pause pruning while overlay is open to prevent "Frame removed" issues
     var isPruningPaused: Bool = false
@@ -46,8 +47,8 @@ class FrameBuffer {
     // MARK: - Capture
 
     func addFrame(_ cgImage: CGImage, timestamp: Date) {
-        // Skip black frames (screen off, sleep transitions)
-        guard !isBlackFrame(cgImage) else {
+        // Skip black frames only during sleep/wake transitions.
+        if shouldCheckBlackFrame(at: timestamp) && isBlackFrame(cgImage) {
             print("Skipping black frame")
             return
         }
@@ -164,6 +165,10 @@ class FrameBuffer {
             .map { StoredFrame(id: $0.id, timestamp: $0.timestamp, hash: $0.hash) }
     }
 
+    func enableBlackFrameFilter(for seconds: TimeInterval) {
+        blackFrameFilterUntil = Date().addingTimeInterval(seconds)
+    }
+
     private func pruneIfNeeded() async {
         guard !isPruningPaused else { return }
 
@@ -195,39 +200,49 @@ class FrameBuffer {
         let bytesPerPixel = image.bitsPerPixel / 8
         let bytesPerRow = image.bytesPerRow
 
-        // Sample 9 points across the image
-        let samplePoints = [
-            (width / 4, height / 4),
-            (width / 2, height / 4),
-            (3 * width / 4, height / 4),
-            (width / 4, height / 2),
-            (width / 2, height / 2),
-            (3 * width / 4, height / 2),
-            (width / 4, 3 * height / 4),
-            (width / 2, 3 * height / 4),
-            (3 * width / 4, 3 * height / 4),
-        ]
+        guard bytesPerPixel >= 3 else { return false }
+        let gridSize = 8
+        var maxY: UInt8 = 0
+        var minY: UInt8 = 255
+        var darkCount = 0
+        var sampleCount = 0
 
-        var maxValue: UInt8 = 0
-        var minValue: UInt8 = 255
+        for gy in 0..<gridSize {
+            let y = (height * (2 * gy + 1)) / (2 * gridSize)
+            for gx in 0..<gridSize {
+                let x = (width * (2 * gx + 1)) / (2 * gridSize)
+                let offset = y * bytesPerRow + x * bytesPerPixel
+                let r = bytes[offset]
+                let g = bytes[offset + 1]
+                let b = bytes[offset + 2]
 
-        for (x, y) in samplePoints {
-            let offset = y * bytesPerRow + x * bytesPerPixel
-            let r = bytes[offset]
-            let g = bytes[offset + 1]
-            let b = bytes[offset + 2]
-            let brightness = max(r, g, b)
+                // Integer luma approximation: 0.2126r + 0.7152g + 0.0722b
+                let luma = UInt8((UInt16(r) * 54 + UInt16(g) * 183 + UInt16(b) * 19) >> 8)
 
-            maxValue = max(maxValue, brightness)
-            minValue = min(minValue, brightness)
+                maxY = max(maxY, luma)
+                minY = min(minY, luma)
+                if luma < 5 { darkCount += 1 }
+                sampleCount += 1
+            }
         }
 
-        // True black frame: all samples very dark AND uniform
-        // - Max brightness < 5 (true black, not just dark)
-        // - Variance < 3 (uniform, no structure)
-        let isVeryDark = maxValue < 5
-        let isUniform = (maxValue - minValue) < 3
+        guard sampleCount > 0 else { return false }
 
-        return isVeryDark && isUniform
+        let darkRatio = Double(darkCount) / Double(sampleCount)
+
+        // True black frame: mostly dark and uniform
+        // - Max luma < 6 (true black, not just dark)
+        // - Luma range < 3 (uniform, no structure)
+        // - At least 95% of samples are dark
+        let isVeryDark = maxY < 6
+        let isUniform = (maxY - minY) < 3
+        let isMostlyDark = darkRatio >= 0.95
+
+        return isVeryDark && isUniform && isMostlyDark
+    }
+
+    private func shouldCheckBlackFrame(at timestamp: Date) -> Bool {
+        guard let until = blackFrameFilterUntil else { return false }
+        return timestamp <= until
     }
 }
