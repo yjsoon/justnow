@@ -76,6 +76,22 @@ class FrameBuffer {
         }
     }
 
+    /// Add a frame synchronously (awaits save completion). Used when opening overlay.
+    func addFrameSync(_ cgImage: CGImage, timestamp: Date) async {
+        if shouldCheckBlackFrame(at: timestamp) && isBlackFrame(cgImage) {
+            return
+        }
+
+        do {
+            let hash = await PerceptualHash.compute(from: cgImage)
+            let metadata = try await frameStore.saveFrame(cgImage, timestamp: timestamp, hash: hash)
+            let frame = StoredFrame(id: metadata.id, timestamp: metadata.timestamp, hash: metadata.hash)
+            frames.append(frame)
+        } catch {
+            print("Failed to save frame: \(error)")
+        }
+    }
+
     // MARK: - Access
 
     func getFrames() -> [StoredFrame] {
@@ -84,13 +100,25 @@ class FrameBuffer {
 
     /// Get frames with near-duplicates removed for smoother browsing.
     /// Uses perceptual hash comparison - frames with hamming distance <= threshold are duplicates.
-    func getFilteredFrames(hashThreshold: Int = 3) -> [StoredFrame] {
+    /// Very recent frames (last 5s) are always kept to ensure the latest state is visible.
+    /// Recent frames (5s-5min) use a lower threshold to preserve text changes from typing.
+    func getFilteredFrames(hashThreshold: Int = 3, recentThreshold: Int = 0, recentWindow: TimeInterval = 300, alwaysKeepWindow: TimeInterval = 5) -> [StoredFrame] {
         guard !frames.isEmpty else { return [] }
 
+        let now = Date()
         var filtered: [StoredFrame] = []
         var lastHash: UInt64?
 
         for frame in frames {
+            let age = now.timeIntervalSince(frame.timestamp)
+
+            // Always keep very recent frames (ensures latest state is visible)
+            if age <= alwaysKeepWindow {
+                filtered.append(frame)
+                lastHash = frame.hash
+                continue
+            }
+
             // Legacy frames without hash (hash=0) always kept, reset comparison chain
             guard frame.hash != 0 else {
                 filtered.append(frame)
@@ -98,8 +126,11 @@ class FrameBuffer {
                 continue
             }
 
+            // Use lower threshold for recent frames (preserves typing changes)
+            let threshold = age <= recentWindow ? recentThreshold : hashThreshold
+
             // Keep if different enough from last kept frame
-            let isDifferent = lastHash.map { PerceptualHash.hammingDistance(frame.hash, $0) > hashThreshold } ?? true
+            let isDifferent = lastHash.map { PerceptualHash.hammingDistance(frame.hash, $0) > threshold } ?? true
             if isDifferent {
                 filtered.append(frame)
                 lastHash = frame.hash

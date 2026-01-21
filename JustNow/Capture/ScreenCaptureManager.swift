@@ -81,6 +81,12 @@ class ScreenCaptureManager: NSObject {
         startTimer()
     }
 
+    /// Capture a single frame immediately and return it (for overlay open).
+    func captureNow() async -> CGImage? {
+        guard let filter, let config else { return nil }
+        return try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+    }
+
     // MARK: - Private
 
     private func startTimer() {

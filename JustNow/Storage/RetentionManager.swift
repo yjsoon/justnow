@@ -14,10 +14,9 @@ class RetentionManager {
     // Retention policy: more recent = denser
     // Tiers ordered by maxAge ascending; minInterval is seconds between kept frames
     static let tiers: [RetentionTier] = [
-        RetentionTier(maxAge: 10, keepEveryNth: 1),      // 0-10s: keep all (~1s intervals)
-        RetentionTier(maxAge: 60, keepEveryNth: 2),      // 10-60s: ~2s intervals
-        RetentionTier(maxAge: 300, keepEveryNth: 5),     // 60s-5m: ~5s intervals
-        RetentionTier(maxAge: 86400, keepEveryNth: 30),  // 5m-24h: ~30s intervals (archive)
+        RetentionTier(maxAge: 300, keepEveryNth: 1),     // 0-5m: keep all (for text recall)
+        RetentionTier(maxAge: 900, keepEveryNth: 5),     // 5-15m: ~5s intervals
+        RetentionTier(maxAge: 86400, keepEveryNth: 30),  // 15m-24h: ~30s intervals (archive)
     ]
 
     /// Returns IDs of frames to delete based on time-based retention policy

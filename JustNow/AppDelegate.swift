@@ -17,7 +17,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     private var appNapPreventer = AppNapPreventer()
     private var settingsWindow: NSWindow?
 
-    @AppStorage("captureInterval") private var captureInterval: Double = 1.0
+    @AppStorage("captureInterval") private var captureInterval: Double = 0.5
     @AppStorage("reduceCaptureOnBattery") private var reduceCaptureOnBattery: Bool = true
     @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 15  // R key
     @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
@@ -287,10 +287,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     @objc private func showOverlay() {
         guard let frameBuffer = frameBuffer else { return }
 
-        if overlayController == nil {
-            overlayController = OverlayWindowController(frameBuffer: frameBuffer)
+        Task { @MainActor in
+            // Capture a fresh frame immediately so the overlay has the latest state
+            if let image = await captureManager.captureNow() {
+                await frameBuffer.addFrameSync(image, timestamp: Date())
+            }
+
+            if overlayController == nil {
+                overlayController = OverlayWindowController(frameBuffer: frameBuffer)
+            }
+            overlayController?.showOverlay()
         }
-        overlayController?.showOverlay()
     }
 
     @objc private func showSettings() {

@@ -6,7 +6,7 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @AppStorage("captureInterval") private var captureInterval: Double = 1.0
+    @AppStorage("captureInterval") private var captureInterval: Double = 0.5
     @AppStorage("reduceCaptureOnBattery") private var reduceCaptureOnBattery: Bool = true
     @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 15  // R key
     @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
@@ -28,7 +28,7 @@ struct SettingsView: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Retention: up to 24 hours")
-                    Text("• Last 10s: every frame\n• 10–60s: every 2nd\n• 1–5m: every 5th\n• 5m–24h: every 30th")
+                    Text("• Last 5m: every frame\n• 5–15m: every 5th\n• 15m–24h: every 30th")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
