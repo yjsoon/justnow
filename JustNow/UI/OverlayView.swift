@@ -318,7 +318,7 @@ struct SearchBarView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .glassEffect(.regular, in: .capsule)
+        .darkBarBackground(in: Capsule())
         .onAppear { isFocused = true }
     }
 }
@@ -338,7 +338,7 @@ struct InstructionsOverlay: View {
                 .foregroundStyle(.white.opacity(0.7))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .glassEffect(.regular, in: .capsule)
+                .darkBarBackground(in: Capsule())
                 .padding()
             }
             Spacer()
@@ -432,7 +432,7 @@ struct TimelineSlider: View {
             .frame(height: 32)
             .padding(.horizontal, 8)
             .padding(.vertical, 12)
-            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 20))
+            .darkBarBackground(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
 
             // Combined footer: frame count + timestamp + search indicator
             HStack(spacing: 6) {
@@ -480,6 +480,16 @@ private let timeFormatter: DateFormatter = {
     formatter.dateFormat = "h:mm a"
     return formatter
 }()
+
+private let barBackgroundColor = Color.black.opacity(0.85)
+private let barBorderColor = Color.white.opacity(0.08)
+
+private extension View {
+    func darkBarBackground<S: InsettableShape>(in shape: S) -> some View {
+        background(barBackgroundColor, in: shape)
+            .overlay(shape.stroke(barBorderColor, lineWidth: 1))
+    }
+}
 
 private let dayTimeFormatter: DateFormatter = {
     let formatter = DateFormatter()
