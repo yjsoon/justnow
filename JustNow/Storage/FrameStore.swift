@@ -14,6 +14,23 @@ enum FrameStoreError: Error {
     case manifestCorrupted
 }
 
+struct FrameSaveOptions: Sendable, Equatable {
+    let quality: CGFloat
+    let thumbnailQuality: CGFloat
+    let generateThumbnail: Bool
+
+    static let standard = FrameSaveOptions(
+        quality: ImageEncoder.fullImageQuality,
+        thumbnailQuality: ImageEncoder.thumbnailQuality,
+        generateThumbnail: false
+    )
+    static let lowPower = FrameSaveOptions(
+        quality: ImageEncoder.lowPowerFullImageQuality,
+        thumbnailQuality: ImageEncoder.lowPowerThumbnailQuality,
+        generateThumbnail: false
+    )
+}
+
 actor FrameStore {
     private let fileManager = FileManager.default
     private let storageURL: URL
@@ -21,6 +38,12 @@ actor FrameStore {
     private let manifestURL: URL
 
     private var manifest: FrameManifest
+    private var manifestDirty = false
+    private var pendingManifestChanges = 0
+    private var manifestSaveTask: Task<Void, Never>?
+
+    private static let manifestSaveDelay: Duration = .seconds(5)
+    private static let manifestSaveImmediateThreshold = 25
 
     init() throws {
         // ~/Library/Application Support/JustNow/
@@ -48,7 +71,12 @@ actor FrameStore {
 
     // MARK: - Public API
 
-    func saveFrame(_ cgImage: CGImage, timestamp: Date, hash: UInt64) throws -> FrameMetadata {
+    func saveFrame(
+        _ cgImage: CGImage,
+        timestamp: Date,
+        hash: UInt64,
+        options: FrameSaveOptions = .standard
+    ) throws -> FrameMetadata {
         let id = UUID()
         let filename = "\(id.uuidString).jpg"
         let thumbnailFilename = "\(id.uuidString)_thumb.jpg"
@@ -57,19 +85,19 @@ actor FrameStore {
         let thumbPath = framesURL.appendingPathComponent(thumbnailFilename)
 
         // Encode full image
-        guard let fullData = ImageEncoder.jpegData(from: cgImage, quality: ImageEncoder.fullImageQuality) else {
-            throw FrameStoreError.imageEncodingFailed
-        }
-
-        // Generate and encode thumbnail
-        guard let thumbnail = ImageEncoder.generateThumbnail(from: cgImage),
-              let thumbData = ImageEncoder.jpegData(from: thumbnail, quality: ImageEncoder.thumbnailQuality) else {
+        guard let fullData = ImageEncoder.jpegData(from: cgImage, quality: options.quality) else {
             throw FrameStoreError.imageEncodingFailed
         }
 
         // Write files
         try fullData.write(to: fullPath)
-        try thumbData.write(to: thumbPath)
+        if options.generateThumbnail {
+            guard let thumbnail = ImageEncoder.generateThumbnail(from: cgImage),
+                  let thumbData = ImageEncoder.jpegData(from: thumbnail, quality: options.thumbnailQuality) else {
+                throw FrameStoreError.imageEncodingFailed
+            }
+            try thumbData.write(to: thumbPath)
+        }
 
         let metadata = FrameMetadata(
             id: id,
@@ -82,7 +110,7 @@ actor FrameStore {
 
         manifest.frames.append(metadata)
         manifest.lastModified = Date()
-        try saveManifest()
+        scheduleManifestSave()
 
         return metadata
     }
@@ -107,11 +135,19 @@ actor FrameStore {
         }
 
         let path = framesURL.appendingPathComponent(metadata.thumbnailFilename)
-        guard let data = fileManager.contents(atPath: path.path) else {
+        if let data = fileManager.contents(atPath: path.path),
+           let image = ImageEncoder.cgImage(from: data) {
+            return image
+        }
+
+        guard let fullImage = try? loadFullImage(id: id),
+              let thumbnail = ImageEncoder.generateThumbnail(from: fullImage),
+              let thumbData = ImageEncoder.jpegData(from: thumbnail, quality: ImageEncoder.thumbnailQuality) else {
             return nil
         }
 
-        return ImageEncoder.cgImage(from: data)
+        try? thumbData.write(to: path, options: .atomic)
+        return thumbnail
     }
 
     func getAllMetadata() -> [FrameMetadata] {
@@ -132,7 +168,7 @@ actor FrameStore {
 
         manifest.frames.removeAll { ids.contains($0.id) }
         manifest.lastModified = Date()
-        try saveManifest()
+        scheduleManifestSave()
     }
 
     func clear() throws {
@@ -146,7 +182,7 @@ actor FrameStore {
 
         manifest.frames.removeAll()
         manifest.lastModified = Date()
-        try saveManifest()
+        performManifestSave()
     }
 
     func cleanupOrphans() throws {
@@ -170,14 +206,49 @@ actor FrameStore {
             return fileManager.fileExists(atPath: fullPath.path)
         }
 
-        try saveManifest()
+        performManifestSave()
     }
 
     func totalStorageSize() -> Int64 {
         manifest.frames.reduce(0) { $0 + $1.fileSize }
     }
 
+    func flushManifest() {
+        performManifestSave()
+    }
+
     // MARK: - Private
+
+    private func scheduleManifestSave() {
+        manifestDirty = true
+        pendingManifestChanges += 1
+
+        if pendingManifestChanges >= Self.manifestSaveImmediateThreshold {
+            performManifestSave()
+            return
+        }
+
+        guard manifestSaveTask == nil else { return }
+        manifestSaveTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.manifestSaveDelay)
+            await self?.performManifestSave()
+        }
+    }
+
+    private func performManifestSave() {
+        guard manifestDirty else { return }
+        manifestSaveTask?.cancel()
+        manifestSaveTask = nil
+
+        do {
+            try saveManifest()
+            manifestDirty = false
+            pendingManifestChanges = 0
+        } catch {
+            manifestDirty = true
+            print("[FrameStore] Failed to save manifest: \(error)")
+        }
+    }
 
     private func saveManifest() throws {
         let encoder = JSONEncoder()

@@ -11,6 +11,8 @@ enum ImageEncoder {
     static let thumbnailMaxSize: CGFloat = 200
     static let thumbnailQuality: CGFloat = 0.7
     static let fullImageQuality: CGFloat = 0.85
+    static let lowPowerThumbnailQuality: CGFloat = 0.6
+    static let lowPowerFullImageQuality: CGFloat = 0.7
 
     /// Generate a thumbnail from a CGImage
     static func generateThumbnail(from cgImage: CGImage) -> CGImage? {
