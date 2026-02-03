@@ -26,11 +26,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     private var capturePolicyTimer: Timer?
     private var userDefaultsObserver: NSObjectProtocol?
     private var thermalObserver: NSObjectProtocol?
+    private var inputEventMonitor: Any?
     private var lastAppliedPolicy: CapturePolicy?
+    private var lastUserActivityUpdate: Date = .distantPast
     private var wasCapturingBeforeOverlay = false
     private var isPausedForOverlay = false
 
     private let idleThreshold: TimeInterval = 60
+    private let inputPolicyUpdateInterval: TimeInterval = 1
     private let idleMultiplier: Double = 4
     private let batteryMultiplier: Double = 3
     private let batteryLowThreshold: Double = 0.3
@@ -47,6 +50,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         let saveOptions: FrameSaveOptions
         let duplicatePolicy: DuplicateFramePolicy
         let shouldPreventAppNap: Bool
+        let isIdle: Bool
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -55,6 +59,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         setupCapture()
         setupTimers()
         setupObservers()
+        setupInputMonitor()
         setupSleepWakeObservers()
     }
 
@@ -66,6 +71,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         }
         if let observer = thermalObserver {
             NotificationCenter.default.removeObserver(observer)
+        }
+        if let monitor = inputEventMonitor {
+            NSEvent.removeMonitor(monitor)
         }
         Task { @MainActor in
             await frameBuffer?.flushCaches()
@@ -209,6 +217,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             queue: .main
         ) { [weak self] _ in
             self?.updateCapturePolicy()
+        }
+    }
+
+    private func setupInputMonitor() {
+        inputEventMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel, .mouseMoved]
+        ) { [weak self] _ in
+            self?.handleUserActivity()
         }
     }
 
@@ -531,13 +547,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             scale: scale,
             saveOptions: saveOptions,
             duplicatePolicy: duplicatePolicy,
-            shouldPreventAppNap: shouldPreventAppNap
+            shouldPreventAppNap: shouldPreventAppNap,
+            isIdle: isIdle
         )
     }
 
     private func secondsSinceLastUserEvent() -> TimeInterval {
         let anyEventType = CGEventType(rawValue: UInt32.max)!
         return CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyEventType)
+    }
+
+    private func handleUserActivity() {
+        let now = Date()
+        guard now.timeIntervalSince(lastUserActivityUpdate) >= inputPolicyUpdateInterval else { return }
+        lastUserActivityUpdate = now
+
+        guard lastAppliedPolicy?.isIdle == true else { return }
+        updateCapturePolicy()
     }
 
     private func updateFrameCountMenuItem() {
