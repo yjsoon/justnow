@@ -4,11 +4,12 @@
 //
 
 import AppKit
+import CoreGraphics
 import SwiftUI
 import HotKey
 import Carbon.HIToolbox
 
-class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var captureManager: ScreenCaptureManager!
     private var frameBuffer: FrameBuffer?
@@ -22,21 +23,49 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 15  // R key
     @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
 
-    private var powerCheckTimer: Timer?
-    private var frameCountTimer: Timer?
+    private var capturePolicyTimer: Timer?
+    private var userDefaultsObserver: NSObjectProtocol?
+    private var thermalObserver: NSObjectProtocol?
+    private var lastAppliedPolicy: CapturePolicy?
+    private var wasCapturingBeforeOverlay = false
+    private var isPausedForOverlay = false
+
+    private let idleThreshold: TimeInterval = 60
+    private let idleMultiplier: Double = 4
+    private let batteryMultiplier: Double = 3
+    private let thermalSeriousMultiplier: Double = 2
+    private let thermalCriticalMultiplier: Double = 4
+    private let maxCaptureInterval: Double = 30
+
+    private struct CapturePolicy: Equatable {
+        let interval: TimeInterval
+        let scale: Int
+        let saveOptions: FrameSaveOptions
+        let duplicatePolicy: DuplicateFramePolicy
+        let shouldPreventAppNap: Bool
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
         setupHotKey()
         setupCapture()
         setupTimers()
+        setupObservers()
         setupSleepWakeObservers()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         appNapPreventer.stopActivity()
-        powerCheckTimer?.invalidate()
-        frameCountTimer?.invalidate()
+        capturePolicyTimer?.invalidate()
+        if let observer = userDefaultsObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = thermalObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        Task { @MainActor in
+            await frameBuffer?.flushCaches()
+        }
     }
 
     // MARK: - Setup
@@ -80,6 +109,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
         quitItem.target = self
         menu.addItem(quitItem)
 
+        menu.delegate = self
         statusItem.menu = menu
     }
 
@@ -129,12 +159,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
             }
 
             captureManager.delegate = self
+            let preflightPolicy = computeCapturePolicy()
+            captureManager.updateCaptureInterval(preflightPolicy.interval)
+            captureManager.updateCaptureScale(preflightPolicy.scale)
+            frameBuffer?.updateSaveOptions(
+                preflightPolicy.saveOptions,
+                duplicatePolicy: preflightPolicy.duplicatePolicy
+            )
 
             do {
                 try await captureManager.startCapture()
-                appNapPreventer.startActivity()
                 updateCaptureStatus("Active")
-                updateCaptureInterval()
+                lastAppliedPolicy = nil
+                updateCapturePolicy()
             } catch CaptureError.permissionDenied {
                 updateCaptureStatus("No Permission")
                 showPermissionAlert()
@@ -146,14 +183,28 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     }
 
     private func setupTimers() {
-        // Update frame count every 2 seconds
-        frameCountTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            self?.updateFrameCountMenuItem()
+        // Re-evaluate capture policy periodically (battery, idle, thermal)
+        capturePolicyTimer = Timer.scheduledTimer(withTimeInterval: 20.0, repeats: true) { [weak self] _ in
+            self?.updateCapturePolicy()
+        }
+        capturePolicyTimer?.tolerance = 5.0
+    }
+
+    private func setupObservers() {
+        userDefaultsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateCapturePolicy()
         }
 
-        // Check power state every minute
-        powerCheckTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
-            self?.updateCaptureInterval()
+        thermalObserver = NotificationCenter.default.addObserver(
+            forName: ProcessInfo.thermalStateDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateCapturePolicy()
         }
     }
 
@@ -221,6 +272,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
 
     private func resumeCapture(reason: String) {
         Task { @MainActor in
+            guard overlayController?.isVisible != true else {
+                updateCaptureStatus("Paused (Overlay)")
+                return
+            }
+
             updateCaptureStatus("Resuming...")
 
             // Delay to let system stabilise
@@ -228,8 +284,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
 
             do {
                 try await captureManager.startCapture()
-                appNapPreventer.startActivity()
                 updateCaptureStatus("Active")
+                lastAppliedPolicy = nil
+                updateCapturePolicy()
                 print("Capture resumed after \(reason)")
             } catch {
                 print("Failed to resume capture after \(reason): \(error)")
@@ -239,8 +296,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
                 try? await Task.sleep(for: .seconds(3))
                 do {
                     try await captureManager.startCapture()
-                    appNapPreventer.startActivity()
                     updateCaptureStatus("Active")
+                    lastAppliedPolicy = nil
+                    updateCapturePolicy()
                     print("Capture resumed on retry")
                 } catch {
                     print("Retry also failed: \(error)")
@@ -257,8 +315,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     }
 
     func captureManagerDidStop(_ manager: ScreenCaptureManager) {
+        guard overlayController?.isVisible != true, !isPausedForOverlay else { return }
         print("Capture stopped unexpectedly, attempting restart...")
         updateCaptureStatus("Restarting...")
+        appNapPreventer.stopActivity()
 
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(2))
@@ -266,6 +326,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
             do {
                 try await captureManager.startCapture()
                 updateCaptureStatus("Active")
+                lastAppliedPolicy = nil
+                updateCapturePolicy()
                 print("Capture restarted successfully")
             } catch {
                 print("Failed to restart capture: \(error)")
@@ -294,9 +356,55 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
             }
 
             if overlayController == nil {
-                overlayController = OverlayWindowController(frameBuffer: frameBuffer)
+                overlayController = OverlayWindowController(
+                    frameBuffer: frameBuffer,
+                    onVisibilityChanged: { [weak self] isVisible in
+                        self?.handleOverlayVisibilityChanged(isVisible: isVisible)
+                    }
+                )
             }
             overlayController?.showOverlay()
+        }
+    }
+
+    private func handleOverlayVisibilityChanged(isVisible: Bool) {
+        if isVisible {
+            pauseCaptureForOverlay()
+        } else {
+            resumeCaptureAfterOverlay()
+        }
+    }
+
+    private func pauseCaptureForOverlay() {
+        guard !isPausedForOverlay else { return }
+        isPausedForOverlay = true
+        wasCapturingBeforeOverlay = captureManager.isCapturing
+
+        guard wasCapturingBeforeOverlay else { return }
+        Task { @MainActor in
+            updateCaptureStatus("Paused (Overlay)")
+            await captureManager.stopCapture()
+            appNapPreventer.stopActivity()
+        }
+    }
+
+    private func resumeCaptureAfterOverlay() {
+        guard isPausedForOverlay else { return }
+        isPausedForOverlay = false
+        guard wasCapturingBeforeOverlay else { return }
+        wasCapturingBeforeOverlay = false
+
+        Task { @MainActor in
+            updateCaptureStatus("Resuming...")
+            do {
+                try await captureManager.startCapture()
+                updateCaptureStatus("Active")
+                lastAppliedPolicy = nil
+                updateCapturePolicy()
+            } catch {
+                updateCaptureStatus("Error")
+                print("Failed to resume capture after overlay: \(error)")
+            }
         }
     }
 
@@ -331,12 +439,84 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
         NSApp.terminate(nil)
     }
 
+    // MARK: - NSMenuDelegate
+
+    func menuWillOpen(_ menu: NSMenu) {
+        updateFrameCountMenuItem()
+    }
+
     // MARK: - Helpers
 
-    private func updateCaptureInterval() {
-        let multiplier = (reduceCaptureOnBattery && PowerManager.isOnBattery()) ? 2.0 : 1.0
-        let interval = captureInterval * multiplier
-        captureManager.updateCaptureInterval(interval)
+    private func updateCapturePolicy() {
+        guard captureManager != nil else { return }
+        let policy = computeCapturePolicy()
+        guard policy != lastAppliedPolicy else { return }
+        lastAppliedPolicy = policy
+
+        captureManager.updateCaptureInterval(policy.interval)
+        captureManager.updateCaptureScale(policy.scale)
+        frameBuffer?.updateSaveOptions(policy.saveOptions, duplicatePolicy: policy.duplicatePolicy)
+
+        if captureManager.isCapturing {
+            if policy.shouldPreventAppNap {
+                appNapPreventer.startActivity()
+            } else {
+                appNapPreventer.stopActivity()
+            }
+        }
+    }
+
+    private func computeCapturePolicy() -> CapturePolicy {
+        let adaptiveEnabled = reduceCaptureOnBattery
+        let onBattery = adaptiveEnabled && PowerManager.isOnBattery()
+        let lowPowerMode = adaptiveEnabled && ProcessInfo.processInfo.isLowPowerModeEnabled
+        let idleDuration = secondsSinceLastUserEvent()
+        let isIdle = adaptiveEnabled && idleDuration >= idleThreshold
+        let thermalState = ProcessInfo.processInfo.thermalState
+        let isThermalConstrained = adaptiveEnabled && (thermalState == .serious || thermalState == .critical)
+
+        var interval = captureInterval
+        var scale = 2
+        var saveOptions = FrameSaveOptions.standard
+        var duplicatePolicy = DuplicateFramePolicy.standard
+
+        if onBattery || lowPowerMode {
+            interval *= batteryMultiplier
+            scale = 1
+            saveOptions = .lowPower
+            duplicatePolicy = .lowPower
+        }
+
+        if isIdle {
+            interval *= idleMultiplier
+            saveOptions = .lowPower
+            duplicatePolicy = .lowPower
+        }
+
+        if isThermalConstrained {
+            let multiplier = (thermalState == .critical) ? thermalCriticalMultiplier : thermalSeriousMultiplier
+            interval *= multiplier
+            scale = 1
+            saveOptions = .lowPower
+            duplicatePolicy = .lowPower
+        }
+
+        interval = min(interval, maxCaptureInterval)
+
+        let allowAppNap = onBattery || lowPowerMode || isIdle || isThermalConstrained || interval >= 5
+        let shouldPreventAppNap = !allowAppNap
+
+        return CapturePolicy(
+            interval: interval,
+            scale: scale,
+            saveOptions: saveOptions,
+            duplicatePolicy: duplicatePolicy,
+            shouldPreventAppNap: shouldPreventAppNap
+        )
+    }
+
+    private func secondsSinceLastUserEvent() -> TimeInterval {
+        CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .anyInputEventType)
     }
 
     private func updateFrameCountMenuItem() {

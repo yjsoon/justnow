@@ -60,7 +60,7 @@ struct SettingsView: View {
 
             Section {
                 Toggle("Reduce capture rate on battery", isOn: $reduceCaptureOnBattery)
-                Text("When enabled, capture interval doubles when on battery power")
+                Text("When enabled, capture interval increases and image quality is reduced on battery power, thermal pressure, or extended idle time")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {

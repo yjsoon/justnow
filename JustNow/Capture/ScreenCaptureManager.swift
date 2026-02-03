@@ -27,6 +27,8 @@ class ScreenCaptureManager: NSObject {
     private var captureTimer: Timer?
     private var filter: SCContentFilter?
     private var config: SCStreamConfiguration?
+    private var displayDimensions: (width: Int, height: Int)?
+    private var captureScale: Int = 2
 
     weak var delegate: ScreenCaptureDelegate?
     private(set) var isCapturing = false
@@ -49,8 +51,8 @@ class ScreenCaptureManager: NSObject {
         filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
 
         let cfg = SCStreamConfiguration()
-        cfg.width = display.width * 2  // Retina
-        cfg.height = display.height * 2
+        displayDimensions = (width: display.width, height: display.height)
+        applyCaptureScale(to: cfg)
         cfg.showsCursor = true
         cfg.capturesAudio = false
         config = cfg
@@ -81,6 +83,12 @@ class ScreenCaptureManager: NSObject {
         startTimer()
     }
 
+    func updateCaptureScale(_ scale: Int) {
+        captureScale = max(1, scale)
+        guard let config else { return }
+        applyCaptureScale(to: config)
+    }
+
     /// Capture a single frame immediately and return it (for overlay open).
     func captureNow() async -> CGImage? {
         guard let filter, let config else { return nil }
@@ -96,6 +104,7 @@ class ScreenCaptureManager: NSObject {
                 self?.captureOneFrame()
             }
         }
+        captureTimer?.tolerance = min(captureInterval * 0.2, 1.0)
     }
 
     private func captureOneFrame() {
@@ -115,5 +124,11 @@ class ScreenCaptureManager: NSObject {
                 print("Screenshot capture failed: \(error)")
             }
         }
+    }
+
+    private func applyCaptureScale(to config: SCStreamConfiguration) {
+        guard let displayDimensions else { return }
+        config.width = displayDimensions.width * captureScale
+        config.height = displayDimensions.height * captureScale
     }
 }

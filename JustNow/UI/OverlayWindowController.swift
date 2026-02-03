@@ -9,12 +9,14 @@ import SwiftUI
 class OverlayWindowController: NSObject {
     private var window: OverlayWindow?
     private let frameBuffer: FrameBuffer
+    private let onVisibilityChanged: ((Bool) -> Void)?
     private var keyEventMonitor: Any?
     private var scrollEventMonitor: Any?
     private var viewModel: OverlayViewModel?
 
-    init(frameBuffer: FrameBuffer) {
+    init(frameBuffer: FrameBuffer, onVisibilityChanged: ((Bool) -> Void)? = nil) {
         self.frameBuffer = frameBuffer
+        self.onVisibilityChanged = onVisibilityChanged
         super.init()
     }
 
@@ -125,6 +127,7 @@ class OverlayWindowController: NSObject {
         }
 
         NSApp.activate(ignoringOtherApps: true)
+        onVisibilityChanged?(true)
     }
 
     func hideOverlay() {
@@ -142,6 +145,7 @@ class OverlayWindowController: NSObject {
         window?.orderOut(nil)
         window = nil
         viewModel = nil
+        onVisibilityChanged?(false)
     }
 
     var isVisible: Bool {
