@@ -516,7 +516,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     }
 
     private func secondsSinceLastUserEvent() -> TimeInterval {
-        CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .anyInputEventType)
+        let anyEventType = CGEventType(rawValue: UInt32.max)!
+        return CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyEventType)
     }
 
     private func updateFrameCountMenuItem() {

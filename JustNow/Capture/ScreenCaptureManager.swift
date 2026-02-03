@@ -100,9 +100,7 @@ class ScreenCaptureManager: NSObject {
     private func startTimer() {
         captureTimer?.invalidate()
         captureTimer = Timer.scheduledTimer(withTimeInterval: captureInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.captureOneFrame()
-            }
+            self?.captureOneFrame()
         }
         captureTimer?.tolerance = min(captureInterval * 0.2, 1.0)
     }
