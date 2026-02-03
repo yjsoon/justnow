@@ -508,6 +508,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
         if isIdle {
             interval *= idleMultiplier
+            scale = 1
             saveOptions = .lowPower
             duplicatePolicy = .lowPower
         }
