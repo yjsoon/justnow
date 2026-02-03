@@ -31,6 +31,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     private var lastUserActivityUpdate: Date = .distantPast
     private var wasCapturingBeforeOverlay = false
     private var isPausedForOverlay = false
+    private var wasCapturingBeforeSession = false
+    private var isPausedForSession = false
 
     private let idleThreshold: TimeInterval = 60
     private let inputPolicyUpdateInterval: TimeInterval = 1
@@ -260,6 +262,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             name: NSWorkspace.screensDidWakeNotification,
             object: nil
         )
+
+        // Session active/inactive (screen lock, fast user switching)
+        workspace.addObserver(
+            self,
+            selector: #selector(handleSessionResignActive),
+            name: NSWorkspace.sessionDidResignActiveNotification,
+            object: nil
+        )
+
+        workspace.addObserver(
+            self,
+            selector: #selector(handleSessionBecomeActive),
+            name: NSWorkspace.sessionDidBecomeActiveNotification,
+            object: nil
+        )
     }
 
     @objc private func handleSleep() {
@@ -288,6 +305,37 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     @objc private func handleScreenWake() {
         frameBuffer?.enableBlackFrameFilter(for: 5)
         resumeCapture(reason: "screen wake")
+    }
+
+    @objc private func handleSessionResignActive() {
+        pauseCaptureForSession()
+    }
+
+    @objc private func handleSessionBecomeActive() {
+        resumeCaptureAfterSession()
+    }
+
+    private func pauseCaptureForSession() {
+        guard !isPausedForSession else { return }
+        isPausedForSession = true
+        wasCapturingBeforeSession = captureManager.isCapturing
+
+        guard wasCapturingBeforeSession else { return }
+        Task { @MainActor in
+            updateCaptureStatus("Session Inactive")
+            await captureManager.stopCapture()
+            appNapPreventer.stopActivity()
+        }
+    }
+
+    private func resumeCaptureAfterSession() {
+        guard isPausedForSession else { return }
+        isPausedForSession = false
+        guard wasCapturingBeforeSession else { return }
+        wasCapturingBeforeSession = false
+
+        frameBuffer?.enableBlackFrameFilter(for: 5)
+        resumeCapture(reason: "session active")
     }
 
     private func resumeCapture(reason: String) {
