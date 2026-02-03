@@ -13,12 +13,26 @@ struct StoredFrame: Identifiable, Sendable {
     let hash: UInt64
 }
 
+struct DuplicateFramePolicy: Sendable, Equatable {
+    let hashThreshold: Int
+    let minimumSpacing: TimeInterval
+
+    static let standard = DuplicateFramePolicy(hashThreshold: 0, minimumSpacing: 2)
+    static let lowPower = DuplicateFramePolicy(hashThreshold: 1, minimumSpacing: 5)
+}
+
 @MainActor
 class FrameBuffer {
     private var frames: [StoredFrame] = []
     private let frameStore: FrameStore
     private let retentionManager = RetentionManager()
     private var blackFrameFilterUntil: Date?
+    private var lastStoredHash: UInt64?
+    private var lastStoredTimestamp: Date?
+    private var saveOptions: FrameSaveOptions = .standard
+    private var duplicatePolicy: DuplicateFramePolicy = .standard
+    private var lastPruneCheck: Date = .distantPast
+    private let pruneInterval: TimeInterval = 30
 
     // Pause pruning while overlay is open to prevent "Frame removed" issues
     var isPruningPaused: Bool = false
@@ -53,13 +67,19 @@ class FrameBuffer {
             return
         }
 
-        // Save to disk (keep all frames, filter duplicates at display time)
+        // Save to disk (skip near-duplicates to reduce churn)
         // Hash computation runs concurrently on background thread
-        Task {
+        Task(priority: .utility) {
             do {
                 // Compute perceptual hash on background thread (via @concurrent)
                 let hash = await PerceptualHash.compute(from: cgImage)
-                let metadata = try await frameStore.saveFrame(cgImage, timestamp: timestamp, hash: hash)
+                guard shouldStoreFrame(hash: hash, timestamp: timestamp) else { return }
+                let metadata = try await frameStore.saveFrame(
+                    cgImage,
+                    timestamp: timestamp,
+                    hash: hash,
+                    options: saveOptions
+                )
 
                 let frame = StoredFrame(
                     id: metadata.id,
@@ -67,7 +87,7 @@ class FrameBuffer {
                     hash: metadata.hash
                 )
 
-                frames.append(frame)
+                recordStoredFrame(frame)
 
                 await pruneIfNeeded()
             } catch {
@@ -84,9 +104,15 @@ class FrameBuffer {
 
         do {
             let hash = await PerceptualHash.compute(from: cgImage)
-            let metadata = try await frameStore.saveFrame(cgImage, timestamp: timestamp, hash: hash)
+            guard shouldStoreFrame(hash: hash, timestamp: timestamp) else { return }
+            let metadata = try await frameStore.saveFrame(
+                cgImage,
+                timestamp: timestamp,
+                hash: hash,
+                options: saveOptions
+            )
             let frame = StoredFrame(id: metadata.id, timestamp: metadata.timestamp, hash: metadata.hash)
-            frames.append(frame)
+            recordStoredFrame(frame)
         } catch {
             print("Failed to save frame: \(error)")
         }
@@ -179,11 +205,23 @@ class FrameBuffer {
     func clear() async throws {
         try await frameStore.clear()
         frames.removeAll()
+        lastStoredHash = nil
+        lastStoredTimestamp = nil
         thumbnailCache.removeAllObjects()
     }
 
     func totalStorageSize() async -> Int64 {
         await frameStore.totalStorageSize()
+    }
+
+    func updateSaveOptions(_ options: FrameSaveOptions, duplicatePolicy: DuplicateFramePolicy) {
+        saveOptions = options
+        self.duplicatePolicy = duplicatePolicy
+    }
+
+    func flushCaches() async {
+        await frameStore.flushManifest()
+        await textCache.save()
     }
 
     // MARK: - Private
@@ -194,6 +232,11 @@ class FrameBuffer {
         frames = metadata
             .sorted { $0.timestamp < $1.timestamp }
             .map { StoredFrame(id: $0.id, timestamp: $0.timestamp, hash: $0.hash) }
+
+        if let lastFrame = frames.last, lastFrame.hash != 0 {
+            lastStoredHash = lastFrame.hash
+            lastStoredTimestamp = lastFrame.timestamp
+        }
     }
 
     func enableBlackFrameFilter(for seconds: TimeInterval) {
@@ -203,7 +246,11 @@ class FrameBuffer {
     private func pruneIfNeeded() async {
         guard !isPruningPaused else { return }
 
-        let toPrune = retentionManager.framesToPrune(frames: frames, currentTime: Date())
+        let now = Date()
+        guard now.timeIntervalSince(lastPruneCheck) >= pruneInterval else { return }
+        lastPruneCheck = now
+
+        let toPrune = retentionManager.framesToPrune(frames: frames, currentTime: now)
         guard !toPrune.isEmpty else { return }
 
         do {
@@ -212,6 +259,45 @@ class FrameBuffer {
             print("Pruned \(toPrune.count) frames, \(frames.count) remaining")
         } catch {
             print("Failed to prune frames: \(error)")
+        }
+    }
+
+    private func shouldStoreFrame(hash: UInt64, timestamp: Date) -> Bool {
+        guard let lastHash = lastStoredHash, let lastTime = lastStoredTimestamp else {
+            return true
+        }
+
+        let timeSinceLast = timestamp.timeIntervalSince(lastTime)
+        guard timeSinceLast < duplicatePolicy.minimumSpacing else { return true }
+
+        let distance = PerceptualHash.hammingDistance(hash, lastHash)
+        return distance > duplicatePolicy.hashThreshold
+    }
+
+    private func recordStoredFrame(_ frame: StoredFrame) {
+        if let last = frames.last, frame.timestamp >= last.timestamp {
+            frames.append(frame)
+        } else if frames.isEmpty {
+            frames.append(frame)
+        } else {
+            var low = 0
+            var high = frames.count
+            while low < high {
+                let mid = (low + high) / 2
+                if frames[mid].timestamp <= frame.timestamp {
+                    low = mid + 1
+                } else {
+                    high = mid
+                }
+            }
+            frames.insert(frame, at: low)
+        }
+        if frame.hash != 0 {
+            lastStoredHash = frame.hash
+            lastStoredTimestamp = frame.timestamp
+        } else {
+            lastStoredHash = nil
+            lastStoredTimestamp = frame.timestamp
         }
     }
 

@@ -24,7 +24,7 @@ class RetentionManager {
         var toKeep = Set<UUID>()
         var lastKeptTime: [Int: Date] = [:]  // Last kept timestamp per tier
 
-        // Process OLDEST to NEWEST so spacing is stable
+        // Process OLDEST to NEWEST so spacing is stable.
         for frame in frames.sorted(by: { $0.timestamp < $1.timestamp }) {
             let age = currentTime.timeIntervalSince(frame.timestamp)
 
