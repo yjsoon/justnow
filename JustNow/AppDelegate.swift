@@ -33,6 +33,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     private let idleThreshold: TimeInterval = 60
     private let idleMultiplier: Double = 4
     private let batteryMultiplier: Double = 3
+    private let batteryLowThreshold: Double = 0.3
+    private let batteryCriticalThreshold: Double = 0.15
+    private let batteryLowMultiplier: Double = 1.5
+    private let batteryCriticalMultiplier: Double = 2
     private let thermalSeriousMultiplier: Double = 2
     private let thermalCriticalMultiplier: Double = 4
     private let maxCaptureInterval: Double = 30
@@ -470,6 +474,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         let adaptiveEnabled = reduceCaptureOnBattery
         let onBattery = adaptiveEnabled && PowerManager.isOnBattery()
         let lowPowerMode = adaptiveEnabled && ProcessInfo.processInfo.isLowPowerModeEnabled
+        let batteryCharge = onBattery ? PowerManager.batteryChargeFraction() : nil
         let idleDuration = secondsSinceLastUserEvent()
         let isIdle = adaptiveEnabled && idleDuration >= idleThreshold
         let thermalState = ProcessInfo.processInfo.thermalState
@@ -485,6 +490,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             scale = 1
             saveOptions = .lowPower
             duplicatePolicy = .lowPower
+        }
+
+        if let batteryCharge {
+            if batteryCharge <= batteryCriticalThreshold {
+                interval *= batteryCriticalMultiplier
+                scale = 1
+                saveOptions = .lowPower
+                duplicatePolicy = .lowPower
+            } else if batteryCharge <= batteryLowThreshold {
+                interval *= batteryLowMultiplier
+                scale = 1
+                saveOptions = .lowPower
+                duplicatePolicy = .lowPower
+            }
         }
 
         if isIdle {
