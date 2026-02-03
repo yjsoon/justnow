@@ -33,6 +33,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     private var isPausedForOverlay = false
     private var wasCapturingBeforeSession = false
     private var isPausedForSession = false
+    private var idleTransitionTimer: Timer?
 
     private let idleThreshold: TimeInterval = 60
     private let inputPolicyUpdateInterval: TimeInterval = 1
@@ -68,6 +69,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     func applicationWillTerminate(_ notification: Notification) {
         appNapPreventer.stopActivity()
         capturePolicyTimer?.invalidate()
+        idleTransitionTimer?.invalidate()
         if let observer = userDefaultsObserver {
             NotificationCenter.default.removeObserver(observer)
         }
@@ -197,11 +199,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     }
 
     private func setupTimers() {
-        // Re-evaluate capture policy periodically (battery, idle, thermal)
-        capturePolicyTimer = Timer.scheduledTimer(withTimeInterval: 20.0, repeats: true) { [weak self] _ in
+        scheduleIdleTransitionCheck()
+
+        // Re-evaluate capture policy periodically (battery, low power, thermal)
+        capturePolicyTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
             self?.updateCapturePolicy()
         }
-        capturePolicyTimer?.tolerance = 5.0
+        capturePolicyTimer?.tolerance = 10.0
     }
 
     private func setupObservers() {
@@ -609,9 +613,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         let now = Date()
         guard now.timeIntervalSince(lastUserActivityUpdate) >= inputPolicyUpdateInterval else { return }
         lastUserActivityUpdate = now
+        scheduleIdleTransitionCheck()
 
         guard lastAppliedPolicy?.isIdle == true else { return }
         updateCapturePolicy()
+    }
+
+    private func scheduleIdleTransitionCheck() {
+        idleTransitionTimer?.invalidate()
+
+        let idleDuration = secondsSinceLastUserEvent()
+        let remaining = max(idleThreshold - idleDuration, 0)
+        guard remaining > 0 else { return }
+
+        idleTransitionTimer = Timer.scheduledTimer(withTimeInterval: remaining, repeats: false) { [weak self] _ in
+            self?.updateCapturePolicy()
+        }
+        idleTransitionTimer?.tolerance = min(remaining * 0.2, 5.0)
     }
 
     private func updateFrameCountMenuItem() {
