@@ -40,15 +40,15 @@ class PowerManager {
             }
 
             if let current = info[kIOPSCurrentCapacityKey as String] as? Double,
-               let max = info[kIOPSMaxCapacityKey as String] as? Double,
-               max > 0 {
-                return min(max(current / max, 0), 1)
+               let maxCapacity = info[kIOPSMaxCapacityKey as String] as? Double,
+               maxCapacity > 0 {
+                return min(max(current / maxCapacity, 0), 1)
             }
 
             if let current = info[kIOPSCurrentCapacityKey as String] as? Int,
-               let max = info[kIOPSMaxCapacityKey as String] as? Int,
-               max > 0 {
-                return min(max(Double(current) / Double(max), 0), 1)
+               let maxCapacity = info[kIOPSMaxCapacityKey as String] as? Int,
+               maxCapacity > 0 {
+                return min(max(Double(current) / Double(maxCapacity), 0), 1)
             }
 
             if let percent = info[kIOPSCurrentCapacityKey as String] as? Int {
