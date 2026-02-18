@@ -143,8 +143,16 @@ class OverlayViewModel {
             guard !Task.isCancelled else { return }
 
             let matchedIDs = await cache.searchFrameIDs(matching: query, limit: total)
-            let matchedSet = Set(matchedIDs)
-            let sortedFrames = framesToSearch.filter { matchedSet.contains($0.id) }
+            let frameByID = Dictionary(uniqueKeysWithValues: framesToSearch.map { ($0.id, $0) })
+            var seenIDs: Set<UUID> = []
+            var sortedFrames: [StoredFrame] = []
+            sortedFrames.reserveCapacity(matchedIDs.count)
+
+            for matchedID in matchedIDs {
+                guard seenIDs.insert(matchedID).inserted else { continue }
+                guard let frame = frameByID[matchedID] else { continue }
+                sortedFrames.append(frame)
+            }
 
             guard !Task.isCancelled else { return }
 
