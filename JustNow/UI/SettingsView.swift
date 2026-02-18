@@ -8,6 +8,7 @@ import SwiftUI
 struct SettingsView: View {
     @AppStorage("captureInterval") private var captureInterval: Double = 0.5
     @AppStorage("reduceCaptureOnBattery") private var reduceCaptureOnBattery: Bool = true
+    @AppStorage("backgroundSearchIndexingEnabled") private var backgroundSearchIndexingEnabled: Bool = true
     @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 15  // R key
     @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
 
@@ -61,6 +62,11 @@ struct SettingsView: View {
             Section {
                 Toggle("Reduce capture rate on battery", isOn: $reduceCaptureOnBattery)
                 Text("When enabled, capture interval increases and image quality is reduced on battery power, thermal pressure, or extended idle time")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Background OCR indexing for search", isOn: $backgroundSearchIndexingEnabled)
+                Text("Indexes recent frames in the background so searches return faster. Automatically throttled on battery, low power mode, and thermal pressure.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {

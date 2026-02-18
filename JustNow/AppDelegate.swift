@@ -20,6 +20,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
     @AppStorage("captureInterval") private var captureInterval: Double = 0.5
     @AppStorage("reduceCaptureOnBattery") private var reduceCaptureOnBattery: Bool = true
+    @AppStorage("backgroundSearchIndexingEnabled") private var backgroundSearchIndexingEnabled: Bool = true
     @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 15  // R key
     @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
 
@@ -46,12 +47,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     private let thermalSeriousMultiplier: Double = 2
     private let thermalCriticalMultiplier: Double = 4
     private let maxCaptureInterval: Double = 30
+    private let ocrIndexBaseInterval: TimeInterval = 2.5
+    private let ocrIndexBatteryInterval: TimeInterval = 10
+    private let ocrIndexIdleInterval: TimeInterval = 15
+    private let ocrIndexThermalSeriousInterval: TimeInterval = 20
+    private let ocrIndexMaxFrameAge: TimeInterval = 5 * 60
+    private let ocrIndexBatteryMaxFrameAge: TimeInterval = 3 * 60
+    private let ocrIndexBaseQueueDepth: Int = 120
+    private let ocrIndexBatteryQueueDepth: Int = 60
+    private let ocrIndexIdleQueueDepth: Int = 40
+    private let ocrIndexThermalQueueDepth: Int = 24
 
     private struct CapturePolicy: Equatable {
         let interval: TimeInterval
         let scale: Int
         let saveOptions: FrameSaveOptions
         let duplicatePolicy: DuplicateFramePolicy
+        let ocrIndexingPolicy: OCRIndexingPolicy
         let shouldPreventAppNap: Bool
         let isIdle: Bool
     }
@@ -182,6 +194,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
                 preflightPolicy.saveOptions,
                 duplicatePolicy: preflightPolicy.duplicatePolicy
             )
+            frameBuffer?.updateOCRIndexingPolicy(preflightPolicy.ocrIndexingPolicy)
 
             do {
                 try await captureManager.startCapture()
@@ -528,6 +541,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         captureManager.updateCaptureInterval(policy.interval)
         captureManager.updateCaptureScale(policy.scale)
         frameBuffer?.updateSaveOptions(policy.saveOptions, duplicatePolicy: policy.duplicatePolicy)
+        frameBuffer?.updateOCRIndexingPolicy(policy.ocrIndexingPolicy)
 
         if captureManager.isCapturing {
             if policy.shouldPreventAppNap {
@@ -552,12 +566,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         var scale = 2
         var saveOptions = FrameSaveOptions.standard
         var duplicatePolicy = DuplicateFramePolicy.standard
+        var ocrIndexEnabled = backgroundSearchIndexingEnabled
+        var ocrIndexInterval = ocrIndexBaseInterval
+        var ocrIndexQueueDepth = ocrIndexBaseQueueDepth
+        var ocrIndexMaxAge = ocrIndexMaxFrameAge
 
         if onBattery || lowPowerMode {
             interval *= batteryMultiplier
             scale = 1
             saveOptions = .lowPower
             duplicatePolicy = .lowPower
+
+            ocrIndexInterval = ocrIndexBatteryInterval
+            ocrIndexQueueDepth = ocrIndexBatteryQueueDepth
+            ocrIndexMaxAge = ocrIndexBatteryMaxFrameAge
         }
 
         if let batteryCharge {
@@ -566,11 +588,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
                 scale = 1
                 saveOptions = .lowPower
                 duplicatePolicy = .lowPower
+                ocrIndexEnabled = false
             } else if batteryCharge <= batteryLowThreshold {
                 interval *= batteryLowMultiplier
                 scale = 1
                 saveOptions = .lowPower
                 duplicatePolicy = .lowPower
+
+                ocrIndexInterval = max(ocrIndexInterval, ocrIndexBatteryInterval)
+                ocrIndexQueueDepth = min(ocrIndexQueueDepth, ocrIndexBatteryQueueDepth)
+                ocrIndexMaxAge = min(ocrIndexMaxAge, ocrIndexBatteryMaxFrameAge)
             }
         }
 
@@ -579,6 +606,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             scale = 1
             saveOptions = .lowPower
             duplicatePolicy = .lowPower
+
+            ocrIndexInterval = max(ocrIndexInterval, ocrIndexIdleInterval)
+            ocrIndexQueueDepth = min(ocrIndexQueueDepth, ocrIndexIdleQueueDepth)
         }
 
         if isThermalConstrained {
@@ -587,9 +617,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             scale = 1
             saveOptions = .lowPower
             duplicatePolicy = .lowPower
+
+            if thermalState == .critical {
+                ocrIndexEnabled = false
+            } else {
+                ocrIndexInterval = max(ocrIndexInterval, ocrIndexThermalSeriousInterval)
+                ocrIndexQueueDepth = min(ocrIndexQueueDepth, ocrIndexThermalQueueDepth)
+                ocrIndexMaxAge = min(ocrIndexMaxAge, ocrIndexBatteryMaxFrameAge)
+            }
         }
 
         interval = min(interval, maxCaptureInterval)
+
+        let ocrPolicy = OCRIndexingPolicy(
+            isEnabled: ocrIndexEnabled,
+            minimumInterval: ocrIndexInterval,
+            maxQueueDepth: ocrIndexQueueDepth,
+            maxFrameAge: ocrIndexMaxAge
+        )
 
         let allowAppNap = onBattery || lowPowerMode || isIdle || isThermalConstrained || interval >= 5
         let shouldPreventAppNap = !allowAppNap
@@ -599,6 +644,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             scale: scale,
             saveOptions: saveOptions,
             duplicatePolicy: duplicatePolicy,
+            ocrIndexingPolicy: ocrPolicy,
             shouldPreventAppNap: shouldPreventAppNap,
             isIdle: isIdle
         )

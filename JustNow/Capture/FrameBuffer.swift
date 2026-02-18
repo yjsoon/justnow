@@ -21,6 +21,20 @@ struct DuplicateFramePolicy: Sendable, Equatable {
     static let lowPower = DuplicateFramePolicy(hashThreshold: 1, minimumSpacing: 5)
 }
 
+struct OCRIndexingPolicy: Sendable, Equatable {
+    let isEnabled: Bool
+    let minimumInterval: TimeInterval
+    let maxQueueDepth: Int
+    let maxFrameAge: TimeInterval
+
+    static let disabled = OCRIndexingPolicy(
+        isEnabled: false,
+        minimumInterval: 0,
+        maxQueueDepth: 0,
+        maxFrameAge: 0
+    )
+}
+
 @MainActor
 class FrameBuffer {
     private var frames: [StoredFrame] = []
@@ -33,6 +47,10 @@ class FrameBuffer {
     private var duplicatePolicy: DuplicateFramePolicy = .standard
     private var lastPruneCheck: Date = .distantPast
     private let pruneInterval: TimeInterval = 30
+    private var ocrIndexingPolicy: OCRIndexingPolicy = .disabled
+    private var ocrIndexQueue: [StoredFrame] = []
+    private var queuedOCRFrameIDs: Set<UUID> = []
+    private var ocrIndexingTask: Task<Void, Never>?
 
     // Pause pruning while overlay is open to prevent "Frame removed" issues
     var isPruningPaused: Bool = false
@@ -88,6 +106,7 @@ class FrameBuffer {
                 )
 
                 recordStoredFrame(frame)
+                enqueueFrameForBackgroundOCR(frame)
 
                 await pruneIfNeeded()
             } catch {
@@ -113,6 +132,7 @@ class FrameBuffer {
             )
             let frame = StoredFrame(id: metadata.id, timestamp: metadata.timestamp, hash: metadata.hash)
             recordStoredFrame(frame)
+            enqueueFrameForBackgroundOCR(frame)
         } catch {
             print("Failed to save frame: \(error)")
         }
@@ -203,6 +223,7 @@ class FrameBuffer {
     // MARK: - Management
 
     func clear() async throws {
+        cancelBackgroundOCRIndexing(clearQueue: true)
         try await frameStore.clear()
         frames.removeAll()
         lastStoredHash = nil
@@ -218,6 +239,19 @@ class FrameBuffer {
     func updateSaveOptions(_ options: FrameSaveOptions, duplicatePolicy: DuplicateFramePolicy) {
         saveOptions = options
         self.duplicatePolicy = duplicatePolicy
+    }
+
+    func updateOCRIndexingPolicy(_ policy: OCRIndexingPolicy) {
+        guard policy != ocrIndexingPolicy else { return }
+        ocrIndexingPolicy = policy
+
+        guard policy.isEnabled else {
+            cancelBackgroundOCRIndexing(clearQueue: true)
+            return
+        }
+
+        enqueueRecentFramesForBackgroundOCR(maxAge: policy.maxFrameAge)
+        startBackgroundOCRIndexingIfNeeded()
     }
 
     func flushCaches() async {
@@ -257,6 +291,7 @@ class FrameBuffer {
         do {
             try await frameStore.pruneFrames(ids: toPrune)
             frames.removeAll { toPrune.contains($0.id) }
+            removeQueuedOCRFrames(ids: toPrune)
             let validIDs = Set(frames.map { $0.id })
             await textCache.prune(keepingFrameIDs: validIDs)
             print("Pruned \(toPrune.count) frames, \(frames.count) remaining")
@@ -301,6 +336,114 @@ class FrameBuffer {
         } else {
             lastStoredHash = nil
             lastStoredTimestamp = frame.timestamp
+        }
+    }
+
+    private func enqueueFrameForBackgroundOCR(_ frame: StoredFrame) {
+        guard ocrIndexingPolicy.isEnabled else { return }
+        guard !queuedOCRFrameIDs.contains(frame.id) else { return }
+
+        ocrIndexQueue.append(frame)
+        queuedOCRFrameIDs.insert(frame.id)
+        trimOCRIndexQueueIfNeeded()
+        startBackgroundOCRIndexingIfNeeded()
+    }
+
+    private func enqueueRecentFramesForBackgroundOCR(maxAge: TimeInterval) {
+        guard maxAge > 0 else { return }
+        let cutoff = Date().addingTimeInterval(-maxAge)
+        let candidates = frames.filter { $0.timestamp >= cutoff }
+
+        for frame in candidates {
+            guard !queuedOCRFrameIDs.contains(frame.id) else { continue }
+            ocrIndexQueue.append(frame)
+            queuedOCRFrameIDs.insert(frame.id)
+        }
+
+        trimOCRIndexQueueIfNeeded()
+    }
+
+    private func trimOCRIndexQueueIfNeeded() {
+        let maxDepth = max(ocrIndexingPolicy.maxQueueDepth, 0)
+
+        if maxDepth == 0 {
+            ocrIndexQueue.removeAll()
+            queuedOCRFrameIDs.removeAll()
+            return
+        }
+
+        while ocrIndexQueue.count > maxDepth {
+            let dropped = ocrIndexQueue.removeFirst()
+            queuedOCRFrameIDs.remove(dropped.id)
+        }
+    }
+
+    private func startBackgroundOCRIndexingIfNeeded() {
+        guard ocrIndexingPolicy.isEnabled else { return }
+        guard ocrIndexingTask == nil else { return }
+
+        ocrIndexingTask = Task(priority: .utility) { [weak self] in
+            await self?.runBackgroundOCRIndexingLoop()
+        }
+    }
+
+    private func cancelBackgroundOCRIndexing(clearQueue: Bool) {
+        ocrIndexingTask?.cancel()
+        ocrIndexingTask = nil
+
+        guard clearQueue else { return }
+        ocrIndexQueue.removeAll()
+        queuedOCRFrameIDs.removeAll()
+    }
+
+    private func removeQueuedOCRFrames(ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        guard !ocrIndexQueue.isEmpty else { return }
+
+        ocrIndexQueue.removeAll { ids.contains($0.id) }
+        queuedOCRFrameIDs.subtract(ids)
+    }
+
+    private func dequeueNextFrameForOCR() -> StoredFrame? {
+        guard !ocrIndexQueue.isEmpty else { return nil }
+
+        let frame = ocrIndexQueue.removeLast()
+        queuedOCRFrameIDs.remove(frame.id)
+        return frame
+    }
+
+    private func runBackgroundOCRIndexingLoop() async {
+        defer {
+            ocrIndexingTask = nil
+            if ocrIndexingPolicy.isEnabled && !ocrIndexQueue.isEmpty {
+                startBackgroundOCRIndexingIfNeeded()
+            }
+        }
+
+        while !Task.isCancelled {
+            guard ocrIndexingPolicy.isEnabled else { return }
+            guard let frame = dequeueNextFrameForOCR() else { return }
+
+            if Date().timeIntervalSince(frame.timestamp) > ocrIndexingPolicy.maxFrameAge {
+                continue
+            }
+
+            if await textCache.hasCachedText(for: frame.id) {
+                continue
+            }
+
+            do {
+                let image = try await frameStore.loadFullImage(id: frame.id)
+                let text = await TextRecognitionManager.extractText(from: image)
+                await textCache.setText(text, for: frame.id, timestamp: frame.timestamp)
+            } catch {
+                continue
+            }
+
+            let sleepDuration = ocrIndexingPolicy.minimumInterval
+            if sleepDuration > 0 {
+                try? await Task.sleep(for: .seconds(sleepDuration))
+            }
         }
     }
 
