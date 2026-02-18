@@ -22,6 +22,8 @@ xcodebuild -scheme JustNow -configuration Release -derivedDataPath build
 pkill -x JustNow 2>/dev/null; cp -R build/Build/Products/Release/JustNow.app /Applications/ && open /Applications/JustNow.app
 ```
 
+**Agent workflow rule:** After every successful build (Debug or Release), always perform install-and-launch from `/Applications/` before reporting completion. If `open` fails in CLI contexts, use `xcodebuildmcp macos launch --app-path "/Applications/JustNow.app"`.
+
 **Note:** Always install to `/Applications/` before testing. The app requires Screen Recording permission which is tied to the app location.
 
 ## Architecture
