@@ -79,67 +79,72 @@ class OverlayViewModel {
 
         searchTask = Task {
             let total = framesToSearch.count
+            let allFrameIDs = framesToSearch.map(\.id)
+            let cachedIDs = await cache.cachedFrameIDs(in: allFrameIDs)
+            let uncachedFrames = framesToSearch.filter { !cachedIDs.contains($0.id) }
+
             var processedCount = 0
-            var matches: [(index: Int, frame: StoredFrame)] = []
-            var cacheHits = 0
-            var cacheMisses = 0
+            var ocrRuns = 0
+            var loadFailures = 0
 
             // Process frames in parallel batches
             let batchSize = 8 // Process 8 frames concurrently
+            let uncachedTotal = uncachedFrames.count
 
-            for batchStart in stride(from: 0, to: total, by: batchSize) {
+            if uncachedTotal == 0 {
+                await MainActor.run {
+                    searchProgress = 1
+                }
+            }
+
+            for batchStart in stride(from: 0, to: uncachedTotal, by: batchSize) {
                 if Task.isCancelled { break }
 
-                let batchEnd = min(batchStart + batchSize, total)
-                let batch = Array(framesToSearch[batchStart..<batchEnd])
+                let batchEnd = min(batchStart + batchSize, uncachedTotal)
+                let batch = Array(uncachedFrames[batchStart..<batchEnd])
 
                 // Process batch in parallel
-                await withTaskGroup(of: (Int, StoredFrame, Bool, Bool).self) { group in
-                    for (offset, frame) in batch.enumerated() {
-                        let globalIndex = batchStart + offset
+                await withTaskGroup(of: Bool.self) { group in
+                    for frame in batch {
                         group.addTask {
-                            // Check cache first
-                            if let cachedText = await cache.getText(for: frame.id) {
-                                let contains = cachedText.localizedCaseInsensitiveContains(query)
-                                return (globalIndex, frame, contains, true) // true = cache hit
-                            }
-
-                            // Cache miss - run OCR
                             guard let image = try? await buffer.getFullImage(for: frame) else {
-                                return (globalIndex, frame, false, false)
+                                return false
                             }
                             let text = await TextRecognitionManager.extractText(from: image)
 
-                            // Cache the result
-                            await cache.setText(text, for: frame.id)
-
-                            let contains = text.localizedCaseInsensitiveContains(query)
-                            return (globalIndex, frame, contains, false) // false = cache miss
+                            // Persist OCR text to indexed cache
+                            await cache.setText(text, for: frame.id, timestamp: frame.timestamp)
+                            return true
                         }
                     }
 
-                    for await (index, frame, contains, wasCached) in group {
-                        if wasCached { cacheHits += 1 } else { cacheMisses += 1 }
-                        if contains {
-                            matches.append((index, frame))
+                    for await didOCR in group {
+                        if didOCR {
+                            ocrRuns += 1
+                        } else {
+                            loadFailures += 1
                         }
                     }
                 }
 
                 processedCount = batchEnd
+                let completed = processedCount
                 await MainActor.run {
-                    searchProgress = Double(processedCount) / Double(total)
+                    searchProgress = uncachedTotal == 0 ? 1 : Double(completed) / Double(uncachedTotal)
                 }
             }
 
             // Save cache periodically
             await cache.save()
 
-            // Sort matches by index to maintain chronological order
-            matches.sort { $0.index < $1.index }
-            let sortedFrames = matches.map { $0.frame }
+            let matchedIDs = await cache.searchFrameIDs(matching: query, limit: total)
+            let matchedSet = Set(matchedIDs)
+            let sortedFrames = framesToSearch.filter { matchedSet.contains($0.id) }
 
-            print("[JustNow] Search complete: \(sortedFrames.count) matches, \(cacheHits) cache hits, \(cacheMisses) OCR runs")
+            print(
+                "[JustNow] Search complete: \(sortedFrames.count) matches, " +
+                "\(cachedIDs.count) cache hits, \(ocrRuns) OCR runs, \(loadFailures) frame load failures"
+            )
 
             await MainActor.run {
                 if !Task.isCancelled {

@@ -208,6 +208,7 @@ class FrameBuffer {
         lastStoredHash = nil
         lastStoredTimestamp = nil
         thumbnailCache.removeAllObjects()
+        await textCache.clear()
     }
 
     func totalStorageSize() async -> Int64 {
@@ -256,6 +257,8 @@ class FrameBuffer {
         do {
             try await frameStore.pruneFrames(ids: toPrune)
             frames.removeAll { toPrune.contains($0.id) }
+            let validIDs = Set(frames.map { $0.id })
+            await textCache.prune(keepingFrameIDs: validIDs)
             print("Pruned \(toPrune.count) frames, \(frames.count) remaining")
         } catch {
             print("Failed to prune frames: \(error)")
