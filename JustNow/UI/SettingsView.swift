@@ -18,6 +18,8 @@ struct SettingsView: View {
     @State private var storageSize: Int64 = 0
     @State private var frameCount: Int = 0
     @State private var showClearConfirmation = false
+    @State private var telemetrySnapshot: SearchTelemetrySnapshot = .empty
+    @State private var isSearchDiagnosticsExpanded = false
 
     var body: some View {
         Form {
@@ -74,6 +76,61 @@ struct SettingsView: View {
             }
 
             Section {
+                DisclosureGroup(isExpanded: $isSearchDiagnosticsExpanded) {
+                    VStack(spacing: 10) {
+                        HStack {
+                            Text("Index queue")
+                            Spacer()
+                            Text("\(telemetrySnapshot.queueDepth) / \(telemetrySnapshot.queueCapacity)")
+                                .foregroundStyle(.secondary)
+                        }
+
+                        HStack {
+                            Text("OCR throughput")
+                            Spacer()
+                            Text("\(formatRate(telemetrySnapshot.ocrPerSecond))")
+                                .foregroundStyle(.secondary)
+                        }
+
+                        HStack {
+                            Text("OCR duration (avg/p95)")
+                            Spacer()
+                            Text("\(formatSeconds(telemetrySnapshot.averageOCRDuration)) / \(formatSeconds(telemetrySnapshot.p95OCRDuration))")
+                                .foregroundStyle(.secondary)
+                        }
+
+                        HStack {
+                            Text("Index lag (avg/p95)")
+                            Spacer()
+                            Text("\(formatSeconds(telemetrySnapshot.averageIndexLag)) / \(formatSeconds(telemetrySnapshot.p95IndexLag))")
+                                .foregroundStyle(.secondary)
+                        }
+
+                        HStack {
+                            Text("Warm search p50")
+                            Spacer()
+                            Text("\(formatSeconds(telemetrySnapshot.warmSearchP50)) · n=\(telemetrySnapshot.warmSearchCount)")
+                                .foregroundStyle(.secondary)
+                        }
+
+                        HStack {
+                            Text("Cold search p50")
+                            Spacer()
+                            Text("\(formatSeconds(telemetrySnapshot.coldSearchP50)) · n=\(telemetrySnapshot.coldSearchCount)")
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Text("These numbers update every 2 seconds from local telemetry.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 6)
+                } label: {
+                    Text("Search Diagnostics")
+                }
+            }
+
+            Section {
                 HStack {
                     Text("Show Timeline")
                     Spacer()
@@ -92,10 +149,13 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 400, height: 420)
+        .frame(width: 460, height: 560)
         .navigationTitle("JustNow Settings")
         .task {
             await updateStorageInfo()
+        }
+        .task {
+            await refreshTelemetryLoop()
         }
         .alert("Clear History?", isPresented: $showClearConfirmation) {
             Button("Cancel", role: .cancel) { }
@@ -117,10 +177,28 @@ struct SettingsView: View {
         }
     }
 
+    private func refreshTelemetryLoop() async {
+        while !Task.isCancelled {
+            let snapshot = await SearchTelemetry.shared.snapshot()
+            await MainActor.run {
+                telemetrySnapshot = snapshot
+            }
+            try? await Task.sleep(for: .seconds(2))
+        }
+    }
+
     private func formatBytes(_ bytes: Int64) -> String {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file
         return formatter.string(fromByteCount: bytes)
+    }
+
+    private func formatRate(_ value: Double) -> String {
+        String(format: "%.2f/s", value)
+    }
+
+    private func formatSeconds(_ value: TimeInterval) -> String {
+        String(format: "%.2fs", value)
     }
 }
 

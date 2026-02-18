@@ -51,6 +51,7 @@ class FrameBuffer {
     private var ocrIndexQueue: [StoredFrame] = []
     private var queuedOCRFrameIDs: Set<UUID> = []
     private var ocrIndexingTask: Task<Void, Never>?
+    private let searchTelemetry = SearchTelemetry.shared
 
     // Pause pruning while overlay is open to prevent "Frame removed" issues
     var isPruningPaused: Bool = false
@@ -376,6 +377,8 @@ class FrameBuffer {
             let dropped = ocrIndexQueue.removeFirst()
             queuedOCRFrameIDs.remove(dropped.id)
         }
+
+        recordQueueDepthTelemetry()
     }
 
     private func startBackgroundOCRIndexingIfNeeded() {
@@ -394,6 +397,7 @@ class FrameBuffer {
         guard clearQueue else { return }
         ocrIndexQueue.removeAll()
         queuedOCRFrameIDs.removeAll()
+        recordQueueDepthTelemetry()
     }
 
     private func removeQueuedOCRFrames(ids: Set<UUID>) {
@@ -402,6 +406,7 @@ class FrameBuffer {
 
         ocrIndexQueue.removeAll { ids.contains($0.id) }
         queuedOCRFrameIDs.subtract(ids)
+        recordQueueDepthTelemetry()
     }
 
     private func dequeueNextFrameForOCR() -> StoredFrame? {
@@ -409,6 +414,7 @@ class FrameBuffer {
 
         let frame = ocrIndexQueue.removeLast()
         queuedOCRFrameIDs.remove(frame.id)
+        recordQueueDepthTelemetry()
         return frame
     }
 
@@ -433,9 +439,14 @@ class FrameBuffer {
             }
 
             do {
+                let startedAt = Date()
                 let image = try await frameStore.loadFullImage(id: frame.id)
                 let text = await TextRecognitionManager.extractText(from: image)
                 await textCache.setText(text, for: frame.id, timestamp: frame.timestamp)
+
+                let duration = Date().timeIntervalSince(startedAt)
+                let lag = Date().timeIntervalSince(frame.timestamp)
+                await searchTelemetry.recordBackgroundOCR(duration: duration, indexLag: lag)
             } catch {
                 continue
             }
@@ -444,6 +455,15 @@ class FrameBuffer {
             if sleepDuration > 0 {
                 try? await Task.sleep(for: .seconds(sleepDuration))
             }
+        }
+    }
+
+    private func recordQueueDepthTelemetry() {
+        let depth = ocrIndexQueue.count
+        let capacity = ocrIndexingPolicy.maxQueueDepth
+
+        Task(priority: .utility) {
+            await SearchTelemetry.shared.recordQueueDepth(depth: depth, capacity: capacity)
         }
     }
 

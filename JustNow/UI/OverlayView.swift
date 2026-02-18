@@ -76,6 +76,7 @@ class OverlayViewModel {
         let framesToSearch = frames
         let buffer = frameBuffer
         let cache = frameBuffer.textCache
+        let searchStartedAt = Date()
 
         searchTask = Task {
             let total = framesToSearch.count
@@ -98,7 +99,7 @@ class OverlayViewModel {
             }
 
             for batchStart in stride(from: 0, to: uncachedTotal, by: batchSize) {
-                if Task.isCancelled { break }
+                if Task.isCancelled { return }
 
                 let batchEnd = min(batchStart + batchSize, uncachedTotal)
                 let batch = Array(uncachedFrames[batchStart..<batchEnd])
@@ -134,12 +135,29 @@ class OverlayViewModel {
                 }
             }
 
+            guard !Task.isCancelled else { return }
+
             // Save cache periodically
             await cache.save()
+
+            guard !Task.isCancelled else { return }
 
             let matchedIDs = await cache.searchFrameIDs(matching: query, limit: total)
             let matchedSet = Set(matchedIDs)
             let sortedFrames = framesToSearch.filter { matchedSet.contains($0.id) }
+
+            guard !Task.isCancelled else { return }
+
+            let searchDuration = Date().timeIntervalSince(searchStartedAt)
+            await SearchTelemetry.shared.recordSearch(
+                duration: searchDuration,
+                wasCold: uncachedTotal > 0,
+                totalFrames: total,
+                uncachedFrames: uncachedTotal,
+                matches: sortedFrames.count,
+                ocrRuns: ocrRuns,
+                loadFailures: loadFailures
+            )
 
             print(
                 "[JustNow] Search complete: \(sortedFrames.count) matches, " +
