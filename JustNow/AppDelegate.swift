@@ -30,6 +30,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     private var inputEventMonitor: Any?
     private var lastAppliedPolicy: CapturePolicy?
     private var lastUserActivityUpdate: Date = .distantPast
+    private var isUserPaused = false
     private var wasCapturingBeforeOverlay = false
     private var isPausedForOverlay = false
     private var wasCapturingBeforeSession = false
@@ -68,6 +69,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         let isIdle: Bool
     }
 
+    private enum MenuItemTag {
+        static let frameCount = 100
+        static let captureStatus = 101
+        static let pauseToggle = 102
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
         setupHotKey()
@@ -99,12 +106,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     // MARK: - Setup
 
     private func setupStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-
-        if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "clock.arrow.circlepath", accessibilityDescription: "JustNow")
-            button.image?.isTemplate = true
-        }
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        updateStatusItemButtonAppearance()
 
         let menu = NSMenu()
 
@@ -113,15 +116,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         showItem.keyEquivalentModifierMask = [.command, .option]
         menu.addItem(showItem)
 
+        let pauseItem = NSMenuItem(title: "Pause Recording", action: #selector(toggleCapturePause), keyEquivalent: "")
+        pauseItem.target = self
+        pauseItem.tag = MenuItemTag.pauseToggle
+        menu.addItem(pauseItem)
+
         menu.addItem(NSMenuItem.separator())
 
         let frameCountItem = NSMenuItem(title: "Frames: 0", action: nil, keyEquivalent: "")
-        frameCountItem.tag = 100
+        frameCountItem.tag = MenuItemTag.frameCount
         frameCountItem.isEnabled = false
         menu.addItem(frameCountItem)
 
         let captureStatusItem = NSMenuItem(title: "Capture: Starting...", action: nil, keyEquivalent: "")
-        captureStatusItem.tag = 101
+        captureStatusItem.tag = MenuItemTag.captureStatus
         captureStatusItem.isEnabled = false
         menu.addItem(captureStatusItem)
 
@@ -139,6 +147,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
         menu.delegate = self
         statusItem.menu = menu
+        updatePauseMenuItem()
     }
 
     private func setupHotKey() {
@@ -195,6 +204,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
                 duplicatePolicy: preflightPolicy.duplicatePolicy
             )
             frameBuffer?.updateOCRIndexingPolicy(preflightPolicy.ocrIndexingPolicy)
+
+            guard !isUserPaused else {
+                updateCaptureStatus("Paused (User)")
+                return
+            }
 
             do {
                 try await captureManager.startCapture()
@@ -357,6 +371,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
     private func resumeCapture(reason: String) {
         Task { @MainActor in
+            guard !isUserPaused else {
+                updateCaptureStatus("Paused (User)")
+                return
+            }
+
             guard overlayController?.isVisible != true else {
                 updateCaptureStatus("Paused (Overlay)")
                 return
@@ -400,7 +419,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     }
 
     func captureManagerDidStop(_ manager: ScreenCaptureManager) {
-        guard overlayController?.isVisible != true, !isPausedForOverlay else { return }
+        guard overlayController?.isVisible != true, !isPausedForOverlay, !isUserPaused else { return }
         print("Capture stopped unexpectedly, attempting restart...")
         updateCaptureStatus("Restarting...")
         appNapPreventer.stopActivity()
@@ -419,6 +438,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
                 updateCaptureStatus("Stopped")
             }
         }
+    }
+
+    @objc private func toggleCapturePause() {
+        isUserPaused.toggle()
+        updatePauseMenuItem()
+        updateStatusItemButtonAppearance()
+
+        guard captureManager != nil else {
+            updateCaptureStatus(isUserPaused ? "Paused (User)" : "Starting...")
+            return
+        }
+
+        if isUserPaused {
+            Task { @MainActor in
+                updateCaptureStatus("Paused (User)")
+                await captureManager.stopCapture()
+                appNapPreventer.stopActivity()
+            }
+            return
+        }
+
+        frameBuffer?.enableBlackFrameFilter(for: 2)
+        resumeCapture(reason: "manual resume")
     }
 
     // MARK: - Actions
@@ -528,6 +570,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
     func menuWillOpen(_ menu: NSMenu) {
         updateFrameCountMenuItem()
+        updatePauseMenuItem()
     }
 
     // MARK: - Helpers
@@ -681,7 +724,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     private func updateFrameCountMenuItem() {
         guard let menu = statusItem.menu else { return }
 
-        if let item = menu.item(withTag: 100) {
+        if let item = menu.item(withTag: MenuItemTag.frameCount) {
             let count = frameBuffer?.frameCount ?? 0
             item.title = "Frames: \(count)"
         }
@@ -689,8 +732,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
     private func updateCaptureStatus(_ status: String) {
         guard let menu = statusItem.menu,
-              let item = menu.item(withTag: 101) else { return }
+              let item = menu.item(withTag: MenuItemTag.captureStatus) else { return }
         item.title = "Capture: \(status)"
+    }
+
+    private func updatePauseMenuItem() {
+        guard let menu = statusItem.menu,
+              let item = menu.item(withTag: MenuItemTag.pauseToggle) else { return }
+        item.title = isUserPaused ? "Resume Recording" : "Pause Recording"
+        item.state = isUserPaused ? .on : .off
+    }
+
+    private func updateStatusItemButtonAppearance() {
+        guard let button = statusItem.button else { return }
+        button.image = NSImage(
+            systemSymbolName: "clock.arrow.circlepath",
+            accessibilityDescription: isUserPaused ? "JustNow (Paused)" : "JustNow"
+        )
+        button.image?.isTemplate = true
+        button.imagePosition = .imageLeading
+        button.title = isUserPaused ? " ||" : ""
     }
 
     private func showPermissionAlert() {
