@@ -381,8 +381,14 @@ private struct CompatGlassEffectContainer<Content: View>: View {
         content()
             .padding(spacing)
         #else
-        GlassEffectContainer(spacing: spacing) {
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer(spacing: spacing) {
+                content()
+            }
+        } else {
             content()
+                .padding(spacing)
+        }
         }
         #endif
     }
@@ -397,7 +403,14 @@ private extension View {
                 .fill(.ultraThinMaterial)
         )
         #else
-        self.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+        if #available(macOS 26.0, *) {
+            self.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+        } else {
+            self.background(
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(.ultraThinMaterial)
+            )
+        }
         #endif
     }
 }
