@@ -4,7 +4,7 @@
 
 JustNow is a macOS menu bar app that captures screenshots and lets you scroll back through recent screen history in a fullscreen overlay.
 
-- Target: macOS 26+, Swift 6.2, SwiftUI
+- Target: macOS 15+, Swift 6.2, SwiftUI
 - Bundle ID: `sg.tk.JustNow`
 - Storage: `~/Library/Application Support/JustNow/`
 - Hotkey: configurable, default `⌘⌥J`

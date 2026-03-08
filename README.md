@@ -14,7 +14,7 @@ A native macOS menu bar app that continuously captures screenshots and lets you 
 
 ## Requirements
 
-- macOS 26+
+- macOS 15+
 - Screen Recording permission
 
 ## Usage
@@ -51,6 +51,12 @@ Open `JustNow.xcodeproj` in Xcode and build (⌘B), or:
 ```bash
 xcodebuild -scheme JustNow -configuration Release -derivedDataPath build
 ```
+
+## Releases
+
+Latest release is now:
+
+- `v0.1.0` (download from GitHub Releases)
 
 ## Licence
 
