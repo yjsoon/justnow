@@ -12,6 +12,7 @@ JustNow is a macOS menu bar app that captures screenshots and lets you scroll ba
 ## Release Stage
 
 This app is pre-release. Prefer forward progress over backwards compatibility unless a task explicitly calls for migration support.
+Do not create or move tags or publish releases unless explicitly requested by the user.
 
 ## Build And Run
 
@@ -51,6 +52,10 @@ Release CI note:
 
 GitHub Actions currently may run hosted builds on `macos-15` (SDK 15.x).
 The release workflow uses a compatibility compile path for this runner so the project can build without `GlassEffect` APIs unavailable on that SDK.
+
+Release process and signing/deployment details are documented in:
+
+- `Docs/release-and-distribution.md`
 
 ## Key Files
 
