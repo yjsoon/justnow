@@ -86,13 +86,9 @@ jobs:
             ${LEGACY_OTHER_SWIFT_FLAGS:+OTHER_SWIFT_FLAGS="${LEGACY_OTHER_SWIFT_FLAGS}"} \
             ${LEGACY_SWIFT_STRICT_CONCURRENCY:+SWIFT_STRICT_CONCURRENCY="${LEGACY_SWIFT_STRICT_CONCURRENCY}"} \
             ${LEGACY_SWIFT_VERSION:+SWIFT_VERSION="${LEGACY_SWIFT_VERSION}"} \
-            CODE_SIGN_ENTITLEMENTS=Scripts/distribution-entitlements.plist \
-            OTHER_CODE_SIGN_FLAGS="--timestamp" \
             CODE_SIGN_STYLE=Manual \
-            DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
-            CODE_SIGN_IDENTITY="${APPLE_SIGNING_IDENTITY}" \
-            CODE_SIGNING_REQUIRED=YES \
-            CODE_SIGNING_ALLOWED=YES
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
 
       - name: Package release artifacts
         env:
@@ -117,7 +113,8 @@ jobs:
           cp -R "${APP_PATH}" "${STAGING_DIR}/"
           rm -f "${ZIP_PATH}" "${DMG_PATH}"
 
-          codesign --force --options runtime --timestamp --entitlements "${ENTITLEMENTS_PATH}" --deep --sign "${APPLE_SIGNING_IDENTITY}" "${APP_PATH}"
+          codesign --force --options runtime --timestamp --entitlements "${ENTITLEMENTS_PATH}" --sign "${APPLE_SIGNING_IDENTITY}" "${APP_PATH}/Contents/MacOS/JustNow"
+          codesign --force --options runtime --timestamp --deep --sign "${APPLE_SIGNING_IDENTITY}" "${APP_PATH}"
           codesign --verify --deep --strict --verbose=2 "${APP_PATH}"
 
           ditto -c -k --sequesterRsrc --keepParent "${APP_PATH}" "${ZIP_PATH}"
