@@ -111,6 +111,7 @@ jobs:
           ENTITLEMENTS_PATH="${GITHUB_WORKSPACE}/Scripts/distribution-entitlements.plist"
           API_KEY_FILE="${RUNNER_TEMP}/apple_api_key.p8"
           echo "${APPLE_API_KEY}" | base64 --decode > "${API_KEY_FILE}"
+          python3 -m pip install --user --quiet pillow
 
           rm -f "${ZIP_PATH}" "${DMG_PATH}"
 
