@@ -19,6 +19,21 @@ This app is pre-release. Prefer forward progress over backwards compatibility un
 xcodebuild -scheme JustNow -configuration Release -derivedDataPath build
 ```
 
+For local release packaging:
+
+```bash
+chmod +x Scripts/local-release-build.sh
+./Scripts/local-release-build.sh [version]
+```
+
+To build distribution-ready artifacts (Developer ID signing) locally:
+
+```bash
+./Scripts/local-release-build.sh [version] --distribution --identity "Developer ID Application: Team Name (TEAMID)" --team TEAMID
+```
+
+Artifacts are written to `dist/` and can be uploaded directly to GitHub Releases.
+
 After every successful build, always install and launch from `/Applications/` before reporting completion. Screen Recording permission is tied to the app location.
 
 ```bash
@@ -31,6 +46,11 @@ open /Applications/JustNow.app
 ```
 
 If `open` fails in CLI contexts, use `xcodebuildmcp macos launch --app-path "/Applications/JustNow.app"`.
+
+Release CI note:
+
+GitHub Actions currently may run hosted builds on `macos-15` (SDK 15.x).
+The release workflow uses a compatibility compile path for this runner so the project can build without `GlassEffect` APIs unavailable on that SDK.
 
 ## Key Files
 

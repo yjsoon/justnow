@@ -18,6 +18,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Prepare build compatibility flags for hosted runner
+        run: |
+          SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
+          SDK_MAJOR="${SDK_VERSION%%.*}"
+          echo "macOS SDK version: ${SDK_VERSION}"
+          if [ "${SDK_MAJOR}" -lt 26 ]; then
+            echo "LEGACY_MACOS_UI=1" >> "${GITHUB_ENV}"
+            echo "LEGACY_OTHER_SWIFT_FLAGS=-DLEGACY_MACOS_UI" >> "${GITHUB_ENV}"
+            echo "LEGACY_SWIFT_STRICT_CONCURRENCY=targeted" >> "${GITHUB_ENV}"
+            echo "LEGACY_SWIFT_VERSION=5" >> "${GITHUB_ENV}"
+            echo "Detected SDK < 26: applying compatibility build flags."
+          else
+            echo "Detected SDK >= 26: using primary API path."
+          fi
+
       - name: Install DMG tooling
         run: |
           brew install create-dmg
@@ -68,6 +83,9 @@ jobs:
             -scheme "${SCHEME}" \
             -configuration "${CONFIGURATION}" \
             -derivedDataPath "${DERIVED_DATA_PATH}" \
+            ${LEGACY_OTHER_SWIFT_FLAGS:+OTHER_SWIFT_FLAGS="${LEGACY_OTHER_SWIFT_FLAGS}"} \
+            ${LEGACY_SWIFT_STRICT_CONCURRENCY:+SWIFT_STRICT_CONCURRENCY="${LEGACY_SWIFT_STRICT_CONCURRENCY}"} \
+            ${LEGACY_SWIFT_VERSION:+SWIFT_VERSION="${LEGACY_SWIFT_VERSION}"} \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
             CODE_SIGN_IDENTITY="${APPLE_SIGNING_IDENTITY}" \

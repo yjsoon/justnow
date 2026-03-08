@@ -52,6 +52,44 @@ Open `JustNow.xcodeproj` in Xcode and build (⌘B), or:
 xcodebuild -scheme JustNow -configuration Release -derivedDataPath build
 ```
 
+### Build locally (ZIP + optional DMG)
+
+For local packaging without GitHub Actions:
+
+```bash
+chmod +x Scripts/local-release-build.sh
+./Scripts/local-release-build.sh [version]
+```
+
+Example:
+
+```bash
+./Scripts/local-release-build.sh v0.2.0-local
+```
+
+For a release upload-ready build, use the distribution flag with your Developer ID identity:
+
+```bash
+APPLE_SIGNING_IDENTITY="Developer ID Application: Tinkertanker (PQ6U5ESLN2)" \
+APPLE_TEAM_ID="PQ6U5ESLN2" \
+./Scripts/local-release-build.sh v0.2.0-local --distribution
+```
+
+You can also pass the identity/team explicitly:
+
+```bash
+./Scripts/local-release-build.sh v0.2.0-local --distribution \
+  --identity "Developer ID Application: Tinkertanker (PQ6U5ESLN2)" \
+  --team PQ6U5ESLN2
+```
+
+Distribution mode signs the app and DMG with `codesign` for distribution-style artifacts.
+
+Artifacts are created in `dist/`:
+
+- `dist/JustNow-<version>-macos.zip`
+- `dist/JustNow-<version>-macos.dmg` (if `create-dmg` is installed)
+
 ## Releases
 
 GitHub releases are published from version tags. Latest release:
@@ -92,6 +130,15 @@ When these secrets are configured, release jobs:
 - upload the signed artifacts to GitHub Releases
 
 If the secrets are missing, the workflow now fails early with a clear error.
+
+### GitHub Actions compatibility mode
+
+Hosted `macos-15` runners build on SDK 15.x, while the app still targets newer macOS APIs.
+The release workflow now automatically enables a compatibility path for these runners:
+
+- compiles Swift with a compatibility macro (`LEGACY_MACOS_UI`)
+- uses compatibility layout in `OverlayView` where 26-only glass effects are unavailable
+- relaxes concurrency diagnostics to allow existing code to compile on the hosted runner
 
 ## Licence
 

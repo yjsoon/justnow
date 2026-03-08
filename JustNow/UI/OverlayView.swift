@@ -291,7 +291,7 @@ struct OverlayView: View {
                 .contentShape(Rectangle())
                 .onTapGesture { viewModel.onDismiss() }
 
-            GlassEffectContainer(spacing: 40) {
+            CompatGlassEffectContainer(spacing: 40) {
                 ZStack {
                     if viewModel.frames.isEmpty {
                         EmptyStateView()
@@ -320,7 +320,7 @@ struct EmptyStateView: View {
                 .foregroundStyle(.white.opacity(0.6))
         }
         .padding(32)
-        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        .compatGlassEffect(cornerRadius: 20)
     }
 }
 
@@ -365,6 +365,36 @@ struct ContentAreaView: View {
                 .padding(.bottom, 50)
         }
         .animation(.easeInOut(duration: 0.2), value: viewModel.isSearching)
+    }
+}
+
+private struct CompatGlassEffectContainer<Content: View>: View {
+    let spacing: CGFloat
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        #if LEGACY_MACOS_UI
+        content()
+            .padding(spacing)
+        #else
+        GlassEffectContainer(spacing: spacing) {
+            content()
+        }
+        #endif
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func compatGlassEffect(cornerRadius: CGFloat) -> some View {
+        #if LEGACY_MACOS_UI
+        self.background(
+            RoundedRectangle(cornerRadius: cornerRadius)
+                .fill(.ultraThinMaterial)
+        )
+        #else
+        self.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+        #endif
     }
 }
 
