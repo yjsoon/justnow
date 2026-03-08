@@ -9,6 +9,33 @@ import SwiftUI
 import HotKey
 import Carbon.HIToolbox
 
+enum RecentTimelineWindow: Double, CaseIterable, Identifiable {
+    case oneMinute = 60
+    case twoMinutes = 120
+    case fiveMinutes = 300
+
+    static let defaultValue: Self = .fiveMinutes
+
+    var id: Double { rawValue }
+
+    var timeInterval: TimeInterval { rawValue }
+
+    var label: String {
+        switch self {
+        case .oneMinute:
+            return "1 min"
+        case .twoMinutes:
+            return "2 min"
+        case .fiveMinutes:
+            return "5 min"
+        }
+    }
+
+    static func resolved(from rawValue: Double) -> Self {
+        Self(rawValue: rawValue) ?? .defaultValue
+    }
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var captureManager: ScreenCaptureManager!
@@ -19,7 +46,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     private var settingsWindow: NSWindow?
 
     @AppStorage("captureInterval") private var captureInterval: Double = 0.5
+    @AppStorage("recentTimelineWindowSeconds")
+    private var recentTimelineWindowSeconds: Double = RecentTimelineWindow.defaultValue.rawValue
     @AppStorage("reduceCaptureOnBattery") private var reduceCaptureOnBattery: Bool = true
+    @AppStorage("keepConfiguredCaptureCadenceOnBattery")
+    private var keepConfiguredCaptureCadenceOnBattery: Bool = true
     @AppStorage("backgroundSearchIndexingEnabled") private var backgroundSearchIndexingEnabled: Bool = true
     @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 15  // R key
     @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
@@ -490,7 +521,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
                     }
                 )
             }
-            overlayController?.showOverlay()
+            let recentTimelineWindow = RecentTimelineWindow.resolved(from: recentTimelineWindowSeconds)
+            overlayController?.showOverlay(recentTimelineWindow: recentTimelineWindow.timeInterval)
         }
     }
 
@@ -608,17 +640,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         var interval = captureInterval
         var scale = 2
         var saveOptions = FrameSaveOptions.standard
-        var duplicatePolicy = DuplicateFramePolicy.standard
+        var duplicatePolicy = DuplicateFramePolicy.exact(atMostEvery: captureInterval)
         var ocrIndexEnabled = backgroundSearchIndexingEnabled
         var ocrIndexInterval = ocrIndexBaseInterval
         var ocrIndexQueueDepth = ocrIndexBaseQueueDepth
         var ocrIndexMaxAge = ocrIndexMaxFrameAge
 
         if onBattery || lowPowerMode {
-            interval *= batteryMultiplier
             scale = 1
             saveOptions = .lowPower
-            duplicatePolicy = .lowPower
+            if !keepConfiguredCaptureCadenceOnBattery {
+                interval *= batteryMultiplier
+                duplicatePolicy = .lowPower
+            }
 
             ocrIndexInterval = ocrIndexBatteryInterval
             ocrIndexQueueDepth = ocrIndexBatteryQueueDepth
@@ -627,16 +661,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
         if let batteryCharge {
             if batteryCharge <= batteryCriticalThreshold {
-                interval *= batteryCriticalMultiplier
                 scale = 1
                 saveOptions = .lowPower
-                duplicatePolicy = .lowPower
+                if !keepConfiguredCaptureCadenceOnBattery {
+                    interval *= batteryCriticalMultiplier
+                    duplicatePolicy = .lowPower
+                }
                 ocrIndexEnabled = false
             } else if batteryCharge <= batteryLowThreshold {
-                interval *= batteryLowMultiplier
                 scale = 1
                 saveOptions = .lowPower
-                duplicatePolicy = .lowPower
+                if !keepConfiguredCaptureCadenceOnBattery {
+                    interval *= batteryLowMultiplier
+                    duplicatePolicy = .lowPower
+                }
 
                 ocrIndexInterval = max(ocrIndexInterval, ocrIndexBatteryInterval)
                 ocrIndexQueueDepth = min(ocrIndexQueueDepth, ocrIndexBatteryQueueDepth)
@@ -679,7 +717,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             maxFrameAge: ocrIndexMaxAge
         )
 
-        let allowAppNap = onBattery || lowPowerMode || isIdle || isThermalConstrained || interval >= 5
+        let batteryCanRelaxCadence = (onBattery || lowPowerMode) && !keepConfiguredCaptureCadenceOnBattery
+        let allowAppNap = batteryCanRelaxCadence || isIdle || isThermalConstrained || interval >= 5
         let shouldPreventAppNap = !allowAppNap
 
         return CapturePolicy(

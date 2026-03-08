@@ -7,7 +7,11 @@ import SwiftUI
 
 struct SettingsView: View {
     @AppStorage("captureInterval") private var captureInterval: Double = 0.5
+    @AppStorage("recentTimelineWindowSeconds")
+    private var recentTimelineWindowSeconds: Double = RecentTimelineWindow.defaultValue.rawValue
     @AppStorage("reduceCaptureOnBattery") private var reduceCaptureOnBattery: Bool = true
+    @AppStorage("keepConfiguredCaptureCadenceOnBattery")
+    private var keepConfiguredCaptureCadenceOnBattery: Bool = true
     @AppStorage("backgroundSearchIndexingEnabled") private var backgroundSearchIndexingEnabled: Bool = true
     @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 15  // R key
     @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
@@ -32,6 +36,20 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Retention: up to 24 hours")
                     Text("• Last 5m: every frame\n• 5–15m: every 5th\n• 15m–24h: every 30th")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Newest timeline detail")
+                    Picker("Newest timeline detail", selection: $recentTimelineWindowSeconds) {
+                        ForEach(RecentTimelineWindow.allCases) { window in
+                            Text(window.label).tag(window.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    Text("Keep every stored frame in the newest window, then collapse visually similar older history.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -63,7 +81,13 @@ struct SettingsView: View {
 
             Section {
                 Toggle("Reduce capture rate on battery", isOn: $reduceCaptureOnBattery)
-                Text("When enabled, capture interval increases and image quality is reduced on battery power, thermal pressure, or extended idle time")
+                Text("When enabled, JustNow can lower image quality and throttle background work on battery power, thermal pressure, or extended idle time. Capture cadence only changes if the setting below is off.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Keep configured capture cadence on battery", isOn: $keepConfiguredCaptureCadenceOnBattery)
+                    .disabled(!reduceCaptureOnBattery)
+                Text("Preserves the interval you chose when unplugged or in Low Power Mode. Battery savings come from lower image quality and background throttling instead.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 

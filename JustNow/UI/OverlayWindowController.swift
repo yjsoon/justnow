@@ -20,14 +20,14 @@ class OverlayWindowController: NSObject {
         super.init()
     }
 
-    func showOverlay() {
+    func showOverlay(recentTimelineWindow: TimeInterval = RecentTimelineWindow.defaultValue.timeInterval) {
         guard window == nil, let screen = NSScreen.main else { return }
 
         // Pause pruning while overlay is visible
         frameBuffer.isPruningPaused = true
 
         // Get frames with near-duplicates filtered out for smoother browsing
-        let frames = frameBuffer.getFilteredFrames()
+        let frames = frameBuffer.getFilteredFrames(recentWindow: recentTimelineWindow)
         let vm = OverlayViewModel(frames: frames, frameBuffer: frameBuffer, onDismiss: { [weak self] in
             self?.hideOverlay()
         })

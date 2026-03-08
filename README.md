@@ -4,10 +4,11 @@ A native macOS menu bar app that continuously captures screenshots and lets you 
 
 ## Features
 
-- **Continuous capture**: Captures screenshots every 1-2 seconds (configurable)
+- **Continuous capture**: Captures screenshots every 0.5 to 5 seconds
 - **Perceptual hashing**: Skips near-identical frames to save memory (30-50% savings)
 - **Exponential decay**: Recent frames kept at full density, older frames thinned out
-- **Battery conscious**: Reduces capture rate when on battery power
+- **Recent detail**: Browse the newest 1, 2, or 5 minutes using every stored frame before older history is collapsed
+- **Battery conscious**: Can reduce quality/background work on battery without changing your chosen cadence
 - **Fullscreen overlay**: Press ⌘⌥R to view timeline, scroll/drag to navigate
 - **Menu bar only**: Runs silently with no dock icon
 
@@ -29,9 +30,10 @@ A native macOS menu bar app that continuously captures screenshots and lets you 
 
 Access via menu bar icon → Settings:
 
-- **Capture interval**: 0.5s to 5s (default 1s)
+- **Capture interval**: 0.5s to 5s (default 0.5s)
+- **Newest timeline detail**: 1, 2, or 5 minutes at full capture detail
 - **Max frames**: 100 to 1200 (default 600, ~10 min at 1fps)
-- **Battery mode**: Reduce capture rate when unplugged
+- **Battery mode**: Optional cadence preservation when unplugged
 
 ## Architecture
 

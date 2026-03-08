@@ -17,8 +17,13 @@ struct DuplicateFramePolicy: Sendable, Equatable {
     let hashThreshold: Int
     let minimumSpacing: TimeInterval
 
-    static let standard = DuplicateFramePolicy(hashThreshold: 0, minimumSpacing: 2)
+    static let standard = DuplicateFramePolicy.exact(atMostEvery: 0.5)
     static let lowPower = DuplicateFramePolicy(hashThreshold: 1, minimumSpacing: 5)
+
+    static func exact(atMostEvery interval: TimeInterval) -> DuplicateFramePolicy {
+        let clampedInterval = max(interval, 0.5)
+        return DuplicateFramePolicy(hashThreshold: 0, minimumSpacing: clampedInterval)
+    }
 }
 
 struct OCRIndexingPolicy: Sendable, Equatable {
@@ -146,10 +151,8 @@ class FrameBuffer {
     }
 
     /// Get frames with near-duplicates removed for smoother browsing.
-    /// Uses perceptual hash comparison - frames with hamming distance <= threshold are duplicates.
-    /// Very recent frames (last 5s) are always kept to ensure the latest state is visible.
-    /// Recent frames (5s-5min) use a lower threshold to preserve text changes from typing.
-    func getFilteredFrames(hashThreshold: Int = 3, recentThreshold: Int = 0, recentWindow: TimeInterval = 300, alwaysKeepWindow: TimeInterval = 5) -> [StoredFrame] {
+    /// The newest window keeps all stored frames so keyboard navigation tracks recent capture cadence.
+    func getFilteredFrames(hashThreshold: Int = 3, recentWindow: TimeInterval = 300) -> [StoredFrame] {
         guard !frames.isEmpty else { return [] }
 
         let now = Date()
@@ -159,8 +162,8 @@ class FrameBuffer {
         for frame in frames {
             let age = now.timeIntervalSince(frame.timestamp)
 
-            // Always keep very recent frames (ensures latest state is visible)
-            if age <= alwaysKeepWindow {
+            // Keep every stored frame in the recent window.
+            if age <= recentWindow {
                 filtered.append(frame)
                 lastHash = frame.hash
                 continue
@@ -173,8 +176,8 @@ class FrameBuffer {
                 continue
             }
 
-            // Use lower threshold for recent frames (preserves typing changes)
-            let threshold = age <= recentWindow ? recentThreshold : hashThreshold
+            // Use stronger dedupe only once frames age out of the recent navigation window.
+            let threshold = hashThreshold
 
             // Keep if different enough from last kept frame
             let isDifferent = lastHash.map { PerceptualHash.hammingDistance(frame.hash, $0) > threshold } ?? true
