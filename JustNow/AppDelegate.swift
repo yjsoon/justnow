@@ -262,7 +262,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
         // Re-evaluate capture policy periodically (battery, low power, thermal)
         capturePolicyTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
-            self?.updateCapturePolicy()
+            Task { @MainActor in
+                self?.updateCapturePolicy()
+            }
         }
         capturePolicyTimer?.tolerance = 10.0
     }
@@ -273,7 +275,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.updateCapturePolicy()
+            Task { @MainActor in
+                self?.updateCapturePolicy()
+            }
         }
 
         thermalObserver = NotificationCenter.default.addObserver(
@@ -281,7 +285,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.updateCapturePolicy()
+            Task { @MainActor in
+                self?.updateCapturePolicy()
+            }
         }
     }
 
@@ -289,7 +295,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         inputEventMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel, .mouseMoved]
         ) { [weak self] _ in
-            self?.handleUserActivity()
+            Task { @MainActor in
+                self?.handleUserActivity()
+            }
         }
     }
 
@@ -756,7 +764,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         guard remaining > 0 else { return }
 
         idleTransitionTimer = Timer.scheduledTimer(withTimeInterval: remaining, repeats: false) { [weak self] _ in
-            self?.updateCapturePolicy()
+            Task { @MainActor in
+                self?.updateCapturePolicy()
+            }
         }
         idleTransitionTimer?.tolerance = min(remaining * 0.2, 5.0)
     }

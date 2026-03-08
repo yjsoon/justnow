@@ -11,6 +11,7 @@ enum CaptureError: Error {
     case noDisplay
 }
 
+@MainActor
 protocol ScreenCaptureDelegate: AnyObject {
     func captureManager(_ manager: ScreenCaptureManager, didCaptureFrame image: CGImage, at timestamp: Date)
     func captureManagerDidStop(_ manager: ScreenCaptureManager)
