@@ -14,7 +14,7 @@ A native macOS menu bar app that continuously captures screenshots and lets you 
 
 ## Requirements
 
-- macOS 13+ (Ventura)
+- macOS 26+
 - Screen Recording permission
 
 ## Usage
@@ -49,8 +49,24 @@ ScreenCaptureKit → Perceptual Hash Filter → Ring Buffer (RAM)
 Open `JustNow.xcodeproj` in Xcode and build (⌘B), or:
 
 ```bash
-xcodebuild -scheme JustNow -project JustNow.xcodeproj build
+xcodebuild -scheme JustNow -configuration Release -derivedDataPath build
 ```
+
+## Releases
+
+GitHub releases are published from version tags. Latest release:
+
+- v0.1 (first release)
+
+You can download the build from the release assets.
+
+## DMG packaging
+
+Release builds are assembled with `create-dmg` in CI to include:
+
+- the app icon
+- a styled install window layout with an Applications drop target arrow
+- optional custom background image when `Assets/Release/dmg-background.png` exists
 
 ## Licence
 

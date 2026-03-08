@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-and-release:
+    runs-on: macos-15
+    permissions:
+      contents: write
+    env:
+      SCHEME: JustNow
+      CONFIGURATION: Release
+      DERIVED_DATA_PATH: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build app
+        run: |
+          xcodebuild -scheme "${SCHEME}" -configuration "${CONFIGURATION}" -derivedDataPath "${DERIVED_DATA_PATH}"
+
+      - name: Install DMG tooling
+        run: |
+          brew install create-dmg
+
+      - name: Package release artifacts
+        run: |
+          mkdir -p dist
+          APP_NAME="${SCHEME}"
+          APP_PATH="${DERIVED_DATA_PATH}/Build/Products/${CONFIGURATION}/${APP_NAME}.app"
+          VERSION="${GITHUB_REF_NAME}"
+          ZIP_PATH="dist/${APP_NAME}-${VERSION}-macos.zip"
+          DMG_PATH="dist/${APP_NAME}-${VERSION}-macos.dmg"
+          STAGING_DIR="dist/staging"
+          BG_PATH="${GITHUB_WORKSPACE}/Assets/Release/dmg-background.png"
+
+          mkdir -p "${STAGING_DIR}"
+          rm -rf "${STAGING_DIR:?}"/*
+          cp -R "${APP_PATH}" "${STAGING_DIR}/"
+
+          ditto -c -k --sequesterRsrc --keepParent "${APP_PATH}" "${ZIP_PATH}"
+
+          if [ -f "${BG_PATH}" ]; then
+            create-dmg \
+              --overwrite \
+              --window-pos 200 120 \
+              --window-size 560 360 \
+              --icon-size 120 \
+              --text-size 12 \
+              --icon "${APP_NAME}.app" 160 190 \
+              --app-drop-link 390 190 \
+              --hide-extension "${APP_NAME}.app" \
+              --no-internet-enable \
+              --volname "${APP_NAME} ${VERSION}" \
+              --background "${BG_PATH}" \
+              "${DMG_PATH}" \
+              "${STAGING_DIR}/"
+          else
+            create-dmg \
+              --overwrite \
+              --window-pos 200 120 \
+              --window-size 560 360 \
+              --icon-size 120 \
+              --text-size 12 \
+              --icon "${APP_NAME}.app" 160 190 \
+              --app-drop-link 390 190 \
+              --hide-extension "${APP_NAME}.app" \
+              --no-internet-enable \
+              --volname "${APP_NAME} ${VERSION}" \
+              "${DMG_PATH}" \
+              "${STAGING_DIR}/"
+          fi
+
+          rm -rf "${STAGING_DIR}"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/JustNow-${{ github.ref_name }}-macos.zip
+            dist/JustNow-${{ github.ref_name }}-macos.dmg

@@ -784,13 +784,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
     private func updateStatusItemButtonAppearance() {
         guard let button = statusItem.button else { return }
-        button.image = NSImage(
-            systemSymbolName: "clock.arrow.circlepath",
-            accessibilityDescription: isUserPaused ? "JustNow (Paused)" : "JustNow"
-        )
-        button.image?.isTemplate = true
-        button.imagePosition = .imageLeading
-        button.title = isUserPaused ? " ||" : ""
+        let accessibilityDescription = isUserPaused ? "JustNow (Paused)" : "JustNow"
+        let assetName = isUserPaused ? "StatusBarIdle" : "StatusBarRecording"
+
+        if let image = NSImage(named: assetName)?.copy() as? NSImage {
+            image.isTemplate = true
+            image.accessibilityDescription = accessibilityDescription
+            button.image = image
+        } else {
+            button.image = NSImage(
+                systemSymbolName: "clock.arrow.circlepath",
+                accessibilityDescription: accessibilityDescription
+            )
+            button.image?.isTemplate = true
+        }
+
+        button.imagePosition = .imageOnly
+        button.title = ""
     }
 
     private func showPermissionAlert() {
