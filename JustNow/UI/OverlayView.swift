@@ -389,7 +389,6 @@ private struct CompatGlassEffectContainer<Content: View>: View {
             content()
                 .padding(spacing)
         }
-        }
         #endif
     }
 }
