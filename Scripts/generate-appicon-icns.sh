@@ -12,21 +12,6 @@ if [ ! -d "${ICON_SOURCE}" ] || [ ! -f "${ICON_SOURCE}/icon.json" ]; then
   exit 1
 fi
 
-needs_rebuild=true
-if [ -f "${OUTPUT_ICNS}" ]; then
-  needs_rebuild=false
-  for source_file in "${ICON_SOURCE}/icon.json" "${ICON_SOURCE}"/Assets/*.svg; do
-    if [ "${source_file}" -nt "${OUTPUT_ICNS}" ]; then
-      needs_rebuild=true
-      break
-    fi
-  done
-fi
-
-if [ "${needs_rebuild}" = "false" ]; then
-  exit 0
-fi
-
 if ! command -v sips >/dev/null 2>&1 || ! command -v iconutil >/dev/null 2>&1; then
   echo "Required tools not available: sips/iconutil"
   exit 1
