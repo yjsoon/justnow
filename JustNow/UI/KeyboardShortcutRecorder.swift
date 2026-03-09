@@ -24,20 +24,19 @@ struct KeyboardShortcutRecorder: View {
             .frame(minWidth: 120, maxWidth: 200)
             .frame(height: 24)
             .background(isRecording ? Color.accentColor.opacity(0.15) : Color(nsColor: .controlBackgroundColor))
-            .cornerRadius(6)
-            .overlay(
+            .clipShape(.rect(cornerRadius: 6))
+            .overlay {
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(isRecording ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: 1)
-            )
+            }
 
             if keyCode != -1 {
-                Button {
+                Button("Clear shortcut", systemImage: "xmark.circle.fill") {
                     keyCode = -1
                     modifiers = 0
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
                 }
+                .labelStyle(.iconOnly)
+                .foregroundStyle(.secondary)
                 .buttonStyle(.plain)
                 .help("Clear shortcut")
             }

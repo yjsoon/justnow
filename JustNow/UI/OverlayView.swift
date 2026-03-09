@@ -296,9 +296,13 @@ struct OverlayView: View {
             Color.black.opacity(0.85)
                 .ignoresSafeArea()
 
-            Color.clear
-                .contentShape(Rectangle())
-                .onTapGesture { viewModel.onDismiss() }
+            Button(action: viewModel.onDismiss) {
+                Color.clear
+            }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .accessibilityLabel("Dismiss overlay")
+            .accessibilityHint("Closes the timeline overlay.")
 
             CompatGlassEffectContainer(spacing: 40) {
                 ZStack {
@@ -452,8 +456,10 @@ struct SearchBarView: View {
             Button {
                 viewModel.clearSearch()
                 viewModel.isSearching = false
-            } label: {
-                Image(systemName: "xmark.circle.fill")
+            }
+            label: {
+                Label("Clear search", systemImage: "xmark.circle.fill")
+                    .labelStyle(.iconOnly)
                     .foregroundStyle(.white.opacity(0.5))
             }
             .buttonStyle(.plain)
@@ -752,6 +758,19 @@ struct SliderTrack: View {
                     }
             )
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Timeline")
+        .accessibilityValue(accessibilityValue)
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment:
+                adjustSelection(by: 1)
+            case .decrement:
+                adjustSelection(by: -1)
+            @unknown default:
+                break
+            }
+        }
     }
 
     private func progressWidth(in totalWidth: CGFloat) -> CGFloat {
@@ -764,5 +783,17 @@ struct SliderTrack: View {
         guard frameCount > 1 else { return 0 }
         let percent = CGFloat(selectedIndex) / CGFloat(frameCount - 1)
         return (totalWidth - 24) * percent
+    }
+
+    private var accessibilityValue: String {
+        guard frameCount > 0 else { return "No frames" }
+        return "Frame \(selectedIndex + 1) of \(frameCount)"
+    }
+
+    private func adjustSelection(by delta: Int) {
+        guard frameCount > 0 else { return }
+        let nextIndex = max(0, min(frameCount - 1, selectedIndex + delta))
+        guard nextIndex != selectedIndex else { return }
+        onIndexChanged(nextIndex)
     }
 }
