@@ -112,13 +112,18 @@ ditto -c -k --sequesterRsrc --keepParent "${APP_PATH}" "${ZIP_PATH}"
 
 if command -v create-dmg >/dev/null 2>&1; then
   if [ -f "${BG_PATH}" ]; then
+  APP_ICON_X=160
+  APP_ICON_Y=190
+  APPS_ICON_X=390
+  APPS_ICON_Y=190
     create-dmg \
       --window-pos 200 120 \
       --window-size 560 360 \
       --icon-size 120 \
       --text-size 12 \
-      --icon "${APP_NAME}.app" 160 190 \
-      --app-drop-link 390 190 \
+    --icon "${APP_NAME}.app" "${APP_ICON_X}" "${APP_ICON_Y}" \
+    --app-drop-link "${APPS_ICON_X}" "${APPS_ICON_Y}" \
+    --icon "Applications" "${APPS_ICON_X}" "${APPS_ICON_Y}" \
       --hide-extension "${APP_NAME}.app" \
       --no-internet-enable \
       --volname "${APP_NAME}" \
@@ -131,8 +136,9 @@ if command -v create-dmg >/dev/null 2>&1; then
       --window-size 560 360 \
       --icon-size 120 \
       --text-size 12 \
-      --icon "${APP_NAME}.app" 160 190 \
-      --app-drop-link 390 190 \
+    --icon "${APP_NAME}.app" "${APP_ICON_X}" "${APP_ICON_Y}" \
+    --app-drop-link "${APPS_ICON_X}" "${APPS_ICON_Y}" \
+    --icon "Applications" "${APPS_ICON_X}" "${APPS_ICON_Y}" \
       --hide-extension "${APP_NAME}.app" \
       --no-internet-enable \
       --volname "${APP_NAME}" \

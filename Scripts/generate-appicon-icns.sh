@@ -106,7 +106,8 @@ for layer in [layer_item for group in groups for layer_item in group.get("layers
     if not image_name:
         continue
     opacity = float(layer.get("opacity", 1.0))
-    layer_png = png_dir / f"{image_name}.png"
+    layer_key = Path(image_name).with_suffix("").name
+    layer_png = png_dir / f"{layer_key}.png"
     if not layer_png.exists():
         continue
     layer_image = Image.open(layer_png).convert("RGBA").resize((size, size))
