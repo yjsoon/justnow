@@ -16,8 +16,7 @@ struct SettingsView: View {
     @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 38  // J key
     @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
 
-    var frameBuffer: FrameBuffer?
-    var onShortcutChanged: (() -> Void)?
+    var context: SettingsContext = SettingsContext()
 
     @State private var storageSize: Int64 = 0
     @State private var frameCount: Int = 0
@@ -162,8 +161,8 @@ struct SettingsView: View {
                         keyCode: $shortcutKeyCode,
                         modifiers: $shortcutModifiers
                     )
-                    .onChange(of: shortcutKeyCode) { _, _ in onShortcutChanged?() }
-                    .onChange(of: shortcutModifiers) { _, _ in onShortcutChanged?() }
+                    .onChange(of: shortcutKeyCode) { _, _ in context.notifyShortcutChanged() }
+                    .onChange(of: shortcutModifiers) { _, _ in context.notifyShortcutChanged() }
                 }
                 Text("Press **Escape** to dismiss the overlay")
                     .font(.caption)
@@ -178,6 +177,9 @@ struct SettingsView: View {
         .task {
             await updateStorageInfo()
         }
+        .task(id: frameBufferIdentity) {
+            await updateStorageInfo()
+        }
         .task {
             await refreshTelemetryLoop()
         }
@@ -185,7 +187,7 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) { }
             Button("Clear All", role: .destructive) {
                 Task {
-                    try? await frameBuffer?.clear()
+                    try? await context.frameBuffer?.clear()
                     await updateStorageInfo()
                 }
             }
@@ -195,10 +197,17 @@ struct SettingsView: View {
     }
 
     private func updateStorageInfo() async {
-        if let buffer = frameBuffer {
+        if let buffer = context.frameBuffer {
             storageSize = await buffer.totalStorageSize()
             frameCount = buffer.frameCount
+        } else {
+            storageSize = 0
+            frameCount = 0
         }
+    }
+
+    private var frameBufferIdentity: ObjectIdentifier? {
+        context.frameBuffer.map(ObjectIdentifier.init)
     }
 
     private func refreshTelemetryLoop() async {

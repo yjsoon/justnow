@@ -45,6 +45,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     private var hotKey: HotKey?
     private var appNapPreventer = AppNapPreventer()
     private var settingsWindow: NSWindow?
+    private lazy var settingsContext = SettingsContext(
+        onShortcutChanged: { [weak self] in
+            self?.registerHotKey()
+        }
+    )
 
     @AppStorage("captureInterval") private var captureInterval: Double = 0.5
     @AppStorage("recentTimelineWindowSeconds")
@@ -215,12 +220,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     }
 
     func makeSettingsView() -> SettingsView {
-        SettingsView(
-            frameBuffer: frameBuffer,
-            onShortcutChanged: { [weak self] in
-                self?.registerHotKey()
-            }
-        )
+        SettingsView(context: settingsContext)
     }
 
     private func setupCapture() {
@@ -231,6 +231,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             do {
                 let buffer = try await FrameBuffer()
                 frameBuffer = buffer
+                settingsContext.frameBuffer = buffer
 
                 let loadedCount = buffer.frameCount
                 if loadedCount > 0 {
