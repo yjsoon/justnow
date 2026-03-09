@@ -56,7 +56,7 @@ xcodebuild -scheme JustNow -configuration Release -derivedDataPath build
 
 Latest release is now:
 
-- `v0.1.0` (download from GitHub Releases)
+- `v0.1.1` (download from GitHub Releases)
 
 Release artefacts are built and notarised locally, then uploaded to GitHub Releases from the maintainer machine rather than from GitHub Actions.
 
