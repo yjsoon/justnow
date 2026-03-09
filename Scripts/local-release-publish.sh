@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+RELEASE_ENV_FILE="${RELEASE_ENV_FILE:-.env.release.local}"
+if [ -f "${RELEASE_ENV_FILE}" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "${RELEASE_ENV_FILE}"
+  set +a
+fi
+
 TAG=""
 TITLE=""
 NOTES_FILE=""

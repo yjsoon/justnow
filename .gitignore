@@ -42,5 +42,6 @@ dist/
 
 # Codex
 .codex/
+.env.release.local
 
 AppIcon.icns

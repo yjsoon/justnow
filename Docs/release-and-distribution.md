@@ -4,6 +4,8 @@ This document is for maintainers preparing official macOS builds for GitHub Rele
 
 GitHub Actions no longer builds release artefacts for this repo. Releases are built, notarised and uploaded locally.
 
+If present, `.env.release.local` is auto-loaded by the local release scripts. Use it for gitignored machine-local release credentials such as `APPLE_SIGNING_IDENTITY`, `APPLE_TEAM_ID`, `APPLE_API_KEY_PATH`, `APPLE_API_KEY_ID`, and `APPLE_API_KEY_ISSUER_ID`.
+
 ## Local packaging
 
 You can build locally without GitHub Actions using:
