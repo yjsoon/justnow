@@ -1,0 +1,25 @@
+{
+  "site": {
+    "site_url": "https://justnow.tk.sg",
+    "root_mounted_domain": true,
+    "downloads_url": "https://github.com/yjsoon/justnow/releases/latest",
+    "changelog_url": "https://github.com/yjsoon/justnow/blob/main/CHANGELOG.md"
+  },
+  "product": {
+    "name": "JustNow"
+  },
+  "releases": [
+    {
+      "tag": "v0.1.1",
+      "version": "0.1.1",
+      "published_at": "2026-03-08",
+      "status": "Current public build",
+      "notes": [
+        "Initial pre-release of JustNow.",
+        "Added custom app and menu bar icon assets for clearer recording state feedback.",
+        "Updated the default keyboard shortcut to ⌘⌥J for opening the overlay.",
+        "Improved release packaging so signed and notarised artefacts can be built locally."
+      ]
+    }
+  ]
+}

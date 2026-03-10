@@ -14,5 +14,9 @@
 	<true/>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>JustNow needs screen recording permission to capture your screen history.</string>
+	<key>SUFeedURL</key>
+	<string>https://justnow.tk.sg/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>nJKi68o4uDH6/kkTyXWZ+/1Cc66iHgz86EaV3i7qIvo=</string>
 </dict>
 </plist>

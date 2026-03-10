@@ -9,6 +9,10 @@ if [ -f "${RELEASE_ENV_FILE}" ]; then
   set +a
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/sparkle-config.sh"
+
 TAG=""
 TITLE=""
 NOTES_FILE=""
@@ -221,4 +225,61 @@ else
   "${CREATE_CMD[@]}"
 fi
 
-gh release view "${TAG}" --json url
+RELEASE_JSON="$(gh release view "${TAG}" --json url,body,publishedAt,isDraft,isPrerelease)"
+RELEASE_URL="$(printf '%s' "${RELEASE_JSON}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["url"])')"
+RELEASE_BODY="$(printf '%s' "${RELEASE_JSON}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"] or "", end="")')"
+RELEASE_PUBLISHED_AT="$(printf '%s' "${RELEASE_JSON}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["publishedAt"] or "", end="")')"
+RELEASE_IS_DRAFT="$(printf '%s' "${RELEASE_JSON}" | python3 -c 'import json,sys; print("true" if json.load(sys.stdin)["isDraft"] else "false")')"
+RELEASE_IS_PRERELEASE="$(printf '%s' "${RELEASE_JSON}" | python3 -c 'import json,sys; print("true" if json.load(sys.stdin)["isPrerelease"] else "false")')"
+
+if [ "${RELEASE_IS_DRAFT}" = "true" ] || [ "${RELEASE_IS_PRERELEASE}" = "true" ]; then
+  echo "Skipping site metadata and Sparkle appcast updates for draft/prerelease ${TAG}."
+else
+  RELEASE_NOTES_INPUT="${NOTES_FILE}"
+  TEMP_NOTES_FILE=""
+
+  if [ -z "${RELEASE_NOTES_INPUT}" ]; then
+    TEMP_NOTES_FILE="$(mktemp "${TMPDIR:-/tmp}/justnow-release-notes.XXXXXX")"
+    printf '%s\n' "${RELEASE_BODY}" > "${TEMP_NOTES_FILE}"
+    RELEASE_NOTES_INPUT="${TEMP_NOTES_FILE}"
+  fi
+
+  if [ -s "${RELEASE_NOTES_INPUT}" ]; then
+    PUBLISHED_DATE="$(
+      printf '%s' "${RELEASE_PUBLISHED_AT}" | python3 -c '
+import datetime
+import sys
+
+value = sys.stdin.read().strip()
+if value.endswith("Z"):
+    value = value[:-1] + "+00:00"
+if value:
+    print(datetime.datetime.fromisoformat(value).date().isoformat())
+' || true
+    )"
+
+    if [ -z "${PUBLISHED_DATE}" ]; then
+      PUBLISHED_DATE="$(date -u +%F)"
+    fi
+
+  python3 "${SCRIPT_DIR}/update-site-release.py" \
+    --tag "${TAG}" \
+    --version "${MARKETING_VERSION}" \
+      --published-at "${PUBLISHED_DATE}" \
+      --notes-file "${RELEASE_NOTES_INPUT}"
+
+    python3 "${SCRIPT_DIR}/generate-site-content.py"
+
+    if ! "${SCRIPT_DIR}/generate-sparkle-appcast.sh" "${TAG}"; then
+      echo "Warning: Failed to regenerate site/appcast.xml for ${TAG}" >&2
+    fi
+  else
+    echo "Skipping site metadata and Sparkle appcast updates because release notes are empty."
+  fi
+
+  if [ -n "${TEMP_NOTES_FILE}" ] && [ -e "${TEMP_NOTES_FILE}" ]; then
+    trash "${TEMP_NOTES_FILE}" >/dev/null 2>&1 || true
+  fi
+fi
+
+printf '{"url":"%s"}\n' "${RELEASE_URL}"

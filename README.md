@@ -60,12 +60,31 @@ Latest release is now:
 
 Release artefacts are built and notarised locally, then uploaded to GitHub Releases from the maintainer machine rather than from GitHub Actions.
 
+## Public Site
+
+This repo now also contains a static public site under `site/`.
+
+- `site/index.html`: product landing page
+- `site/releases/`: public release notes
+- `site/appcast.xml`: Sparkle appcast served from the public site root
+
+The public site is designed to work alongside GitHub Releases:
+
+- signed `.zip` and `.dmg` artefacts stay on GitHub Releases
+- the public app page, release notes, and Sparkle appcast are published from `site/`
+- the site assumes a root-mounted custom domain, so root-absolute links are intentional
+- `wrangler.jsonc` is configured for a Cloudflare Pages project named `justnow-site`
+
+Repository builds now include Sparkle-based in-app update UI. Public Sparkle updates become fully live once a Sparkle-enabled release archive has been published and added to the appcast.
+
 ## Licence
 
 For distribution and maintainer release packaging details, see:
 
 - `Docs/release-and-distribution.md`
+- `Docs/site-and-updates.md`
+- `Docs/cloudflare-pages.md`
 
-Local distribution builds can now also be notarised with `Scripts/local-release-build.sh --notarize`, and GitHub release uploads can be done with `Scripts/local-release-publish.sh`; see the release doc for the full commands and required credentials.
+Local distribution builds can now also be notarised with `Scripts/local-release-build.sh --notarize`, and `Scripts/local-release-publish.sh` can publish GitHub Releases, refresh `site/releases.json`, regenerate release notes, and rebuild `site/appcast.xml` for stable releases; see the release doc for the full commands and required credentials.
 
 MIT

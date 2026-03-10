@@ -20,6 +20,8 @@ Artifacts are written to `dist/`:
 - `dist/JustNow-<version>-macos.zip`
 - `dist/JustNow-<version>-macos.dmg` (requires `create-dmg`)
 
+The public product site and Sparkle appcast live under `site/`. Keep website deployment separate from binary artifact generation, and assume a root-mounted custom domain for public URLs.
+
 ## Distribution-ready artifacts
 
 For upload-ready builds, pass Developer ID signing details to the script:
@@ -28,7 +30,7 @@ For upload-ready builds, pass Developer ID signing details to the script:
 ./Scripts/local-release-build.sh [version] --distribution --identity "Developer ID Application: Name (TEAMID)" --team TEAMID
 ```
 
-The distribution mode mirrors the archived hosted release flow: it signs the app binary first, then the app bundle, then the `.dmg`, and verifies signatures along the way.
+The distribution mode mirrors the archived hosted release flow: it signs the app binary, re-signs Sparkle's nested helper content, signs the app bundle, then signs the `.dmg`, and verifies signatures along the way.
 
 To produce a locally notarised and stapled DMG, add App Store Connect API key details:
 
@@ -73,7 +75,11 @@ What the publish helper does:
 - checks that the tag matches the Xcode `MARKETING_VERSION` and that `CURRENT_PROJECT_VERSION` is consistent across configs
 - builds a local signed, notarised and stapled `.zip` and `.dmg`
 - creates the GitHub release if needed, otherwise uploads with `--clobber`
+- reads back the published GitHub release metadata and notes
+- for stable releases, refreshes `site/releases.json`, regenerates `site/releases/index.html`, and rebuilds `site/appcast.xml`
 - prints the final GitHub release URL
+
+Draft and prerelease GitHub releases intentionally skip the public site and Sparkle appcast update steps for now. The main feed only tracks stable releases.
 
 Optional publish flags:
 
@@ -89,3 +95,14 @@ The previous GitHub-hosted release build workflow has been archived to:
 - `.github/archived-workflows/release.yml.disabled`
 
 This keeps the old CI recipe for reference while preventing tag pushes from producing hosted release artefacts.
+
+## Public site
+
+The repo also includes a static site for the product page, release notes, and future Sparkle appcast:
+
+- `site/index.html`
+- `site/releases.json`
+- `site/releases/`
+- `site/appcast.xml`
+
+GitHub Actions may deploy that static site to GitHub Pages, but release binaries should continue to be built and notarised locally.

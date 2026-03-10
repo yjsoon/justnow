@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import Sparkle
 
 struct SettingsView: View {
     @AppStorage("captureInterval") private var captureInterval: Double = 0.5
@@ -23,6 +24,9 @@ struct SettingsView: View {
     @State private var showClearConfirmation = false
     @State private var telemetrySnapshot: SearchTelemetrySnapshot = .empty
     @State private var isSearchDiagnosticsExpanded = false
+    @State private var automaticallyChecksForUpdates = false
+    @State private var automaticallyDownloadsUpdates = false
+    @State private var allowsAutomaticUpdates = false
 
     var body: some View {
         Form {
@@ -154,6 +158,24 @@ struct SettingsView: View {
             }
 
             Section {
+                Button("Check for Updates…") {
+                    context.checkForUpdates()
+                }
+                .disabled(!(context.updater?.canCheckForUpdates ?? false))
+
+                Toggle("Check for updates automatically", isOn: automaticChecksBinding)
+
+                Toggle("Download updates automatically", isOn: automaticDownloadsBinding)
+                    .disabled(!allowsAutomaticUpdates)
+
+                Text("JustNow uses Sparkle to deliver signed updates from the public appcast at justnow.tk.sg.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Software Update")
+            }
+
+            Section {
                 HStack {
                     Text("Show Timeline")
                     Spacer()
@@ -179,6 +201,11 @@ struct SettingsView: View {
         }
         .task(id: frameBufferIdentity) {
             await updateStorageInfo()
+        }
+        .task(id: updaterIdentity) {
+            await MainActor.run {
+                syncUpdaterState()
+            }
         }
         .task {
             await refreshTelemetryLoop()
@@ -210,6 +237,10 @@ struct SettingsView: View {
         context.frameBuffer.map(ObjectIdentifier.init)
     }
 
+    private var updaterIdentity: ObjectIdentifier? {
+        context.updater.map(ObjectIdentifier.init)
+    }
+
     private func refreshTelemetryLoop() async {
         while !Task.isCancelled {
             let snapshot = await SearchTelemetry.shared.snapshot()
@@ -232,6 +263,41 @@ struct SettingsView: View {
 
     private func formatSeconds(_ value: TimeInterval) -> String {
         String(format: "%.2fs", value)
+    }
+
+    private var automaticChecksBinding: Binding<Bool> {
+        Binding(
+            get: { automaticallyChecksForUpdates },
+            set: { newValue in
+                automaticallyChecksForUpdates = newValue
+                context.updater?.automaticallyChecksForUpdates = newValue
+                syncUpdaterState()
+            }
+        )
+    }
+
+    private var automaticDownloadsBinding: Binding<Bool> {
+        Binding(
+            get: { automaticallyDownloadsUpdates },
+            set: { newValue in
+                automaticallyDownloadsUpdates = newValue
+                context.updater?.automaticallyDownloadsUpdates = newValue
+                syncUpdaterState()
+            }
+        )
+    }
+
+    private func syncUpdaterState() {
+        guard let updater = context.updater else {
+            automaticallyChecksForUpdates = false
+            automaticallyDownloadsUpdates = false
+            allowsAutomaticUpdates = false
+            return
+        }
+
+        automaticallyChecksForUpdates = updater.automaticallyChecksForUpdates
+        automaticallyDownloadsUpdates = updater.automaticallyDownloadsUpdates
+        allowsAutomaticUpdates = updater.allowsAutomaticUpdates
     }
 }
 

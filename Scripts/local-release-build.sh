@@ -48,6 +48,34 @@ Options:
 EOF
 }
 
+sign_sparkle_support_binaries() {
+  local app_bundle_path="$1"
+  local framework_path="${app_bundle_path}/Contents/Frameworks/Sparkle.framework"
+  local version_path="${framework_path}/Versions/B"
+
+  if [ ! -d "${framework_path}" ]; then
+    return
+  fi
+
+  local updater_app="${version_path}/Updater.app"
+  local downloader_xpc="${version_path}/XPCServices/Downloader.xpc"
+  local installer_xpc="${version_path}/XPCServices/Installer.xpc"
+  local autoupdate_binary="${version_path}/Autoupdate"
+
+  if [ -e "${autoupdate_binary}" ]; then
+    codesign --force --options runtime --timestamp --sign "${SIGNING_IDENTITY}" "${autoupdate_binary}"
+  fi
+
+  for nested_bundle in "${downloader_xpc}" "${installer_xpc}" "${updater_app}"; do
+    if [ -d "${nested_bundle}" ]; then
+      codesign --force --options runtime --timestamp --sign "${SIGNING_IDENTITY}" "${nested_bundle}"
+    fi
+  done
+
+  codesign --force --options runtime --timestamp --sign "${SIGNING_IDENTITY}" "${version_path}"
+  codesign --force --options runtime --timestamp --sign "${SIGNING_IDENTITY}" "${framework_path}"
+}
+
 create_applications_alias() {
   local target_dir="$1"
   local alias_path="${target_dir}/Applications"
@@ -195,7 +223,8 @@ rm -f "${ZIP_PATH}" "${DMG_PATH}"
 if [ "${USE_DISTRIBUTION_SIGNING}" = "true" ]; then
   echo "Signing distribution artifacts with ${SIGNING_IDENTITY}"
   codesign --force --options runtime --timestamp --entitlements "${ENTITLEMENTS_PATH}" --sign "${SIGNING_IDENTITY}" "${APP_EXECUTABLE_PATH}"
-  codesign --force --options runtime --timestamp --entitlements "${ENTITLEMENTS_PATH}" --deep --sign "${SIGNING_IDENTITY}" "${APP_PATH}"
+  sign_sparkle_support_binaries "${APP_PATH}"
+  codesign --force --options runtime --timestamp --entitlements "${ENTITLEMENTS_PATH}" --sign "${SIGNING_IDENTITY}" "${APP_PATH}"
   codesign --verify --deep --strict --verbose=2 "${APP_PATH}"
 fi
 

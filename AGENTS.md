@@ -82,6 +82,8 @@ If `open` fails in CLI contexts, use `xcodebuildmcp macos launch --app-path "/Ap
 Release process and signing/deployment details are documented in:
 
 - `Docs/release-and-distribution.md`
+- `Docs/site-and-updates.md`
+- `Docs/cloudflare-pages.md`
 
 ## Key Files
 
@@ -90,12 +92,20 @@ Release process and signing/deployment details are documented in:
 - `JustNow/UI/OverlayWindowController.swift`: overlay window and keyboard handling
 - `JustNow/Storage/FrameStore.swift`: manifest and image persistence
 - `JustNow/Storage/RetentionManager.swift`: time-based pruning
+- `site/index.html`: public product page
+- `site/releases.json`: source-of-truth public release metadata
+- `site/appcast.xml`: Sparkle appcast published at the site root
+- `wrangler.jsonc`: Cloudflare Pages project configuration for the public site
 
 ## Notes
 
 - Use `ScreenCaptureKit`; `CGWindowListCreateImage` is deprecated.
 - Pruning is paused while the overlay is open.
 - Frames persist across restarts via the on-disk manifest.
+- Keep GitHub Releases as the canonical home for signed app artefacts; the public site under `site/` should link to those assets rather than duplicating release binaries.
+- The public site is intended for a root-mounted custom domain; root-absolute paths in `site/` are intentional unless deployment assumptions change.
+- Sparkle is integrated in-app; stable release publishing should refresh `site/releases.json`, regenerate `site/releases/`, and rebuild `site/appcast.xml` from the uploaded archive.
+- Cloudflare Pages is the intended host for `justnow.tk.sg`; use `wrangler.jsonc` and `Docs/cloudflare-pages.md` as the source of truth for site deployment.
 - Keep menu bar recording controls visually in sync: when pause/resume state changes, update both the menu item and the status item icon.
 - If UI copy mentions a nominal capture interval, sanity-check it against adaptive throttling and deduplicated browsing so the user-facing wording still matches observed behaviour.
 - Avoid stacking a custom permission alert on top of a macOS TCC prompt during first-launch flows; if the system dialog is already doing the ask, defer app guidance until after the user responds.

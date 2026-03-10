@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>JustNow</title>
+    <meta
+      name="description"
+      content="JustNow is a native macOS menu bar app that lets you scroll back through recent screen history."
+    >
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <p class="eyebrow">macOS menu bar app</p>
+        <h1>Scroll back through the last few minutes of your screen.</h1>
+        <p class="lede">
+          JustNow quietly captures your recent screen history so you can pull up a fullscreen timeline
+          whenever you need to recover a detail you have just moved past.
+        </p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="https://github.com/yjsoon/justnow/releases/latest">Download the latest release</a>
+          <a class="button button-secondary" href="/releases/">Read release notes</a>
+        </div>
+      </header>
+
+      <main>
+        <section class="feature-grid" aria-label="Highlights">
+          <article class="feature-card">
+            <h2>Fast recall</h2>
+            <p>
+              Open the timeline with a hotkey and scrub backwards through your recent capture history
+              without digging through folders or screenshots.
+            </p>
+          </article>
+          <article class="feature-card">
+            <h2>Battery-aware capture</h2>
+            <p>
+              Capture cadence, indexing, and retention adapt to battery and thermal conditions so the
+              app stays practical as a background tool.
+            </p>
+          </article>
+          <article class="feature-card">
+            <h2>Built for the menu bar</h2>
+            <p>
+              JustNow lives in the menu bar, keeps its controls close, and stays out of the way until
+              you need a quick trip back in time.
+            </p>
+          </article>
+        </section>
+
+        <section class="detail-band">
+          <div>
+            <p class="section-label">Requirements</p>
+            <p>macOS 15 or later with Screen Recording permission granted.</p>
+          </div>
+          <div>
+            <p class="section-label">Distribution</p>
+            <p>Signed and notarised builds are published on GitHub Releases.</p>
+          </div>
+          <div>
+            <p class="section-label">Updates</p>
+            <p>
+              The public app page and Sparkle appcast live in this repo. Repository builds already
+              include in-app update support, and stable public releases are served from <code>/appcast.xml</code>.
+            </p>
+          </div>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <a href="https://github.com/yjsoon/justnow">Source code</a>
+        <a href="/appcast.xml">Appcast</a>
+        <a href="/releases/">Release notes</a>
+      </footer>
+    </div>
+  </body>
+</html>

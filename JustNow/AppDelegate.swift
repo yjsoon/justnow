@@ -8,6 +8,7 @@ import CoreGraphics
 import SwiftUI
 import HotKey
 import Carbon.HIToolbox
+import Sparkle
 
 enum RecentTimelineWindow: Double, CaseIterable, Identifiable {
     case oneMinute = 60
@@ -43,9 +44,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     private var frameBuffer: FrameBuffer?
     private var overlayController: OverlayWindowController?
     private var hotKey: HotKey?
+    private lazy var updaterController = SPUStandardUpdaterController(
+        startingUpdater: false,
+        updaterDelegate: nil,
+        userDriverDelegate: nil
+    )
     private var appNapPreventer = AppNapPreventer()
     private var settingsWindow: NSWindow?
     private lazy var settingsContext = SettingsContext(
+        updater: updaterController.updater,
+        onCheckForUpdates: { [weak self] in
+            self?.checkForUpdates(nil)
+        },
         onShortcutChanged: { [weak self] in
             self?.registerHotKey()
         }
@@ -121,6 +131,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
+        updaterController.startUpdater()
         setupHotKey()
         setupCapture()
         setupTimers()
@@ -182,6 +193,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         let settingsItem = NSMenuItem(title: "Settings...", action: #selector(showSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
+
+        let updatesItem = NSMenuItem(
+            title: "Check for Updates…",
+            action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
+            keyEquivalent: ""
+        )
+        updatesItem.target = updaterController
+        menu.addItem(updatesItem)
 
         menu.addItem(NSMenuItem.separator())
 
@@ -609,7 +628,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 450),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 680),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -621,6 +640,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         NSApp.activate(ignoringOtherApps: true)
 
         settingsWindow = window
+    }
+
+    @objc private func checkForUpdates(_ sender: Any?) {
+        updaterController.checkForUpdates(sender)
     }
 
     @objc private func quitApp() {

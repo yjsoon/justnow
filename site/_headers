@@ -1,0 +1,7 @@
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+
+/appcast.xml
+  Cache-Control: public, max-age=300, must-revalidate
+  Content-Type: application/xml; charset=utf-8
