@@ -21,6 +21,7 @@ DMG_PATH="dist/${APP_NAME}-${VERSION}-macos.dmg"
 STAGING_DIR="dist/staging"
 BG_PATH="Assets/Release/dmg-background.png"
 ENTITLEMENTS_PATH="Scripts/distribution-entitlements.plist"
+APPLICATIONS_ALIAS_ICON="/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/ApplicationsFolderIcon.icns"
 USE_DISTRIBUTION_SIGNING="${USE_DISTRIBUTION_SIGNING:-false}"
 USE_NOTARIZATION="${USE_NOTARIZATION:-false}"
 SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
@@ -45,6 +46,45 @@ Options:
   --api-key-id      App Store Connect API key ID
   --api-issuer      App Store Connect issuer ID (omit for Individual API keys)
 EOF
+}
+
+create_applications_alias() {
+  local target_dir="$1"
+  local alias_path="${target_dir}/Applications"
+  local icon_copy_base
+  local icon_resource
+
+  for tool in osascript sips DeRez Rez SetFile; do
+    if ! command -v "${tool}" >/dev/null 2>&1; then
+      echo "Missing required tool for DMG Applications alias: ${tool}" >&2
+      exit 1
+    fi
+  done
+
+  if [ ! -f "${APPLICATIONS_ALIAS_ICON}" ]; then
+    echo "Applications folder icon not found at: ${APPLICATIONS_ALIAS_ICON}" >&2
+    exit 1
+  fi
+
+  osascript - "${target_dir}" <<'APPLESCRIPT'
+on run argv
+  set targetDir to item 1 of argv
+  tell application "Finder"
+    set targetFolder to POSIX file targetDir as alias
+    set aliasFile to make new alias file at targetFolder to POSIX file "/Applications"
+    set name of aliasFile to "Applications"
+  end tell
+end run
+APPLESCRIPT
+
+  icon_copy_base="$(mktemp "${TMPDIR:-/tmp}/applications-folder-icon.XXXXXX")"
+  cp "${APPLICATIONS_ALIAS_ICON}" "${icon_copy_base}.icns"
+  sips -i "${icon_copy_base}.icns" >/dev/null
+
+  icon_resource="$(mktemp "${TMPDIR:-/tmp}/applications-folder-icon-rsrc.XXXXXX")"
+  DeRez -only icns "${icon_copy_base}.icns" > "${icon_resource}"
+  Rez -append "${icon_resource}" -o "${alias_path}"
+  SetFile -a C "${alias_path}"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -162,6 +202,7 @@ fi
 mkdir -p "${STAGING_DIR}"
 rm -rf "${STAGING_DIR:?}"/*
 cp -R "${APP_PATH}" "${STAGING_DIR}/"
+create_applications_alias "${STAGING_DIR}"
 
 ditto -c -k --sequesterRsrc --keepParent "${APP_PATH}" "${ZIP_PATH}"
 
@@ -172,9 +213,8 @@ if command -v create-dmg >/dev/null 2>&1; then
       --window-size 560 360 \
       --icon-size 120 \
       --text-size 12 \
-    --icon "${APP_NAME}.app" "${APP_ICON_X}" "${APP_ICON_Y}" \
-    --app-drop-link "${APPS_ICON_X}" "${APPS_ICON_Y}" \
-    --icon "Applications" "${APPS_ICON_X}" "${APPS_ICON_Y}" \
+      --icon "${APP_NAME}.app" "${APP_ICON_X}" "${APP_ICON_Y}" \
+      --icon "Applications" "${APPS_ICON_X}" "${APPS_ICON_Y}" \
       --hide-extension "${APP_NAME}.app" \
       --no-internet-enable \
       --volname "${APP_NAME}" \
@@ -187,9 +227,8 @@ if command -v create-dmg >/dev/null 2>&1; then
       --window-size 560 360 \
       --icon-size 120 \
       --text-size 12 \
-    --icon "${APP_NAME}.app" "${APP_ICON_X}" "${APP_ICON_Y}" \
-    --app-drop-link "${APPS_ICON_X}" "${APPS_ICON_Y}" \
-    --icon "Applications" "${APPS_ICON_X}" "${APPS_ICON_Y}" \
+      --icon "${APP_NAME}.app" "${APP_ICON_X}" "${APP_ICON_Y}" \
+      --icon "Applications" "${APPS_ICON_X}" "${APPS_ICON_Y}" \
       --hide-extension "${APP_NAME}.app" \
       --no-internet-enable \
       --volname "${APP_NAME}" \
