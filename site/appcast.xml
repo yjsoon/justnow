@@ -3,6 +3,22 @@
     <channel>
         <title>JustNow</title>
         <item>
+            <title>0.1.2</title>
+            <pubDate>Tue, 10 Mar 2026 21:13:11 +0800</pubDate>
+            <link>https://justnow.tk.sg</link>
+            <sparkle:fullReleaseNotesLink>https://justnow.tk.sg/releases/</sparkle:fullReleaseNotesLink>
+            <sparkle:version>3</sparkle:version>
+            <sparkle:shortVersionString>0.1.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown">- Added Sparkle-based in-app update support, including a new Settings software update section and a menu bar `Check for Updates…` action.
+- Added an in-repo public site for the app page, release notes, and Sparkle appcast at `justnow.tk.sg`.
+- Added site-generation and Cloudflare Pages deployment helpers so stable release publishing can update the public appcast automatically.
+- Re-signed Sparkle helper binaries in the local distribution pipeline for release-ready builds.
+</description>
+            <enclosure url="https://github.com/yjsoon/justnow/releases/download/v0.1.2/JustNow-v0.1.2-macos.zip" length="3464825" type="application/octet-stream" sparkle:edSignature="xhHUeOgVyAKf9qaUL1jWDuIa7hI3ZrreQK2qV7maBdVYmkZxca4i813+1tBVIeuyMb4YTWqTFX2UQXsO4JDgBA==" />
+        </item>
+        <item>
             <title>0.1.1</title>
             <pubDate>Tue, 10 Mar 2026 08:17:11 +0800</pubDate>
             <link>https://justnow.tk.sg</link>

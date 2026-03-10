@@ -10,10 +10,22 @@
   },
   "releases": [
     {
+      "tag": "v0.1.2",
+      "version": "0.1.2",
+      "published_at": "2026-03-10",
+      "status": "Current public build",
+      "notes": [
+        "Added Sparkle-based in-app update support, including a new Settings software update section and a menu bar `Check for Updates…` action.",
+        "Added an in-repo public site for the app page, release notes, and Sparkle appcast at `justnow.tk.sg`.",
+        "Added site-generation and Cloudflare Pages deployment helpers so stable release publishing can update the public appcast automatically.",
+        "Re-signed Sparkle helper binaries in the local distribution pipeline for release-ready builds."
+      ]
+    },
+    {
       "tag": "v0.1.1",
       "version": "0.1.1",
       "published_at": "2026-03-08",
-      "status": "Current public build",
+      "status": "Previous release",
       "notes": [
         "Initial pre-release of JustNow.",
         "Added custom app and menu bar icon assets for clearer recording state feedback.",
