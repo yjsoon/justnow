@@ -9,12 +9,10 @@
 /* Begin PBXBuildFile section */
 		AF3F00FA2F095126000F5208 /* HotKey in Frameworks */ = {isa = PBXBuildFile; productRef = AF3F00F92F095126000F5208 /* HotKey */; };
 		AF7DAF982F5D88840041C674 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = AF7DAF972F5D88840041C674 /* AppIcon.icon */; };
-		AF7DAF992F5D88A10041C674 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = AF7DAF952F5D88A10041C674 /* AppIcon.icns */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		AF3F00E82F094EE1000F5208 /* JustNow.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = JustNow.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		AF7DAF952F5D88A10041C674 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
 		AF7DAF972F5D88840041C674 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -56,7 +54,6 @@
 			children = (
 				AF3F00EA2F094EE1000F5208 /* JustNow */,
 				AF3F00E92F094EE1000F5208 /* Products */,
-				AF7DAF952F5D88A10041C674 /* AppIcon.icns */,
 				AF7DAF972F5D88840041C674 /* AppIcon.icon */,
 			);
 			sourceTree = "<group>";
@@ -138,7 +135,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				AF7DAF982F5D88840041C674 /* AppIcon.icon in Resources */,
-				AF7DAF992F5D88A10041C674 /* AppIcon.icns in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

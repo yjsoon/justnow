@@ -41,12 +41,16 @@ struct SettingsView: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Newest timeline detail")
-                    Picker("Newest timeline detail", selection: $recentTimelineWindowSeconds) {
+                    Picker(selection: $recentTimelineWindowSeconds) {
                         ForEach(RecentTimelineWindow.allCases) { window in
                             Text(window.label).tag(window.rawValue)
                         }
+                    } label: {
+                        EmptyView()
                     }
                     .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .accessibilityLabel("Newest timeline detail")
 
                     Text("Keep every stored frame in the newest window, then collapse visually similar older history.")
                         .font(.caption)
