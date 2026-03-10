@@ -68,6 +68,8 @@ Local release credentials live in `.env.release.local` (gitignored). The local r
 
 After every successful build, always install and launch from `/Applications/` before reporting completion. Screen Recording permission is tied to the app location.
 
+If you switch a machine from older dev-signed/Xcode builds to Developer ID or notarised builds, macOS may keep a stale Screen Recording entry that still appears enabled. If capture fails in that state, remove the `JustNow` entry from **System Settings → Privacy & Security → Screen Recording** once and relaunch so TCC can recreate it for the new signing identity.
+
 ```bash
 pkill -x JustNow 2>/dev/null || true
 if [ -e /Applications/JustNow.app ]; then

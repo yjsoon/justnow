@@ -84,6 +84,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     private var isPausedForSession = false
     private var idleTransitionTimer: Timer?
     private var didRequestScreenRecordingPermissionThisLaunch = false
+    private var didShowPermissionAlertThisLaunch = false
 
     private let idleThreshold: TimeInterval = 60
     private let inputPolicyUpdateInterval: TimeInterval = 1
@@ -106,6 +107,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     private let ocrIndexBatteryQueueDepth: Int = 60
     private let ocrIndexIdleQueueDepth: Int = 40
     private let ocrIndexThermalQueueDepth: Int = 24
+    private let screenRecordingPermissionRequestCooldown: TimeInterval = 5 * 60
+    private let screenRecordingPermissionRequestTimestampKey = "screenRecordingPermissionRequestTimestamp"
 
     private struct CapturePolicy: Equatable {
         let interval: TimeInterval
@@ -119,7 +122,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
     private enum LaunchPermissionState {
         case granted
-        case deniedAfterSystemPrompt
+        case requestedThisLaunch
+        case recentlyRequested
         case deniedPreviously
     }
 
@@ -292,8 +296,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
                     updateCaptureStatus("Error")
                     showErrorAlert(error)
                 }
-            case .deniedAfterSystemPrompt:
+            case .requestedThisLaunch:
+                updateCaptureStatus("Awaiting Permission")
+            case .recentlyRequested:
                 updateCaptureStatus("No Permission")
+                showPermissionAlert()
             case .deniedPreviously:
                 updateCaptureStatus("No Permission")
                 showPermissionAlert()
@@ -859,7 +866,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
     private func resolveLaunchPermissionState() -> LaunchPermissionState {
         if ScreenCaptureManager.hasScreenRecordingPermission() {
+            clearRecentScreenRecordingPermissionRequest()
             return .granted
+        }
+
+        if hasRecentScreenRecordingPermissionRequest() {
+            return .recentlyRequested
         }
 
         guard !didRequestScreenRecordingPermissionThisLaunch else {
@@ -867,15 +879,28 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         }
 
         didRequestScreenRecordingPermissionThisLaunch = true
-        return ScreenCaptureManager.requestScreenRecordingPermission()
-            ? .granted
-            : .deniedAfterSystemPrompt
+        if ScreenCaptureManager.requestScreenRecordingPermission() {
+            clearRecentScreenRecordingPermissionRequest()
+            return .granted
+        }
+
+        markRecentScreenRecordingPermissionRequest()
+        return .requestedThisLaunch
     }
 
     private func showPermissionAlert() {
+        guard !didShowPermissionAlertThisLaunch else { return }
+        didShowPermissionAlertThisLaunch = true
+
         let alert = NSAlert()
         alert.messageText = "Screen Recording Permission Required"
-        alert.informativeText = "JustNow needs screen recording permission to capture your screen history.\n\nPlease grant permission in System Settings → Privacy & Security → Screen Recording, then restart the app."
+        alert.informativeText = """
+        JustNow needs Screen Recording permission to capture your screen history.
+
+        Open System Settings → Privacy & Security → Screen Recording and allow JustNow.
+
+        If JustNow is already enabled there but capture still fails after a recent build, signing, or notarisation change, remove the JustNow entry from Screen Recording and relaunch once so macOS can create a fresh permission record.
+        """
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Open System Settings")
         alert.addButton(withTitle: "Quit")
@@ -886,8 +911,37 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
                 NSWorkspace.shared.open(url)
             }
+            return
         }
+
         NSApp.terminate(nil)
+    }
+
+    private func hasRecentScreenRecordingPermissionRequest() -> Bool {
+        guard UserDefaults.standard.object(forKey: screenRecordingPermissionRequestTimestampKey) != nil else {
+            return false
+        }
+
+        let timestamp = UserDefaults.standard.double(forKey: screenRecordingPermissionRequestTimestampKey)
+
+        let elapsed = Date().timeIntervalSince1970 - timestamp
+        guard elapsed < screenRecordingPermissionRequestCooldown else {
+            clearRecentScreenRecordingPermissionRequest()
+            return false
+        }
+
+        return true
+    }
+
+    private func markRecentScreenRecordingPermissionRequest() {
+        UserDefaults.standard.set(
+            Date().timeIntervalSince1970,
+            forKey: screenRecordingPermissionRequestTimestampKey
+        )
+    }
+
+    private func clearRecentScreenRecordingPermissionRequest() {
+        UserDefaults.standard.removeObject(forKey: screenRecordingPermissionRequestTimestampKey)
     }
 
     private func showErrorAlert(_ error: Error) {

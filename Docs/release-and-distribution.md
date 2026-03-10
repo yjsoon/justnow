@@ -55,6 +55,8 @@ Local notarisation prerequisites:
 - the Developer Team ID
 - the issuer ID for Team API keys
 
+If you are switching a machine from older Xcode/dev-signed `JustNow` builds to Developer ID / notarised builds, macOS can keep a stale Screen Recording entry that still looks enabled but no longer matches the app's current signing requirement. If capture still fails after the switch, remove the `JustNow` entry from **System Settings → Privacy & Security → Screen Recording** once and relaunch so macOS can recreate it. Later updates signed with the same Developer ID identity should retain the permission normally.
+
 ## Local publish flow
 
 Use the local publish helper when you want to upload release artefacts to GitHub:
