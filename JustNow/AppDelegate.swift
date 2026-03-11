@@ -78,6 +78,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
     @AppStorage("overlayDismissKeyCode") private var overlayDismissKeyCode: Int = 53
     @AppStorage("overlayDismissModifiers") private var overlayDismissModifiers: Int = 0
+    @AppStorage("hasRequestedScreenRecordingPermission")
+    private var hasRequestedScreenRecordingPermission = false
 
     private var capturePolicyTimer: Timer?
     private var userDefaultsObserver: NSObjectProtocol?
@@ -93,6 +95,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     private var idleTransitionTimer: Timer?
     private var didRequestScreenRecordingPermissionThisLaunch = false
     private var didShowPermissionAlertThisLaunch = false
+    private var didShowPermissionRestartAlertThisLaunch = false
+    private var permissionPromptFollowUpTask: Task<Void, Never>?
 
     private let idleThreshold: TimeInterval = 60
     private let inputPolicyUpdateInterval: TimeInterval = 1
@@ -153,6 +157,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         appNapPreventer.stopActivity()
         capturePolicyTimer?.invalidate()
         idleTransitionTimer?.invalidate()
+        permissionPromptFollowUpTask?.cancel()
         if let observer = userDefaultsObserver {
             NotificationCenter.default.removeObserver(observer)
         }
@@ -889,16 +894,45 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             return .granted
         }
 
+        if hasRequestedScreenRecordingPermission {
+            return .deniedPreviously
+        }
+
         guard !didRequestScreenRecordingPermissionThisLaunch else {
             return .deniedPreviously
         }
 
         didRequestScreenRecordingPermissionThisLaunch = true
+        hasRequestedScreenRecordingPermission = true
         if ScreenCaptureManager.requestScreenRecordingPermission() {
             return .granted
         }
 
+        schedulePermissionPromptFollowUp()
         return .requestedThisLaunch
+    }
+
+    private func schedulePermissionPromptFollowUp() {
+        permissionPromptFollowUpTask?.cancel()
+        permissionPromptFollowUpTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            for _ in 0..<30 {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                guard didRequestScreenRecordingPermissionThisLaunch else { return }
+                guard NSApp.isActive else { continue }
+
+                if ScreenCaptureManager.hasScreenRecordingPermission() {
+                    updateCaptureStatus("Restart Required")
+                    showPermissionRestartAlert()
+                } else {
+                    updateCaptureStatus("No Permission")
+                    showPermissionAlert()
+                }
+                return
+            }
+        }
     }
 
     private func showPermissionAlert() {
@@ -911,6 +945,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         JustNow needs Screen Recording permission to capture your screen history.
 
         Open System Settings → Privacy & Security → Screen Recording and allow JustNow.
+
+        After enabling JustNow, quit and reopen the app once so capture can restart cleanly with the new permission.
 
         If JustNow is already enabled there but capture still fails after a recent build, signing, or notarisation change, remove the JustNow entry from Screen Recording and relaunch once so macOS can create a fresh permission record.
         """
@@ -929,6 +965,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
         NSApp.terminate(nil)
     }
+
+    private func showPermissionRestartAlert() {
+        guard !didShowPermissionRestartAlertThisLaunch else { return }
+        didShowPermissionRestartAlertThisLaunch = true
+
+        let alert = NSAlert()
+        alert.messageText = "Restart JustNow to Start Capture"
+        alert.informativeText = """
+        Screen Recording is now enabled for JustNow.
+
+        Quit and reopen the app once so capture can restart cleanly with the new permission.
+        """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Quit JustNow")
+        alert.addButton(withTitle: "Later")
+
+        NSApp.activate(ignoringOtherApps: true)
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSApp.terminate(nil)
+        }
+    }
+
     private func showErrorAlert(_ error: Error) {
         let alert = NSAlert()
         alert.messageText = "Capture Error"
