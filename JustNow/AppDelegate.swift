@@ -107,8 +107,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     private let ocrIndexBatteryQueueDepth: Int = 60
     private let ocrIndexIdleQueueDepth: Int = 40
     private let ocrIndexThermalQueueDepth: Int = 24
-    private let screenRecordingPermissionRequestCooldown: TimeInterval = 5 * 60
-    private let screenRecordingPermissionRequestTimestampKey = "screenRecordingPermissionRequestTimestamp"
 
     private struct CapturePolicy: Equatable {
         let interval: TimeInterval
@@ -123,7 +121,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     private enum LaunchPermissionState {
         case granted
         case requestedThisLaunch
-        case recentlyRequested
         case deniedPreviously
     }
 
@@ -298,9 +295,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
                 }
             case .requestedThisLaunch:
                 updateCaptureStatus("Awaiting Permission")
-            case .recentlyRequested:
-                updateCaptureStatus("No Permission")
-                showPermissionAlert()
             case .deniedPreviously:
                 updateCaptureStatus("No Permission")
                 showPermissionAlert()
@@ -866,12 +860,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
     private func resolveLaunchPermissionState() -> LaunchPermissionState {
         if ScreenCaptureManager.hasScreenRecordingPermission() {
-            clearRecentScreenRecordingPermissionRequest()
             return .granted
-        }
-
-        if hasRecentScreenRecordingPermissionRequest() {
-            return .recentlyRequested
         }
 
         guard !didRequestScreenRecordingPermissionThisLaunch else {
@@ -880,11 +869,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
         didRequestScreenRecordingPermissionThisLaunch = true
         if ScreenCaptureManager.requestScreenRecordingPermission() {
-            clearRecentScreenRecordingPermissionRequest()
             return .granted
         }
 
-        markRecentScreenRecordingPermissionRequest()
         return .requestedThisLaunch
     }
 
@@ -916,34 +903,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
         NSApp.terminate(nil)
     }
-
-    private func hasRecentScreenRecordingPermissionRequest() -> Bool {
-        guard UserDefaults.standard.object(forKey: screenRecordingPermissionRequestTimestampKey) != nil else {
-            return false
-        }
-
-        let timestamp = UserDefaults.standard.double(forKey: screenRecordingPermissionRequestTimestampKey)
-
-        let elapsed = Date().timeIntervalSince1970 - timestamp
-        guard elapsed < screenRecordingPermissionRequestCooldown else {
-            clearRecentScreenRecordingPermissionRequest()
-            return false
-        }
-
-        return true
-    }
-
-    private func markRecentScreenRecordingPermissionRequest() {
-        UserDefaults.standard.set(
-            Date().timeIntervalSince1970,
-            forKey: screenRecordingPermissionRequestTimestampKey
-        )
-    }
-
-    private func clearRecentScreenRecordingPermissionRequest() {
-        UserDefaults.standard.removeObject(forKey: screenRecordingPermissionRequestTimestampKey)
-    }
-
     private func showErrorAlert(_ error: Error) {
         let alert = NSAlert()
         alert.messageText = "Capture Error"
