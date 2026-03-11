@@ -917,21 +917,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         permissionPromptFollowUpTask = Task { @MainActor [weak self] in
             guard let self else { return }
 
-            for _ in 0..<30 {
-                try? await Task.sleep(for: .seconds(1))
+            if NSApp.isActive {
+                try? await Task.sleep(for: .milliseconds(400))
                 guard !Task.isCancelled else { return }
                 guard didRequestScreenRecordingPermissionThisLaunch else { return }
-                guard NSApp.isActive else { continue }
-
-                if ScreenCaptureManager.hasScreenRecordingPermission() {
-                    updateCaptureStatus("Restart Required")
-                    showPermissionRestartAlert()
-                } else {
-                    updateCaptureStatus("No Permission")
-                    showPermissionAlert()
-                }
+                handlePermissionPromptResolution()
                 return
             }
+
+            let becameActiveNotifications = NotificationCenter.default.notifications(
+                named: NSApplication.didBecomeActiveNotification,
+                object: NSApp
+            )
+
+            for await _ in becameActiveNotifications {
+                guard !Task.isCancelled else { return }
+                guard didRequestScreenRecordingPermissionThisLaunch else { return }
+                handlePermissionPromptResolution()
+                return
+            }
+        }
+    }
+
+    private func handlePermissionPromptResolution() {
+        if ScreenCaptureManager.hasScreenRecordingPermission() {
+            updateCaptureStatus("Restart Required")
+            showPermissionRestartAlert()
+        } else {
+            updateCaptureStatus("No Permission")
+            showPermissionAlert()
         }
     }
 

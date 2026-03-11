@@ -178,9 +178,11 @@ class RecorderNSView: NSView {
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
         let hasModifier = mods.contains(.command) || mods.contains(.option) || mods.contains(.control) || mods.contains(.shift)
+        let isEscape = event.keyCode == UInt16(kVK_Escape)
+        let hasModifierOrAllowedEscape = hasModifier || (isEscape && allowsEscapeShortcut)
 
         // Require at least one modifier unless bare keys are explicitly allowed.
-        guard allowsBareKeys || hasModifier else {
+        guard allowsBareKeys || hasModifierOrAllowedEscape else {
             return
         }
 

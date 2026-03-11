@@ -23,26 +23,26 @@ struct RetentionPolicy: Sendable, Equatable {
         switch option {
         case .thirtyMinutes:
             tiers = [
-                RetentionTier(maxAge: 5 * 60, minimumSpacing: 1),
+                RetentionTier(maxAge: 5 * 60, minimumSpacing: 0.5),
                 RetentionTier(maxAge: 15 * 60, minimumSpacing: 5),
                 RetentionTier(maxAge: option.duration, minimumSpacing: 15),
                 RetentionTier(maxAge: maximumAge, minimumSpacing: 30),
             ]
         case .twoHours:
             tiers = [
-                RetentionTier(maxAge: 5 * 60, minimumSpacing: 1),
+                RetentionTier(maxAge: 5 * 60, minimumSpacing: 0.5),
                 RetentionTier(maxAge: 15 * 60, minimumSpacing: 5),
                 RetentionTier(maxAge: maximumAge, minimumSpacing: 20),
             ]
         case .eightHours:
             tiers = [
-                RetentionTier(maxAge: 5 * 60, minimumSpacing: 1),
+                RetentionTier(maxAge: 5 * 60, minimumSpacing: 0.5),
                 RetentionTier(maxAge: 15 * 60, minimumSpacing: 5),
                 RetentionTier(maxAge: maximumAge, minimumSpacing: 25),
             ]
         case .twentyFourHours:
             tiers = [
-                RetentionTier(maxAge: 5 * 60, minimumSpacing: 1),
+                RetentionTier(maxAge: 5 * 60, minimumSpacing: 0.5),
                 RetentionTier(maxAge: 15 * 60, minimumSpacing: 5),
                 RetentionTier(maxAge: maximumAge, minimumSpacing: 30),
             ]
@@ -68,7 +68,7 @@ final class RetentionManager {
         var toKeep = Set<UUID>()
         var lastKeptTime: [Int: Date] = [:]
 
-        for frame in frames.sorted(by: { $0.timestamp < $1.timestamp }) {
+        for frame in frames {
             let age = currentTime.timeIntervalSince(frame.timestamp)
 
             guard age <= policy.maximumAge else {

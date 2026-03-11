@@ -63,7 +63,6 @@ struct SettingsView: View {
                     KeyboardShortcutRecorder(
                         keyCode: $overlayDismissKeyCode,
                         modifiers: $overlayDismissModifiers,
-                        allowsBareKeys: true,
                         allowsEscapeShortcut: true,
                         placeholder: "Press key"
                     )
