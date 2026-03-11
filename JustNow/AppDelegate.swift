@@ -86,6 +86,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     private var thermalObserver: NSObjectProtocol?
     private var inputEventMonitor: Any?
     private var lastAppliedPolicy: CapturePolicy?
+    private var lastAppliedRetentionPolicy: RetentionPolicy?
     private var lastUserActivityUpdate: Date = .distantPast
     private var isUserPaused = false
     private var wasCapturingBeforeOverlay = false
@@ -262,8 +263,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         Task { @MainActor in
             // Initialize frame buffer (loads persisted frames from disk)
             do {
-                let buffer = try await FrameBuffer(retentionPolicy: currentRetentionPolicy())
+                let retentionPolicy = currentRetentionPolicy()
+                let buffer = try await FrameBuffer(retentionPolicy: retentionPolicy)
                 frameBuffer = buffer
+                lastAppliedRetentionPolicy = retentionPolicy
                 settingsContext.frameBuffer = buffer
 
                 let loadedCount = buffer.frameCount
@@ -335,9 +338,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         ) { [weak self] _ in
             Task { @MainActor in
                 self?.updateCapturePolicy()
-                if let self {
-                    await self.frameBuffer?.updateRetentionPolicy(self.currentRetentionPolicy())
-                }
+                await self?.updateRetentionPolicyIfNeeded()
             }
         }
 
@@ -705,6 +706,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
                 appNapPreventer.stopActivity()
             }
         }
+    }
+
+    private func updateRetentionPolicyIfNeeded() async {
+        guard let frameBuffer else { return }
+        let retentionPolicy = currentRetentionPolicy()
+        guard retentionPolicy != lastAppliedRetentionPolicy else { return }
+        lastAppliedRetentionPolicy = retentionPolicy
+        await frameBuffer.updateRetentionPolicy(retentionPolicy)
     }
 
     private func currentRetentionPolicy() -> RetentionPolicy {

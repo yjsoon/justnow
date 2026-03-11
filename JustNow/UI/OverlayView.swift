@@ -295,38 +295,53 @@ class OverlayViewModel {
     }
 
     func moveLeft() {
+        guard ensureDisplayedSelection() else { return }
         if selectedIndex > 0 {
             selectedIndex -= 1
         }
     }
 
     func moveRight() {
+        guard ensureDisplayedSelection() else { return }
         if selectedIndex < displayedFrameCount - 1 {
             selectedIndex += 1
         }
     }
 
     func jumpLeft() {
+        guard ensureDisplayedSelection() else { return }
         selectedIndex = max(0, selectedIndex - 10)
     }
 
     func jumpRight() {
+        guard ensureDisplayedSelection() else { return }
         selectedIndex = min(displayedFrameCount - 1, selectedIndex + 10)
     }
 
     func goToStart() {
+        guard ensureDisplayedSelection() else { return }
         selectedIndex = 0
     }
 
     func goToEnd() {
+        guard ensureDisplayedSelection() else { return }
         selectedIndex = max(0, displayedFrameCount - 1)
     }
 
     func scrollBy(_ delta: CGFloat) {
-        guard displayedFrameCount > 0 else { return }
+        guard ensureDisplayedSelection() else { return }
         let step = delta > 0 ? -1 : 1
         let newIndex = selectedIndex + step
         selectedIndex = max(0, min(displayedFrameCount - 1, newIndex))
+    }
+
+    private func ensureDisplayedSelection() -> Bool {
+        guard displayedFrameCount > 0 else {
+            selectedIndex = 0
+            return false
+        }
+        selectedIndex = max(0, min(displayedFrameCount - 1, selectedIndex))
+        return true
     }
 }
 
