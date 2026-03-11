@@ -78,9 +78,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
     @AppStorage("overlayDismissKeyCode") private var overlayDismissKeyCode: Int = 53
     @AppStorage("overlayDismissModifiers") private var overlayDismissModifiers: Int = 0
-    @AppStorage("hasRequestedScreenRecordingPermission")
-    private var hasRequestedScreenRecordingPermission = false
-
     private var capturePolicyTimer: Timer?
     private var userDefaultsObserver: NSObjectProtocol?
     private var thermalObserver: NSObjectProtocol?
@@ -97,7 +94,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     private var didRequestScreenRecordingPermissionThisLaunch = false
     private var didShowPermissionAlertThisLaunch = false
     private var didShowPermissionRestartAlertThisLaunch = false
-    private var permissionPromptFollowUpTask: Task<Void, Never>?
+    private var isAwaitingPermissionPromptResolution = false
+    private var didDeactivateForPermissionPromptThisLaunch = false
 
     private let idleThreshold: TimeInterval = 60
     private let inputPolicyUpdateInterval: TimeInterval = 1
@@ -141,6 +139,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         static let frameCount = 100
         static let captureStatus = 101
         static let pauseToggle = 102
+        static let permissionHelp = 103
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -158,7 +157,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         appNapPreventer.stopActivity()
         capturePolicyTimer?.invalidate()
         idleTransitionTimer?.invalidate()
-        permissionPromptFollowUpTask?.cancel()
         if let observer = userDefaultsObserver {
             NotificationCenter.default.removeObserver(observer)
         }
@@ -171,6 +169,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         Task { @MainActor in
             await frameBuffer?.flushCaches()
         }
+    }
+
+    func applicationDidResignActive(_ notification: Notification) {
+        guard isAwaitingPermissionPromptResolution else { return }
+        didDeactivateForPermissionPromptThisLaunch = true
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        handlePendingPermissionPromptResolutionIfNeeded()
     }
 
     // MARK: - Setup
@@ -202,6 +209,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         captureStatusItem.tag = MenuItemTag.captureStatus
         captureStatusItem.isEnabled = false
         menu.addItem(captureStatusItem)
+
+        let permissionHelpItem = NSMenuItem(
+            title: "Screen Recording Help…",
+            action: #selector(showScreenRecordingHelp),
+            keyEquivalent: ""
+        )
+        permissionHelpItem.tag = MenuItemTag.permissionHelp
+        permissionHelpItem.target = self
+        permissionHelpItem.isHidden = true
+        menu.addItem(permissionHelpItem)
 
         menu.addItem(NSMenuItem.separator())
 
@@ -679,11 +696,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         NSApp.terminate(nil)
     }
 
+    @objc private func showScreenRecordingHelp() {
+        showPermissionAlert(force: true)
+    }
+
     // MARK: - NSMenuDelegate
 
     func menuWillOpen(_ menu: NSMenu) {
         updateFrameCountMenuItem()
         updatePauseMenuItem()
+        updatePermissionHelpMenuItem()
     }
 
     // MARK: - Helpers
@@ -903,63 +925,48 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             return .granted
         }
 
-        if hasRequestedScreenRecordingPermission {
-            return .deniedPreviously
-        }
-
         guard !didRequestScreenRecordingPermissionThisLaunch else {
             return .deniedPreviously
         }
 
         didRequestScreenRecordingPermissionThisLaunch = true
-        hasRequestedScreenRecordingPermission = true
         if ScreenCaptureManager.requestScreenRecordingPermission() {
             return .granted
         }
 
-        schedulePermissionPromptFollowUp()
+        isAwaitingPermissionPromptResolution = true
+        didDeactivateForPermissionPromptThisLaunch = false
         return .requestedThisLaunch
     }
 
-    private func schedulePermissionPromptFollowUp() {
-        permissionPromptFollowUpTask?.cancel()
-        permissionPromptFollowUpTask = Task { @MainActor [weak self] in
-            guard let self else { return }
+    private func handlePendingPermissionPromptResolutionIfNeeded() {
+        guard isAwaitingPermissionPromptResolution else { return }
 
-            if NSApp.isActive {
-                try? await Task.sleep(for: .milliseconds(400))
-                guard !Task.isCancelled else { return }
-                guard didRequestScreenRecordingPermissionThisLaunch else { return }
-                handlePermissionPromptResolution()
-                return
-            }
-
-            let becameActiveNotifications = NotificationCenter.default.notifications(
-                named: NSApplication.didBecomeActiveNotification,
-                object: NSApp
-            )
-
-            for await _ in becameActiveNotifications {
-                guard !Task.isCancelled else { return }
-                guard didRequestScreenRecordingPermissionThisLaunch else { return }
-                handlePermissionPromptResolution()
-                return
-            }
-        }
-    }
-
-    private func handlePermissionPromptResolution() {
         if ScreenCaptureManager.hasScreenRecordingPermission() {
+            isAwaitingPermissionPromptResolution = false
             updateCaptureStatus("Restart Required")
             showPermissionRestartAlert()
-        } else {
-            updateCaptureStatus("No Permission")
-            showPermissionAlert()
+            return
         }
+
+        guard didDeactivateForPermissionPromptThisLaunch else { return }
+
+        isAwaitingPermissionPromptResolution = false
+        updateCaptureStatus("No Permission")
+        showPermissionAlert()
     }
 
-    private func showPermissionAlert() {
-        guard !didShowPermissionAlertThisLaunch else { return }
+    private func updatePermissionHelpMenuItem() {
+        guard let menu = statusItem.menu,
+              let item = menu.item(withTag: MenuItemTag.permissionHelp) else { return }
+
+        let needsPermissionHelp = !ScreenCaptureManager.hasScreenRecordingPermission()
+        item.isHidden = !needsPermissionHelp
+        item.isEnabled = needsPermissionHelp
+    }
+
+    private func showPermissionAlert(force: Bool = false) {
+        guard force || !didShowPermissionAlertThisLaunch else { return }
         didShowPermissionAlertThisLaunch = true
 
         let alert = NSAlert()
