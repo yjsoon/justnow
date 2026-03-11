@@ -4,6 +4,17 @@ All notable changes to JustNow will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-03-12
+
+### Added
+- Added recent timeline window controls so the overlay can focus on a shorter slice of recent capture history.
+- Added an in-app Screen Recording help entry in the menu bar for reopening the recovery guidance when permission setup needs manual attention.
+
+### Changed
+- Improved Screen Recording permission recovery for machines switching from older dev-signed builds to Developer ID or notarised builds.
+- Refined the launch-time permission flow so JustNow avoids stacking its own guidance on top of the macOS Screen Recording prompt.
+- Cleaned up the Settings window title and local worktree build handling.
+
 ## [0.1.2] - 2026-03-10
 
 ### Added
