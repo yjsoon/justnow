@@ -14,6 +14,7 @@ enum RecentTimelineWindow: Double, CaseIterable, Identifiable {
     case oneMinute = 60
     case twoMinutes = 120
     case fiveMinutes = 300
+    case tenMinutes = 600
 
     static let defaultValue: Self = .fiveMinutes
 
@@ -29,6 +30,8 @@ enum RecentTimelineWindow: Double, CaseIterable, Identifiable {
             return "2 min"
         case .fiveMinutes:
             return "5 min"
+        case .tenMinutes:
+            return "10 min"
         }
     }
 
@@ -50,8 +53,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         userDriverDelegate: nil
     )
     private var appNapPreventer = AppNapPreventer()
+    private let launchAtLoginManager = LaunchAtLoginManager()
     private var settingsWindow: NSWindow?
     private lazy var settingsContext = SettingsContext(
+        launchAtLoginManager: launchAtLoginManager,
         updater: updaterController.updater,
         onCheckForUpdates: { [weak self] in
             self?.checkForUpdates(nil)
@@ -62,6 +67,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     )
 
     @AppStorage("captureInterval") private var captureInterval: Double = 0.5
+    @AppStorage("rewindHistorySeconds") private var rewindHistorySeconds: Double = RewindHistoryOption.defaultValue.rawValue
     @AppStorage("recentTimelineWindowSeconds")
     private var recentTimelineWindowSeconds: Double = RecentTimelineWindow.defaultValue.rawValue
     @AppStorage("reduceCaptureOnBattery") private var reduceCaptureOnBattery: Bool = true
@@ -70,6 +76,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     @AppStorage("backgroundSearchIndexingEnabled") private var backgroundSearchIndexingEnabled: Bool = true
     @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 38  // J key
     @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
+    @AppStorage("overlayDismissKeyCode") private var overlayDismissKeyCode: Int = 53
+    @AppStorage("overlayDismissModifiers") private var overlayDismissModifiers: Int = 0
 
     private var capturePolicyTimer: Timer?
     private var userDefaultsObserver: NSObjectProtocol?
@@ -249,7 +257,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         Task { @MainActor in
             // Initialize frame buffer (loads persisted frames from disk)
             do {
-                let buffer = try await FrameBuffer()
+                let buffer = try await FrameBuffer(retentionPolicy: currentRetentionPolicy())
                 frameBuffer = buffer
                 settingsContext.frameBuffer = buffer
 
@@ -322,6 +330,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         ) { [weak self] _ in
             Task { @MainActor in
                 self?.updateCapturePolicy()
+                if let self {
+                    await self.frameBuffer?.updateRetentionPolicy(self.currentRetentionPolicy())
+                }
             }
         }
 
@@ -570,13 +581,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             if overlayController == nil {
                 overlayController = OverlayWindowController(
                     frameBuffer: frameBuffer,
+                    dismissShortcutKeyCode: overlayDismissKeyCode,
+                    dismissShortcutModifiers: overlayDismissModifiers,
                     onVisibilityChanged: { [weak self] isVisible in
                         self?.handleOverlayVisibilityChanged(isVisible: isVisible)
                     }
                 )
+            } else {
+                overlayController?.updateDismissShortcut(
+                    keyCode: overlayDismissKeyCode,
+                    modifiers: overlayDismissModifiers
+                )
             }
             let recentTimelineWindow = RecentTimelineWindow.resolved(from: recentTimelineWindowSeconds)
-            overlayController?.showOverlay(recentTimelineWindow: recentTimelineWindow.timeInterval)
+            let rewindHistoryOption = RewindHistoryOption.resolved(from: rewindHistorySeconds)
+            overlayController?.showOverlay(
+                recentTimelineWindow: recentTimelineWindow.timeInterval,
+                rewindHistoryOption: rewindHistoryOption
+            )
         }
     }
 
@@ -678,6 +700,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
                 appNapPreventer.stopActivity()
             }
         }
+    }
+
+    private func currentRetentionPolicy() -> RetentionPolicy {
+        RewindHistoryOption.resolved(from: rewindHistorySeconds).retentionPolicy
     }
 
     private func computeCapturePolicy() -> CapturePolicy {

@@ -11,6 +11,10 @@ struct KeyboardShortcutRecorder: View {
     @Binding var keyCode: Int
     @Binding var modifiers: Int
 
+    var allowsBareKeys: Bool = false
+    var allowsEscapeShortcut: Bool = false
+    var placeholder: String = "Click to set"
+
     @State private var isRecording = false
     @FocusState private var isFocused: Bool
 
@@ -19,7 +23,10 @@ struct KeyboardShortcutRecorder: View {
             RecorderField(
                 keyCode: $keyCode,
                 modifiers: $modifiers,
-                isRecording: $isRecording
+                isRecording: $isRecording,
+                allowsBareKeys: allowsBareKeys,
+                allowsEscapeShortcut: allowsEscapeShortcut,
+                placeholder: placeholder
             )
             .frame(minWidth: 120, maxWidth: 200)
             .frame(height: 24)
@@ -51,13 +58,23 @@ struct RecorderField: NSViewRepresentable {
     @Binding var modifiers: Int
     @Binding var isRecording: Bool
 
+    var allowsBareKeys: Bool
+    var allowsEscapeShortcut: Bool
+    var placeholder: String
+
     func makeNSView(context: Context) -> RecorderNSView {
         let view = RecorderNSView()
         view.delegate = context.coordinator
+        view.allowsBareKeys = allowsBareKeys
+        view.allowsEscapeShortcut = allowsEscapeShortcut
+        view.placeholder = placeholder
         return view
     }
 
     func updateNSView(_ nsView: RecorderNSView, context: Context) {
+        nsView.allowsBareKeys = allowsBareKeys
+        nsView.allowsEscapeShortcut = allowsEscapeShortcut
+        nsView.placeholder = placeholder
         nsView.updateDisplay(keyCode: keyCode, modifiers: modifiers, isRecording: isRecording)
     }
 
@@ -98,6 +115,10 @@ protocol RecorderNSViewDelegate: AnyObject {
 
 class RecorderNSView: NSView {
     weak var delegate: RecorderNSViewDelegate?
+
+    var allowsBareKeys = false
+    var allowsEscapeShortcut = false
+    var placeholder = "Click to set"
 
     private var isRecording = false
     private var currentKeyCode: Int = -1
@@ -148,16 +169,18 @@ class RecorderNSView: NSView {
             return
         }
 
-        // Escape cancels recording
-        if event.keyCode == UInt16(kVK_Escape) {
+        // Escape cancels recording unless this recorder explicitly allows binding it.
+        if event.keyCode == UInt16(kVK_Escape) && !allowsEscapeShortcut {
             stopRecording()
             return
         }
 
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
-        // Require at least one modifier (cmd, opt, ctrl, or shift)
-        guard mods.contains(.command) || mods.contains(.option) || mods.contains(.control) || mods.contains(.shift) else {
+        let hasModifier = mods.contains(.command) || mods.contains(.option) || mods.contains(.control) || mods.contains(.shift)
+
+        // Require at least one modifier unless bare keys are explicitly allowed.
+        guard allowsBareKeys || hasModifier else {
             return
         }
 
@@ -226,7 +249,7 @@ class RecorderNSView: NSView {
 
     private func updateDisplayText() {
         if currentKeyCode == -1 {
-            textField.stringValue = "Click to set"
+            textField.stringValue = placeholder
             textField.textColor = .secondaryLabelColor
         } else {
             let mods = NSEvent.ModifierFlags(rawValue: UInt(currentModifiers))

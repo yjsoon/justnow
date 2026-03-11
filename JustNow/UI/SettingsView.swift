@@ -8,6 +8,8 @@ import Sparkle
 
 struct SettingsView: View {
     @AppStorage("captureInterval") private var captureInterval: Double = 0.5
+    @AppStorage("rewindHistorySeconds")
+    private var rewindHistorySeconds: Double = RewindHistoryOption.defaultValue.rawValue
     @AppStorage("recentTimelineWindowSeconds")
     private var recentTimelineWindowSeconds: Double = RecentTimelineWindow.defaultValue.rawValue
     @AppStorage("reduceCaptureOnBattery") private var reduceCaptureOnBattery: Bool = true
@@ -16,6 +18,8 @@ struct SettingsView: View {
     @AppStorage("backgroundSearchIndexingEnabled") private var backgroundSearchIndexingEnabled: Bool = true
     @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 38  // J key
     @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
+    @AppStorage("overlayDismissKeyCode") private var overlayDismissKeyCode: Int = 53
+    @AppStorage("overlayDismissModifiers") private var overlayDismissModifiers: Int = 0
 
     var context: SettingsContext = SettingsContext()
 
@@ -27,38 +31,102 @@ struct SettingsView: View {
     @State private var automaticallyChecksForUpdates = false
     @State private var automaticallyDownloadsUpdates = false
     @State private var allowsAutomaticUpdates = false
+    @State private var launchAtLoginEnabled = false
+    @State private var launchAtLoginAlertMessage: String?
 
     var body: some View {
         Form {
             Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Capture interval: \(String(format: "%.1f", captureInterval))s")
-                    Slider(value: $captureInterval, in: 0.5...5.0, step: 0.5)
+                Toggle("Launch on startup", isOn: launchAtLoginBinding)
+                    .disabled(!context.canConfigureLaunchAtLogin)
+
+                Text("If macOS asks for approval, enable JustNow in System Settings > General > Login Items.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack {
+                    Text("Show")
+                    Spacer()
+                    KeyboardShortcutRecorder(
+                        keyCode: $shortcutKeyCode,
+                        modifiers: $shortcutModifiers
+                    )
+                    .frame(maxWidth: 240)
+                    .onChange(of: shortcutKeyCode) { _, _ in context.notifyShortcutChanged() }
+                    .onChange(of: shortcutModifiers) { _, _ in context.notifyShortcutChanged() }
                 }
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Retention: up to 24 hours")
-                    Text("• Last 5m: every frame\n• 5–15m: every 5th\n• 15m–24h: every 30th")
+                HStack {
+                    Text("Hide")
+                    Spacer()
+                    KeyboardShortcutRecorder(
+                        keyCode: $overlayDismissKeyCode,
+                        modifiers: $overlayDismissModifiers,
+                        allowsBareKeys: true,
+                        allowsEscapeShortcut: true,
+                        placeholder: "Press key"
+                    )
+                    .frame(maxWidth: 240)
+                }
+            } header: {
+                Text("General")
+            }
+
+            Section {
+                LabeledContent {
+                    HStack(spacing: 8) {
+                        Slider(value: $captureInterval, in: 0.5...5.0, step: 0.5)
+                            .frame(width: 180)
+
+                        Text("\(captureInterval, specifier: "%.1f")s")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                } label: {
+                    Text("Capture interval")
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    LabeledContent {
+                        Picker("", selection: $rewindHistorySeconds) {
+                            ForEach(RewindHistoryOption.allCases) { option in
+                                Text(option.settingsLabel).tag(option.rawValue)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                    } label: {
+                        Text("Rewind history")
+                    }
+
+                    Text("Recent history stays at full detail. Older history is compacted automatically.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Newest timeline detail")
-                    Picker(selection: $recentTimelineWindowSeconds) {
-                        ForEach(RecentTimelineWindow.allCases) { window in
-                            Text(window.label).tag(window.rawValue)
+                    LabeledContent {
+                        Picker(selection: $recentTimelineWindowSeconds) {
+                            ForEach(RecentTimelineWindow.allCases) { window in
+                                Text(window.label).tag(window.rawValue)
+                            }
+                        } label: {
+                            EmptyView()
                         }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .accessibilityLabel("Newest timeline detail")
+                        .frame(width: 220)
                     } label: {
-                        EmptyView()
+                        Text("Newest timeline detail")
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .accessibilityLabel("Newest timeline detail")
 
                     Text("Keep every stored frame in the newest window, then collapse visually similar older history.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             } header: {
                 Text("Capture")
@@ -91,17 +159,20 @@ struct SettingsView: View {
                 Text("When enabled, JustNow can lower image quality and throttle background work on battery power, thermal pressure, or extended idle time. Capture cadence only changes if the setting below is off.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 Toggle("Keep configured capture cadence on battery", isOn: $keepConfiguredCaptureCadenceOnBattery)
                     .disabled(!reduceCaptureOnBattery)
                 Text("Preserves the interval you chose when unplugged or in Low Power Mode. Battery savings come from lower image quality and background throttling instead.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 Toggle("Background OCR indexing for search", isOn: $backgroundSearchIndexingEnabled)
                 Text("Indexes recent frames in the background so searches return faster. Automatically throttled on battery, low power mode, and thermal pressure.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             } header: {
                 Text("Battery")
             }
@@ -175,26 +246,9 @@ struct SettingsView: View {
                 Text("JustNow uses Sparkle to deliver signed updates from the public appcast at justnow.tk.sg.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             } header: {
                 Text("Software Update")
-            }
-
-            Section {
-                HStack {
-                    Text("Show Timeline")
-                    Spacer()
-                    KeyboardShortcutRecorder(
-                        keyCode: $shortcutKeyCode,
-                        modifiers: $shortcutModifiers
-                    )
-                    .onChange(of: shortcutKeyCode) { _, _ in context.notifyShortcutChanged() }
-                    .onChange(of: shortcutModifiers) { _, _ in context.notifyShortcutChanged() }
-                }
-                Text("Press **Escape** to dismiss the overlay")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } header: {
-                Text("Keyboard Shortcut")
             }
         }
         .formStyle(.grouped)
@@ -211,6 +265,11 @@ struct SettingsView: View {
                 syncUpdaterState()
             }
         }
+        .task(id: launchAtLoginIdentity) {
+            await MainActor.run {
+                syncLaunchAtLoginState()
+            }
+        }
         .task {
             await refreshTelemetryLoop()
         }
@@ -224,6 +283,13 @@ struct SettingsView: View {
             }
         } message: {
             Text("This will delete all captured frames. This cannot be undone.")
+        }
+        .alert("Launch on startup", isPresented: launchAtLoginAlertIsPresented) {
+            Button("OK", role: .cancel) {
+                launchAtLoginAlertMessage = nil
+            }
+        } message: {
+            Text(launchAtLoginAlertMessage ?? "")
         }
     }
 
@@ -243,6 +309,10 @@ struct SettingsView: View {
 
     private var updaterIdentity: ObjectIdentifier? {
         context.updater.map(ObjectIdentifier.init)
+    }
+
+    private var launchAtLoginIdentity: ObjectIdentifier? {
+        context.launchAtLoginManager.map(ObjectIdentifier.init)
     }
 
     private func refreshTelemetryLoop() async {
@@ -302,6 +372,43 @@ struct SettingsView: View {
         automaticallyChecksForUpdates = updater.automaticallyChecksForUpdates
         automaticallyDownloadsUpdates = updater.automaticallyDownloadsUpdates
         allowsAutomaticUpdates = updater.allowsAutomaticUpdates
+    }
+
+    private func syncLaunchAtLoginState() {
+        launchAtLoginEnabled = context.launchAtLoginEnabled()
+    }
+
+    private var launchAtLoginBinding: Binding<Bool> {
+        Binding(
+            get: { launchAtLoginEnabled },
+            set: { newValue in
+                let previousValue = launchAtLoginEnabled
+                launchAtLoginEnabled = newValue
+
+                do {
+                    let result = try context.setLaunchAtLoginEnabled(newValue)
+                    syncLaunchAtLoginState()
+
+                    if result == .requiresApproval {
+                        launchAtLoginAlertMessage = "macOS needs approval before JustNow can launch at startup. Enable JustNow in System Settings > General > Login Items."
+                    }
+                } catch {
+                    launchAtLoginEnabled = previousValue
+                    launchAtLoginAlertMessage = error.localizedDescription
+                }
+            }
+        )
+    }
+
+    private var launchAtLoginAlertIsPresented: Binding<Bool> {
+        Binding(
+            get: { launchAtLoginAlertMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    launchAtLoginAlertMessage = nil
+                }
+            }
+        )
     }
 }
 
