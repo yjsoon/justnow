@@ -44,7 +44,7 @@ struct OCRIndexingPolicy: Sendable, Equatable {
 class FrameBuffer {
     private var frames: [StoredFrame] = []
     private let frameStore: FrameStore
-    private let retentionManager = RetentionManager()
+    private let retentionManager: RetentionManager
     private var blackFrameFilterUntil: Date?
     private var lastStoredHash: UInt64?
     private var lastStoredTimestamp: Date?
@@ -67,8 +67,9 @@ class FrameBuffer {
     // OCR text cache for faster subsequent searches
     let textCache = TextCache()
 
-    init() async throws {
+    init(retentionPolicy: RetentionPolicy = .default24Hours) async throws {
         self.frameStore = try FrameStore()
+        self.retentionManager = RetentionManager(policy: retentionPolicy)
         thumbnailCache.countLimit = 100
 
         // Load persisted frames
@@ -152,14 +153,26 @@ class FrameBuffer {
 
     /// Get frames with near-duplicates removed for smoother browsing.
     /// The newest window keeps all stored frames so keyboard navigation tracks recent capture cadence.
-    func getFilteredFrames(hashThreshold: Int = 3, recentWindow: TimeInterval = 300) -> [StoredFrame] {
+    func getFilteredFrames(
+        hashThreshold: Int = 3,
+        recentWindow: TimeInterval = 300,
+        maximumAge: TimeInterval? = nil
+    ) -> [StoredFrame] {
         guard !frames.isEmpty else { return [] }
 
         let now = Date()
+        let candidateFrames: [StoredFrame]
+        if let maximumAge {
+            let cutoff = now.addingTimeInterval(-maximumAge)
+            candidateFrames = frames.filter { $0.timestamp >= cutoff }
+        } else {
+            candidateFrames = frames
+        }
+
         var filtered: [StoredFrame] = []
         var lastHash: UInt64?
 
-        for frame in frames {
+        for frame in candidateFrames {
             let age = now.timeIntervalSince(frame.timestamp)
 
             // Keep every stored frame in the recent window.
@@ -258,6 +271,11 @@ class FrameBuffer {
         startBackgroundOCRIndexingIfNeeded()
     }
 
+    func updateRetentionPolicy(_ policy: RetentionPolicy) async {
+        retentionManager.updatePolicy(policy)
+        await prune(force: true)
+    }
+
     func flushCaches() async {
         await frameStore.flushManifest()
         await textCache.save()
@@ -283,10 +301,16 @@ class FrameBuffer {
     }
 
     private func pruneIfNeeded() async {
+        await prune(force: false)
+    }
+
+    private func prune(force: Bool) async {
         guard !isPruningPaused else { return }
 
         let now = Date()
-        guard now.timeIntervalSince(lastPruneCheck) >= pruneInterval else { return }
+        if !force {
+            guard now.timeIntervalSince(lastPruneCheck) >= pruneInterval else { return }
+        }
         lastPruneCheck = now
 
         let toPrune = retentionManager.framesToPrune(frames: frames, currentTime: now)

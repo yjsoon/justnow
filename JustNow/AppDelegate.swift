@@ -14,6 +14,7 @@ enum RecentTimelineWindow: Double, CaseIterable, Identifiable {
     case oneMinute = 60
     case twoMinutes = 120
     case fiveMinutes = 300
+    case tenMinutes = 600
 
     static let defaultValue: Self = .fiveMinutes
 
@@ -29,6 +30,8 @@ enum RecentTimelineWindow: Double, CaseIterable, Identifiable {
             return "2 min"
         case .fiveMinutes:
             return "5 min"
+        case .tenMinutes:
+            return "10 min"
         }
     }
 
@@ -50,8 +53,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         userDriverDelegate: nil
     )
     private var appNapPreventer = AppNapPreventer()
+    private let launchAtLoginManager = LaunchAtLoginManager()
     private var settingsWindow: NSWindow?
     private lazy var settingsContext = SettingsContext(
+        launchAtLoginManager: launchAtLoginManager,
         updater: updaterController.updater,
         onCheckForUpdates: { [weak self] in
             self?.checkForUpdates(nil)
@@ -62,6 +67,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     )
 
     @AppStorage("captureInterval") private var captureInterval: Double = 0.5
+    @AppStorage("rewindHistorySeconds") private var rewindHistorySeconds: Double = RewindHistoryOption.defaultValue.rawValue
     @AppStorage("recentTimelineWindowSeconds")
     private var recentTimelineWindowSeconds: Double = RecentTimelineWindow.defaultValue.rawValue
     @AppStorage("reduceCaptureOnBattery") private var reduceCaptureOnBattery: Bool = true
@@ -70,12 +76,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     @AppStorage("backgroundSearchIndexingEnabled") private var backgroundSearchIndexingEnabled: Bool = true
     @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 38  // J key
     @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
+    @AppStorage("overlayDismissKeyCode") private var overlayDismissKeyCode: Int = 53
+    @AppStorage("overlayDismissModifiers") private var overlayDismissModifiers: Int = 0
+    @AppStorage("hasRequestedScreenRecordingPermission")
+    private var hasRequestedScreenRecordingPermission = false
 
     private var capturePolicyTimer: Timer?
     private var userDefaultsObserver: NSObjectProtocol?
     private var thermalObserver: NSObjectProtocol?
     private var inputEventMonitor: Any?
     private var lastAppliedPolicy: CapturePolicy?
+    private var lastAppliedRetentionPolicy: RetentionPolicy?
     private var lastUserActivityUpdate: Date = .distantPast
     private var isUserPaused = false
     private var wasCapturingBeforeOverlay = false
@@ -84,6 +95,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     private var isPausedForSession = false
     private var idleTransitionTimer: Timer?
     private var didRequestScreenRecordingPermissionThisLaunch = false
+    private var didShowPermissionAlertThisLaunch = false
+    private var didShowPermissionRestartAlertThisLaunch = false
+    private var permissionPromptFollowUpTask: Task<Void, Never>?
 
     private let idleThreshold: TimeInterval = 60
     private let inputPolicyUpdateInterval: TimeInterval = 1
@@ -119,7 +133,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
     private enum LaunchPermissionState {
         case granted
-        case deniedAfterSystemPrompt
+        case requestedThisLaunch
         case deniedPreviously
     }
 
@@ -144,6 +158,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         appNapPreventer.stopActivity()
         capturePolicyTimer?.invalidate()
         idleTransitionTimer?.invalidate()
+        permissionPromptFollowUpTask?.cancel()
         if let observer = userDefaultsObserver {
             NotificationCenter.default.removeObserver(observer)
         }
@@ -248,8 +263,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         Task { @MainActor in
             // Initialize frame buffer (loads persisted frames from disk)
             do {
-                let buffer = try await FrameBuffer()
+                let retentionPolicy = currentRetentionPolicy()
+                let buffer = try await FrameBuffer(retentionPolicy: retentionPolicy)
                 frameBuffer = buffer
+                lastAppliedRetentionPolicy = retentionPolicy
                 settingsContext.frameBuffer = buffer
 
                 let loadedCount = buffer.frameCount
@@ -292,8 +309,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
                     updateCaptureStatus("Error")
                     showErrorAlert(error)
                 }
-            case .deniedAfterSystemPrompt:
-                updateCaptureStatus("No Permission")
+            case .requestedThisLaunch:
+                updateCaptureStatus("Awaiting Permission")
             case .deniedPreviously:
                 updateCaptureStatus("No Permission")
                 showPermissionAlert()
@@ -321,6 +338,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         ) { [weak self] _ in
             Task { @MainActor in
                 self?.updateCapturePolicy()
+                await self?.updateRetentionPolicyIfNeeded()
             }
         }
 
@@ -569,13 +587,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             if overlayController == nil {
                 overlayController = OverlayWindowController(
                     frameBuffer: frameBuffer,
+                    dismissShortcutKeyCode: overlayDismissKeyCode,
+                    dismissShortcutModifiers: overlayDismissModifiers,
                     onVisibilityChanged: { [weak self] isVisible in
                         self?.handleOverlayVisibilityChanged(isVisible: isVisible)
                     }
                 )
+            } else {
+                overlayController?.updateDismissShortcut(
+                    keyCode: overlayDismissKeyCode,
+                    modifiers: overlayDismissModifiers
+                )
             }
             let recentTimelineWindow = RecentTimelineWindow.resolved(from: recentTimelineWindowSeconds)
-            overlayController?.showOverlay(recentTimelineWindow: recentTimelineWindow.timeInterval)
+            let rewindHistoryOption = RewindHistoryOption.resolved(from: rewindHistorySeconds)
+            overlayController?.showOverlay(
+                recentTimelineWindow: recentTimelineWindow.timeInterval,
+                rewindHistoryOption: rewindHistoryOption
+            )
         }
     }
 
@@ -677,6 +706,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
                 appNapPreventer.stopActivity()
             }
         }
+    }
+
+    private func updateRetentionPolicyIfNeeded() async {
+        guard let frameBuffer else { return }
+        let retentionPolicy = currentRetentionPolicy()
+        guard retentionPolicy != lastAppliedRetentionPolicy else { return }
+        lastAppliedRetentionPolicy = retentionPolicy
+        await frameBuffer.updateRetentionPolicy(retentionPolicy)
+    }
+
+    private func currentRetentionPolicy() -> RetentionPolicy {
+        RewindHistoryOption.resolved(from: rewindHistorySeconds).retentionPolicy
     }
 
     private func computeCapturePolicy() -> CapturePolicy {
@@ -862,20 +903,76 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             return .granted
         }
 
+        if hasRequestedScreenRecordingPermission {
+            return .deniedPreviously
+        }
+
         guard !didRequestScreenRecordingPermissionThisLaunch else {
             return .deniedPreviously
         }
 
         didRequestScreenRecordingPermissionThisLaunch = true
-        return ScreenCaptureManager.requestScreenRecordingPermission()
-            ? .granted
-            : .deniedAfterSystemPrompt
+        hasRequestedScreenRecordingPermission = true
+        if ScreenCaptureManager.requestScreenRecordingPermission() {
+            return .granted
+        }
+
+        schedulePermissionPromptFollowUp()
+        return .requestedThisLaunch
+    }
+
+    private func schedulePermissionPromptFollowUp() {
+        permissionPromptFollowUpTask?.cancel()
+        permissionPromptFollowUpTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            if NSApp.isActive {
+                try? await Task.sleep(for: .milliseconds(400))
+                guard !Task.isCancelled else { return }
+                guard didRequestScreenRecordingPermissionThisLaunch else { return }
+                handlePermissionPromptResolution()
+                return
+            }
+
+            let becameActiveNotifications = NotificationCenter.default.notifications(
+                named: NSApplication.didBecomeActiveNotification,
+                object: NSApp
+            )
+
+            for await _ in becameActiveNotifications {
+                guard !Task.isCancelled else { return }
+                guard didRequestScreenRecordingPermissionThisLaunch else { return }
+                handlePermissionPromptResolution()
+                return
+            }
+        }
+    }
+
+    private func handlePermissionPromptResolution() {
+        if ScreenCaptureManager.hasScreenRecordingPermission() {
+            updateCaptureStatus("Restart Required")
+            showPermissionRestartAlert()
+        } else {
+            updateCaptureStatus("No Permission")
+            showPermissionAlert()
+        }
     }
 
     private func showPermissionAlert() {
+        guard !didShowPermissionAlertThisLaunch else { return }
+        didShowPermissionAlertThisLaunch = true
+
         let alert = NSAlert()
         alert.messageText = "Screen Recording Permission Required"
-        alert.informativeText = "JustNow needs screen recording permission to capture your screen history.\n\nPlease grant permission in System Settings → Privacy & Security → Screen Recording, then restart the app."
+        alert.informativeText = """
+        JustNow needs Screen Recording permission to capture your screen history.
+
+        Open System Settings → Privacy & Security → Screen Recording and allow JustNow.
+
+        After enabling JustNow, quit and reopen the app once so capture can restart cleanly with the new permission.
+
+        If JustNow is already enabled there but capture still fails after a recent build, signing, or notarisation change, remove the JustNow entry from Screen Recording and relaunch once so macOS can create a fresh permission record.
+        """
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Open System Settings")
         alert.addButton(withTitle: "Quit")
@@ -886,8 +983,32 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
                 NSWorkspace.shared.open(url)
             }
+            return
         }
+
         NSApp.terminate(nil)
+    }
+
+    private func showPermissionRestartAlert() {
+        guard !didShowPermissionRestartAlertThisLaunch else { return }
+        didShowPermissionRestartAlertThisLaunch = true
+
+        let alert = NSAlert()
+        alert.messageText = "Restart JustNow to Start Capture"
+        alert.informativeText = """
+        Screen Recording is now enabled for JustNow.
+
+        Quit and reopen the app once so capture can restart cleanly with the new permission.
+        """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Quit JustNow")
+        alert.addButton(withTitle: "Later")
+
+        NSApp.activate(ignoringOtherApps: true)
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSApp.terminate(nil)
+        }
     }
 
     private func showErrorAlert(_ error: Error) {

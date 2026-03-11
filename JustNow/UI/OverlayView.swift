@@ -13,7 +13,7 @@ private let logger = Logger(subsystem: "sg.tk.JustNow", category: "OverlayView")
 enum SearchTimeScope: String, CaseIterable {
     case fiveMinutes
     case oneHour
-    case oneDay
+    case rewindHistory
     case all
 
     var label: String {
@@ -22,8 +22,8 @@ enum SearchTimeScope: String, CaseIterable {
             return "Last 5m"
         case .oneHour:
             return "Last 1h"
-        case .oneDay:
-            return "Last 24h"
+        case .rewindHistory:
+            return RewindHistoryOption.defaultValue.searchLabel
         case .all:
             return "All"
         }
@@ -35,21 +35,47 @@ enum SearchTimeScope: String, CaseIterable {
             return "5m"
         case .oneHour:
             return "1h"
-        case .oneDay:
-            return "24h"
+        case .rewindHistory:
+            return RewindHistoryOption.defaultValue.compactSearchLabel
         case .all:
             return "All"
         }
     }
 
-    func cutoff(from now: Date = Date()) -> Date? {
+    func label(using option: RewindHistoryOption) -> String {
+        switch self {
+        case .fiveMinutes:
+            return "Last 5m"
+        case .oneHour:
+            return "Last 1h"
+        case .rewindHistory:
+            return option.searchLabel
+        case .all:
+            return "All"
+        }
+    }
+
+    func compactLabel(using option: RewindHistoryOption) -> String {
+        switch self {
+        case .fiveMinutes:
+            return "5m"
+        case .oneHour:
+            return "1h"
+        case .rewindHistory:
+            return option.compactSearchLabel
+        case .all:
+            return "All"
+        }
+    }
+
+    func cutoff(using option: RewindHistoryOption, from now: Date = Date()) -> Date? {
         switch self {
         case .fiveMinutes:
             return now.addingTimeInterval(-5 * 60)
         case .oneHour:
             return now.addingTimeInterval(-60 * 60)
-        case .oneDay:
-            return now.addingTimeInterval(-24 * 60 * 60)
+        case .rewindHistory:
+            return now.addingTimeInterval(-option.duration)
         case .all:
             return nil
         }
@@ -60,8 +86,10 @@ enum SearchTimeScope: String, CaseIterable {
 @MainActor
 class OverlayViewModel {
     var selectedIndex: Int = 0
-    let frames: [StoredFrame]
+    let timelineFrames: [StoredFrame]
+    let searchableFrames: [StoredFrame]
     let frameBuffer: FrameBuffer
+    let rewindHistoryOption: RewindHistoryOption
     let timelineReferenceDate: Date
     let onDismiss: () -> Void
 
@@ -76,23 +104,31 @@ class OverlayViewModel {
 
     /// Frames to display (filtered if searching, all otherwise)
     var displayedFrames: [StoredFrame] {
-        isSearching && !searchQuery.isEmpty ? searchResults : frames
+        isSearching && !searchQuery.isEmpty ? searchResults : timelineFrames
     }
 
     var displayedFrameCount: Int {
         displayedFrames.count
     }
 
+    var hasAnyFrames: Bool {
+        !timelineFrames.isEmpty || !searchableFrames.isEmpty
+    }
+
     init(
-        frames: [StoredFrame],
+        timelineFrames: [StoredFrame],
+        searchableFrames: [StoredFrame],
         frameBuffer: FrameBuffer,
+        rewindHistoryOption: RewindHistoryOption,
         onDismiss: @escaping () -> Void
     ) {
-        self.frames = frames
+        self.timelineFrames = timelineFrames
+        self.searchableFrames = searchableFrames
         self.frameBuffer = frameBuffer
+        self.rewindHistoryOption = rewindHistoryOption
         self.timelineReferenceDate = Date()
         self.onDismiss = onDismiss
-        self.selectedIndex = max(0, frames.count - 1)
+        self.selectedIndex = max(0, timelineFrames.count - 1)
     }
 
     func toggleSearch() {
@@ -111,7 +147,7 @@ class OverlayViewModel {
         isSearchInProgress = false
         searchProgress = 0
         // Reset to end of full frames
-        selectedIndex = max(0, frames.count - 1)
+        selectedIndex = max(0, timelineFrames.count - 1)
     }
 
     func performSearch() {
@@ -123,8 +159,8 @@ class OverlayViewModel {
             return
         }
 
-        logger.info("Starting search for: '\(self.searchQuery)' in \(self.frames.count) frames")
-        print("[JustNow] Starting search for: '\(searchQuery)' in \(frames.count) frames")
+        logger.info("Starting search for: '\(self.searchQuery)' in \(self.searchableFrames.count) frames")
+        print("[JustNow] Starting search for: '\(searchQuery)' in \(searchableFrames.count) frames")
 
         isSearchInProgress = true
         searchProgress = 0
@@ -132,10 +168,10 @@ class OverlayViewModel {
 
         let query = searchQuery // Capture locally for task
         let scope = searchTimeScope
-        let searchCutoff = scope.cutoff()
+        let searchCutoff = scope.cutoff(using: rewindHistoryOption)
         let framesToSearch = searchCutoff.map { cutoff in
-            frames.filter { $0.timestamp >= cutoff }
-        } ?? frames
+            searchableFrames.filter { $0.timestamp >= cutoff }
+        } ?? searchableFrames
         let buffer = frameBuffer
         let cache = frameBuffer.textCache
         let searchStartedAt = Date()
@@ -259,38 +295,53 @@ class OverlayViewModel {
     }
 
     func moveLeft() {
+        guard ensureDisplayedSelection() else { return }
         if selectedIndex > 0 {
             selectedIndex -= 1
         }
     }
 
     func moveRight() {
+        guard ensureDisplayedSelection() else { return }
         if selectedIndex < displayedFrameCount - 1 {
             selectedIndex += 1
         }
     }
 
     func jumpLeft() {
+        guard ensureDisplayedSelection() else { return }
         selectedIndex = max(0, selectedIndex - 10)
     }
 
     func jumpRight() {
+        guard ensureDisplayedSelection() else { return }
         selectedIndex = min(displayedFrameCount - 1, selectedIndex + 10)
     }
 
     func goToStart() {
+        guard ensureDisplayedSelection() else { return }
         selectedIndex = 0
     }
 
     func goToEnd() {
+        guard ensureDisplayedSelection() else { return }
         selectedIndex = max(0, displayedFrameCount - 1)
     }
 
     func scrollBy(_ delta: CGFloat) {
-        guard displayedFrameCount > 0 else { return }
+        guard ensureDisplayedSelection() else { return }
         let step = delta > 0 ? -1 : 1
         let newIndex = selectedIndex + step
         selectedIndex = max(0, min(displayedFrameCount - 1, newIndex))
+    }
+
+    private func ensureDisplayedSelection() -> Bool {
+        guard displayedFrameCount > 0 else {
+            selectedIndex = 0
+            return false
+        }
+        selectedIndex = max(0, min(displayedFrameCount - 1, selectedIndex))
+        return true
     }
 }
 
@@ -312,7 +363,7 @@ struct OverlayView: View {
 
             CompatGlassEffectContainer(spacing: 40) {
                 ZStack {
-                    if viewModel.frames.isEmpty {
+                    if !viewModel.hasAnyFrames {
                         EmptyStateView()
                     } else {
                         ContentAreaView(viewModel: viewModel)
@@ -364,6 +415,18 @@ struct ContentAreaView: View {
                 FramePreviewView(frame: frame, frameBuffer: viewModel.frameBuffer)
                     .padding(.horizontal, 60)
                     .padding(.top, viewModel.isSearching ? 20 : 40)
+            } else if !viewModel.isSearching && viewModel.timelineFrames.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "clock.badge.exclamationmark")
+                        .font(.system(size: 40))
+                        .foregroundStyle(.white.opacity(0.4))
+                    Text("No frames in this rewind window")
+                        .font(.headline)
+                        .foregroundStyle(.white.opacity(0.6))
+                    Text("Search can still look through the last hour.")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.45))
+                }
             } else if viewModel.isSearching && displayedFrames.isEmpty && !viewModel.isSearchInProgress {
                 // No results state
                 VStack(spacing: 12) {
@@ -479,15 +542,15 @@ struct SearchBarView: View {
                         }
                     } label: {
                         if scope == viewModel.searchTimeScope {
-                            Label(scope.label, systemImage: "checkmark")
+                            Label(scope.label(using: viewModel.rewindHistoryOption), systemImage: "checkmark")
                         } else {
-                            Text(scope.label)
+                            Text(scope.label(using: viewModel.rewindHistoryOption))
                         }
                     }
                 }
             } label: {
                 HStack(spacing: 6) {
-                    Text(viewModel.searchTimeScope.compactLabel)
+                    Text(viewModel.searchTimeScope.compactLabel(using: viewModel.rewindHistoryOption))
                         .font(.caption)
                         .fontWeight(.medium)
                     Image(systemName: "chevron.down")
@@ -513,7 +576,6 @@ struct InstructionsOverlay: View {
             HStack {
                 Spacer()
                 HStack(spacing: 16) {
-                    Label("ESC", systemImage: "escape")
                     Label("← →", systemImage: "arrow.left.arrow.right")
                     Label("/", systemImage: "magnifyingglass")
                 }
@@ -1059,9 +1121,8 @@ private func timelineLandmarkMarkers(
 private func timelineMarkerTargets(upTo oldestAge: TimeInterval, now: Date) -> [TimelineMarkerTarget] {
     guard oldestAge > 0 else { return [] }
 
-    let dayLimit = min(oldestAge, 24 * 60 * 60)
     let relativeAges: [TimeInterval] = [5.0 * 60, 10.0 * 60, 30.0 * 60, 60.0 * 60, 2.0 * 60.0 * 60.0]
-        .filter { $0 <= dayLimit }
+        .filter { $0 <= oldestAge }
     var targets = relativeAges.enumerated().map { index, targetAge in
         TimelineMarkerTarget(
             targetAge: targetAge,
@@ -1071,18 +1132,18 @@ private func timelineMarkerTargets(upTo oldestAge: TimeInterval, now: Date) -> [
         )
     }
 
-    if dayLimit > 2 * 60 * 60 {
+    if oldestAge > 2 * 60 * 60 {
         let blockHours = [3, 4, 6, 8, 12, 16, 24]
         var priority = targets.count
         var seenDates: Set<TimeInterval> = Set(targets.map { $0.targetDate.timeIntervalSinceReferenceDate })
         for blockHour in blockHours {
-            guard blockHour <= Int(dayLimit / 3600) else { continue }
+            guard blockHour <= Int(oldestAge / 3600) else { continue }
             let rawTargetDate = now.addingTimeInterval(-TimeInterval(blockHour * 3600))
             let snappedTargetDate = snappedTimelineAbsoluteDate(rawTargetDate)
             let snappedAge = now.timeIntervalSince(snappedTargetDate)
 
             if snappedAge > 2 * 60 * 60,
-               snappedAge <= dayLimit,
+               snappedAge <= oldestAge,
                seenDates.insert(snappedTargetDate.timeIntervalSinceReferenceDate).inserted {
                 targets.append(
                     TimelineMarkerTarget(

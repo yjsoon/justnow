@@ -5,33 +5,57 @@
 
 import AppKit
 import SwiftUI
+import Carbon.HIToolbox
 
 @MainActor
 class OverlayWindowController: NSObject {
     private var window: OverlayWindow?
     private let frameBuffer: FrameBuffer
     private let onVisibilityChanged: ((Bool) -> Void)?
+    private var dismissShortcutKeyCode: Int
+    private var dismissShortcutModifiers: Int
     private var keyEventMonitor: Any?
     private var scrollEventMonitor: Any?
     private var viewModel: OverlayViewModel?
 
-    init(frameBuffer: FrameBuffer, onVisibilityChanged: ((Bool) -> Void)? = nil) {
+    init(
+        frameBuffer: FrameBuffer,
+        dismissShortcutKeyCode: Int,
+        dismissShortcutModifiers: Int,
+        onVisibilityChanged: ((Bool) -> Void)? = nil
+    ) {
         self.frameBuffer = frameBuffer
+        self.dismissShortcutKeyCode = dismissShortcutKeyCode
+        self.dismissShortcutModifiers = dismissShortcutModifiers
         self.onVisibilityChanged = onVisibilityChanged
         super.init()
     }
 
-    func showOverlay(recentTimelineWindow: TimeInterval = RecentTimelineWindow.defaultValue.timeInterval) {
+    func updateDismissShortcut(keyCode: Int, modifiers: Int) {
+        dismissShortcutKeyCode = keyCode
+        dismissShortcutModifiers = modifiers
+    }
+
+    func showOverlay(
+        recentTimelineWindow: TimeInterval = RecentTimelineWindow.defaultValue.timeInterval,
+        rewindHistoryOption: RewindHistoryOption = .defaultValue
+    ) {
         guard window == nil, let screen = NSScreen.main else { return }
 
         // Pause pruning while overlay is visible
         frameBuffer.isPruningPaused = true
 
         // Get frames with near-duplicates filtered out for smoother browsing
-        let frames = frameBuffer.getFilteredFrames(recentWindow: recentTimelineWindow)
+        let timelineFrames = frameBuffer.getFilteredFrames(
+            recentWindow: recentTimelineWindow,
+            maximumAge: rewindHistoryOption.duration
+        )
+        let searchableFrames = frameBuffer.getFilteredFrames(recentWindow: recentTimelineWindow)
         let vm = OverlayViewModel(
-            frames: frames,
+            timelineFrames: timelineFrames,
+            searchableFrames: searchableFrames,
             frameBuffer: frameBuffer,
+            rewindHistoryOption: rewindHistoryOption,
             onDismiss: { [weak self] in
                 self?.hideOverlay()
             }
@@ -70,6 +94,16 @@ class OverlayWindowController: NSObject {
             guard let self = self, let vm = self.viewModel else { return event }
 
             print("[JustNow] Key pressed: keyCode=\(event.keyCode), chars='\(event.characters ?? "")'")
+
+            let pressedModifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            let dismissModifiers = NSEvent.ModifierFlags(rawValue: UInt(self.dismissShortcutModifiers))
+                .intersection(.deviceIndependentFlagsMask)
+            let matchesDismissShortcut = Int(event.keyCode) == self.dismissShortcutKeyCode && pressedModifiers == dismissModifiers
+
+            if matchesDismissShortcut && event.keyCode != UInt16(kVK_Escape) {
+                self.hideOverlay()
+                return nil
+            }
 
             switch event.keyCode {
             case 53: // ESC
@@ -114,6 +148,10 @@ class OverlayWindowController: NSObject {
                 }
                 return nil
             default:
+                if matchesDismissShortcut {
+                    self.hideOverlay()
+                    return nil
+                }
                 return event
             }
         }

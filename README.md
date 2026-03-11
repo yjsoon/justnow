@@ -26,6 +26,8 @@ A native macOS menu bar app that continuously captures screenshots and lets you 
 5. Scroll horizontally or drag to navigate through time
 6. Press **Escape** to dismiss
 
+If you have just switched this Mac from an older dev-signed build to a Developer ID / notarised build and Screen Recording already appears enabled but JustNow still cannot capture, remove the `JustNow` entry from **System Settings → Privacy & Security → Screen Recording** once, then relaunch and grant access again. Later notarised updates signed with the same identity should keep working normally.
+
 ## Settings
 
 Access via menu bar icon → Settings:
