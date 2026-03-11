@@ -697,13 +697,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     }
 
     @objc private func showScreenRecordingHelp() {
-        showPermissionAlert()
+        showPermissionAlert(force: true)
     }
 
     // MARK: - NSMenuDelegate
 
     func menuWillOpen(_ menu: NSMenu) {
-        handlePendingPermissionPromptResolutionIfNeeded()
         updateFrameCountMenuItem()
         updatePauseMenuItem()
         updatePermissionHelpMenuItem()
@@ -966,8 +965,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         item.isEnabled = needsPermissionHelp
     }
 
-    private func showPermissionAlert() {
-        guard !didShowPermissionAlertThisLaunch else { return }
+    private func showPermissionAlert(force: Bool = false) {
+        guard force || !didShowPermissionAlertThisLaunch else { return }
         didShowPermissionAlertThisLaunch = true
 
         let alert = NSAlert()
