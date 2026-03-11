@@ -54,7 +54,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     )
     private var appNapPreventer = AppNapPreventer()
     private let launchAtLoginManager = LaunchAtLoginManager()
-    private var settingsWindow: NSWindow?
     private lazy var settingsContext = SettingsContext(
         launchAtLoginManager: launchAtLoginManager,
         updater: updaterController.updater,
@@ -63,6 +62,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         },
         onShortcutChanged: { [weak self] in
             self?.registerHotKey()
+        }
+    )
+    private lazy var settingsWindowCoordinator = SettingsWindowCoordinator(
+        makeContentView: { [weak self] in
+            guard let self else {
+                return NSView()
+            }
+
+            return NSHostingView(rootView: self.makeSettingsView())
         }
     )
 
@@ -667,25 +675,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     }
 
     @objc private func showSettings() {
-        if let window = settingsWindow, window.isVisible {
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
-        }
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 680),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "JustNow Settings"
-        window.contentView = NSHostingView(rootView: makeSettingsView())
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-
-        settingsWindow = window
+        settingsWindowCoordinator.show()
     }
 
     @objc private func checkForUpdates(_ sender: Any?) {

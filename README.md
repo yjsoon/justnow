@@ -54,6 +54,14 @@ Open `JustNow.xcodeproj` in Xcode and build (⌘B), or:
 xcodebuild -scheme JustNow -configuration Release -derivedDataPath build
 ```
 
+## Testing
+
+Run the macOS unit tests with:
+
+```bash
+xcodebuild test -project JustNow.xcodeproj -scheme JustNow -destination 'platform=macOS'
+```
+
 ## Releases
 
 Latest release is now:
