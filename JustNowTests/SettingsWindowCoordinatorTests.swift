@@ -18,6 +18,12 @@ final class SettingsWindowCoordinatorTests: XCTestCase {
         coordinator.show()
 
         let firstWindow = try XCTUnwrap(coordinator.window)
+        defer {
+            firstWindow.delegate = nil
+            firstWindow.orderOut(nil)
+            firstWindow.close()
+        }
+
         XCTAssertTrue(firstWindow.isVisible)
 
         firstWindow.performClose(nil)

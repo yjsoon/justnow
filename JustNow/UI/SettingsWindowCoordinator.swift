@@ -19,6 +19,7 @@ final class SettingsWindowCoordinator: NSObject, NSWindowDelegate {
     ) {
         self.makeContentView = makeContentView
         self.activateApp = activateApp
+        super.init()
     }
 
     func show() {
