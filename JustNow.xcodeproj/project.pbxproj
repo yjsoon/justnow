@@ -12,9 +12,20 @@
 		B1E5C8E6B82E4C0FA5BFF001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = B1E5C8E6B82E4C0FA5BFF003 /* Sparkle */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		C04E57012F70000100000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AF3F00E02F094EE1000F5208 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AF3F00E72F094EE1000F5208;
+			remoteInfo = JustNow;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		AF3F00E82F094EE1000F5208 /* JustNow.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = JustNow.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AF7DAF972F5D88840041C674 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AppIcon.icon; sourceTree = "<group>"; };
+		C04E57022F70000100000001 /* JustNowTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = JustNowTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -36,6 +47,11 @@
 			path = JustNow;
 			sourceTree = "<group>";
 		};
+		C04E57032F70000100000001 /* JustNowTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = JustNowTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -55,6 +71,7 @@
 			isa = PBXGroup;
 			children = (
 				AF3F00EA2F094EE1000F5208 /* JustNow */,
+				C04E57032F70000100000001 /* JustNowTests */,
 				AF3F00E92F094EE1000F5208 /* Products */,
 				AF7DAF972F5D88840041C674 /* AppIcon.icon */,
 			);
@@ -64,6 +81,7 @@
 			isa = PBXGroup;
 			children = (
 				AF3F00E82F094EE1000F5208 /* JustNow.app */,
+				C04E57022F70000100000001 /* JustNowTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -95,6 +113,27 @@
 			productReference = AF3F00E82F094EE1000F5208 /* JustNow.app */;
 			productType = "com.apple.product-type.application";
 		};
+		C04E57042F70000100000001 /* JustNowTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C04E57092F70000100000001 /* Build configuration list for PBXNativeTarget "JustNowTests" */;
+			buildPhases = (
+				C04E57052F70000100000001 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C04E57062F70000100000001 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				C04E57032F70000100000001 /* JustNowTests */,
+			);
+			name = JustNowTests;
+			packageProductDependencies = (
+			);
+			productName = JustNowTests;
+			productReference = C04E57022F70000100000001 /* JustNowTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -107,6 +146,10 @@
 				TargetAttributes = {
 					AF3F00E72F094EE1000F5208 = {
 						CreatedOnToolsVersion = 26.1;
+					};
+					C04E57042F70000100000001 = {
+						CreatedOnToolsVersion = 26.1;
+						TestTargetID = AF3F00E72F094EE1000F5208;
 					};
 				};
 			};
@@ -129,6 +172,7 @@
 			projectRoot = "";
 			targets = (
 				AF3F00E72F094EE1000F5208 /* JustNow */,
+				C04E57042F70000100000001 /* JustNowTests */,
 			);
 		};
 /* End PBXProject section */
@@ -152,7 +196,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C04E57052F70000100000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		C04E57062F70000100000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AF3F00E72F094EE1000F5208 /* JustNow */;
+			targetProxy = C04E57012F70000100000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		AF3F00F12F094EE2000F5208 /* Debug */ = {
@@ -280,7 +339,8 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = PQ6U5ESLN2;
@@ -347,6 +407,60 @@
 			};
 			name = Release;
 		};
+		C04E57072F70000100000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 4;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.3;
+				PRODUCT_BUNDLE_IDENTIFIER = sg.tk.JustNowTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/JustNow.app/Contents/MacOS/JustNow";
+			};
+			name = Debug;
+		};
+		C04E57082F70000100000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 4;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.3;
+				PRODUCT_BUNDLE_IDENTIFIER = sg.tk.JustNowTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/JustNow.app/Contents/MacOS/JustNow";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -364,6 +478,15 @@
 			buildConfigurations = (
 				AF3F00F42F094EE2000F5208 /* Debug */,
 				AF3F00F52F094EE2000F5208 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C04E57092F70000100000001 /* Build configuration list for PBXNativeTarget "JustNowTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C04E57072F70000100000001 /* Debug */,
+				C04E57082F70000100000001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
