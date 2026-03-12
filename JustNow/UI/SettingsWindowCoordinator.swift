@@ -7,6 +7,8 @@ import AppKit
 
 @MainActor
 final class SettingsWindowCoordinator: NSObject, NSWindowDelegate {
+    private static let defaultWindowSize = NSSize(width: 500, height: 680)
+
     private let makeContentView: @MainActor () -> NSView
     private let activateApp: @MainActor () -> Void
     private(set) var window: NSWindow?
@@ -30,7 +32,7 @@ final class SettingsWindowCoordinator: NSObject, NSWindowDelegate {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 680),
+            contentRect: NSRect(origin: .zero, size: Self.defaultWindowSize),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
