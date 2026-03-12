@@ -674,11 +674,13 @@ private struct TimelineSlider: View {
     }
 
     private var colourSegments: [TimelineZoneFill] {
-        let recentWindowPosition = resolveTimelineWindowStartIndex(
-            frames: displayedFrames,
-            targetAge: viewModel.recentTimelineWindow,
-            now: viewModel.timelineReferenceDate
-        ).map { CGFloat($0) / CGFloat(displayedFrames.count - 1) }
+        let recentWindowPosition =
+            timelineMarkers.first(where: { $0.targetAge == viewModel.recentTimelineWindow })?.position
+            ?? resolveTimelineMarkerPosition(
+                frames: displayedFrames,
+                targetAge: viewModel.recentTimelineWindow,
+                now: viewModel.timelineReferenceDate
+            )
         return timelineColourSegments(
             frames: displayedFrames,
             borderPosition: recentWindowPosition
@@ -1071,15 +1073,20 @@ private func resolveTimelineMarkerFrameIndex(
     }
 }
 
-private func resolveTimelineWindowStartIndex(
+private func resolveTimelineMarkerPosition(
     frames: [StoredFrame],
     targetAge: TimeInterval,
     now: Date = Date()
-) -> Int? {
+) -> CGFloat? {
     guard frames.count > 1 else { return nil }
 
     let targetDate = now.addingTimeInterval(-targetAge)
-    return frames.firstIndex(where: { $0.timestamp >= targetDate })
+    guard let frameIndex = resolveTimelineMarkerFrameIndex(
+        frames: frames,
+        targetDate: targetDate
+    ) else { return nil }
+
+    return CGFloat(frameIndex) / CGFloat(frames.count - 1)
 }
 
 private func timelineLandmarkMarkers(
