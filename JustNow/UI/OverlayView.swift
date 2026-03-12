@@ -674,6 +674,10 @@ private struct TimelineSlider: View {
     }
 
     private var colourSegments: [TimelineZoneFill] {
+        guard !(viewModel.isSearching && !viewModel.searchQuery.isEmpty) else {
+            return timelineColourSegments(frames: displayedFrames, borderPosition: nil)
+        }
+
         let recentWindowPosition =
             timelineMarkers.first(where: { $0.targetAge == viewModel.recentTimelineWindow })?.position
             ?? resolveTimelineMarkerPosition(
