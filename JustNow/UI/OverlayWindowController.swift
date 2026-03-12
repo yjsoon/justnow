@@ -55,6 +55,7 @@ class OverlayWindowController: NSObject {
             timelineFrames: timelineFrames,
             searchableFrames: searchableFrames,
             frameBuffer: frameBuffer,
+            recentTimelineWindow: recentTimelineWindow,
             rewindHistoryOption: rewindHistoryOption,
             onDismiss: { [weak self] in
                 self?.hideOverlay()

@@ -116,13 +116,13 @@ struct SettingsView: View {
                         }
                         .pickerStyle(.segmented)
                         .labelsHidden()
-                        .accessibilityLabel("Newest timeline detail")
+                        .accessibilityLabel("Full-detail window")
                         .frame(width: 220)
                     } label: {
-                        Text("Newest timeline detail")
+                        Text("Full-detail window")
                     }
 
-                    Text("Keep every stored frame in the newest window, then collapse visually similar older history.")
+                    Text("Keep every stored frame in this most recent window, then collapse visually similar older history.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
