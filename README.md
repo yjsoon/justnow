@@ -48,7 +48,15 @@ ScreenCaptureKit → Perceptual Hash Filter → Ring Buffer (RAM)
 
 ## Building
 
-Open `JustNow.xcodeproj` in Xcode and build (⌘B), or:
+For routine local reinstalls, use:
+
+```bash
+./Scripts/local-install-app.sh
+```
+
+That helper keeps the app at `/Applications/JustNow.app` and prefers a stable Developer ID signature when available, which helps macOS retain the existing Screen Recording permission record across reinstalls.
+
+If you only need to build without installing, open `JustNow.xcodeproj` in Xcode and build (⌘B), or:
 
 ```bash
 xcodebuild -scheme JustNow -configuration Release -derivedDataPath build

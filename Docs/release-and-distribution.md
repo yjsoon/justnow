@@ -55,6 +55,14 @@ Local notarisation prerequisites:
 - the Developer Team ID
 - the issuer ID for Team API keys
 
+For day-to-day local reinstalls on a maintainer machine, prefer:
+
+```bash
+./Scripts/local-install-app.sh
+```
+
+The helper installs to `/Applications/JustNow.app`, auto-selects the configured Developer ID identity when possible, and refuses to overwrite an existing Developer ID install with a differently signed build. That keeps macOS TCC from treating the reinstall as a different Screen Recording client.
+
 If you are switching a machine from older Xcode/dev-signed `JustNow` builds to Developer ID / notarised builds, macOS can keep a stale Screen Recording entry that still looks enabled but no longer matches the app's current signing requirement. If capture still fails after the switch, remove the `JustNow` entry from **System Settings → Privacy & Security → Screen Recording** once and relaunch so macOS can recreate it. Later updates signed with the same Developer ID identity should retain the permission normally.
 
 ## Local publish flow
