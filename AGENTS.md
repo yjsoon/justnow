@@ -17,6 +17,14 @@ Do not create or move tags or publish releases unless explicitly requested by th
 ## Build And Run
 
 ```bash
+./Scripts/local-install-app.sh
+```
+
+Use the helper above for routine local reinstalls. It keeps the app at `/Applications/JustNow.app` and prefers the same Developer ID signing identity, which avoids Screen Recording permission churn when this machine has the local release credentials configured.
+
+If you only need a build artefact without installing it, you can still run:
+
+```bash
 xcodebuild -scheme JustNow -configuration Release -derivedDataPath build
 ```
 
@@ -67,6 +75,8 @@ This repo no longer uses GitHub Actions for release artefacts or public-site dep
 Local release credentials live in `.env.release.local` (gitignored). The local release scripts auto-load it if present, so future agents should check there first for `APPLE_SIGNING_IDENTITY`, `APPLE_TEAM_ID`, `APPLE_API_KEY_PATH`, `APPLE_API_KEY_ID`, and `APPLE_API_KEY_ISSUER_ID`.
 
 After every successful build, always install and launch from `/Applications/` before reporting completion. Screen Recording permission is tied to the app location.
+
+Prefer `./Scripts/local-install-app.sh` over manually copying a raw Xcode build whenever you are reinstalling the app locally. The helper refuses to replace an existing Developer ID-signed install with a differently signed build unless you explicitly reconfigure the signing inputs.
 
 If you switch a machine from older dev-signed/Xcode builds to Developer ID or notarised builds, macOS may keep a stale Screen Recording entry that still appears enabled. If capture fails in that state, remove the `JustNow` entry from **System Settings → Privacy & Security → Screen Recording** once and relaunch so TCC can recreate it for the new signing identity.
 

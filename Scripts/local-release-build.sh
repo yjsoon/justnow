@@ -48,6 +48,14 @@ Options:
 EOF
 }
 
+remove_signature_if_present() {
+  local target="$1"
+
+  if codesign --display --verbose=1 "${target}" >/dev/null 2>&1; then
+    codesign --remove-signature "${target}"
+  fi
+}
+
 sign_sparkle_support_binaries() {
   local app_bundle_path="$1"
   local framework_path="${app_bundle_path}/Contents/Frameworks/Sparkle.framework"
@@ -63,16 +71,20 @@ sign_sparkle_support_binaries() {
   local autoupdate_binary="${version_path}/Autoupdate"
 
   if [ -e "${autoupdate_binary}" ]; then
+    remove_signature_if_present "${autoupdate_binary}"
     codesign --force --options runtime --timestamp --sign "${SIGNING_IDENTITY}" "${autoupdate_binary}"
   fi
 
   for nested_bundle in "${downloader_xpc}" "${installer_xpc}" "${updater_app}"; do
     if [ -d "${nested_bundle}" ]; then
+      remove_signature_if_present "${nested_bundle}"
       codesign --force --options runtime --timestamp --sign "${SIGNING_IDENTITY}" "${nested_bundle}"
     fi
   done
 
+  remove_signature_if_present "${version_path}"
   codesign --force --options runtime --timestamp --sign "${SIGNING_IDENTITY}" "${version_path}"
+  remove_signature_if_present "${framework_path}"
   codesign --force --options runtime --timestamp --sign "${SIGNING_IDENTITY}" "${framework_path}"
 }
 
@@ -222,8 +234,10 @@ rm -f "${ZIP_PATH}" "${DMG_PATH}"
 
 if [ "${USE_DISTRIBUTION_SIGNING}" = "true" ]; then
   echo "Signing distribution artifacts with ${SIGNING_IDENTITY}"
+  remove_signature_if_present "${APP_EXECUTABLE_PATH}"
   codesign --force --options runtime --timestamp --entitlements "${ENTITLEMENTS_PATH}" --sign "${SIGNING_IDENTITY}" "${APP_EXECUTABLE_PATH}"
   sign_sparkle_support_binaries "${APP_PATH}"
+  remove_signature_if_present "${APP_PATH}"
   codesign --force --options runtime --timestamp --entitlements "${ENTITLEMENTS_PATH}" --sign "${SIGNING_IDENTITY}" "${APP_PATH}"
   codesign --verify --deep --strict --verbose=2 "${APP_PATH}"
 fi
