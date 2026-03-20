@@ -40,14 +40,29 @@ struct OCRIndexingPolicy: Sendable, Equatable {
     )
 }
 
+private enum SyncIngestResult {
+    case completed
+    case retryAfterClear
+}
+
+private enum ClearWaitResult {
+    case ready
+    case cancelled
+}
+
+private struct PendingIngest {
+    let cgImage: CGImage
+    let timestamp: Date
+    let generation: Int
+    let syncContinuation: CheckedContinuation<SyncIngestResult, Never>?
+}
+
 @MainActor
 class FrameBuffer {
     private var frames: [StoredFrame] = []
     private let frameStore: FrameStore
     private let retentionManager: RetentionManager
     private var blackFrameFilterUntil: Date?
-    private var lastStoredHash: UInt64?
-    private var lastStoredTimestamp: Date?
     private var saveOptions: FrameSaveOptions = .standard
     private var duplicatePolicy: DuplicateFramePolicy = .standard
     private var lastPruneCheck: Date = .distantPast
@@ -55,7 +70,20 @@ class FrameBuffer {
     private var ocrIndexingPolicy: OCRIndexingPolicy = .disabled
     private var ocrIndexQueue: [StoredFrame] = []
     private var queuedOCRFrameIDs: Set<UUID> = []
+    private var ocrPruningFrameIDs: Set<UUID> = []
     private var ocrIndexingTask: Task<Void, Never>?
+    /// Bounded backlog of captures waiting to hash and persist. Sync captures discard older async backlog rather than reordering processing, so dedupe stays chronological.
+    private var ingestQueue: [PendingIngest] = []
+    private var ingestProcessorTask: Task<Void, Never>?
+    /// Incremented when starting each ingest drain and when clearing the buffer so a superseded drain cannot clear `ingestProcessorTask` or restart incorrectly.
+    private var ingestProcessorSerial = 0
+    private let maxIngestBacklog = 6
+    /// Bumped in `clear()` so in-flight ingest work can drop results and avoid racing a reset buffer.
+    private var ingestGeneration = 0
+    /// While true, new captures are not queued and disk reset is in progress — avoids races with `frames.removeAll()` and ingest teardown.
+    private var isBufferClearing = false
+    private var activeClearOperationCount = 0
+    private var clearWaiters: [(id: UUID, continuation: CheckedContinuation<ClearWaitResult, Never>)] = []
     private let searchTelemetry = SearchTelemetry.shared
 
     // Pause pruning while overlay is open to prevent "Frame removed" issues
@@ -67,7 +95,7 @@ class FrameBuffer {
     // OCR text cache for faster subsequent searches
     let textCache = TextCache()
 
-    init(retentionPolicy: RetentionPolicy = .default24Hours) async throws {
+    init(retentionPolicy: RetentionPolicy) async throws {
         self.frameStore = try FrameStore()
         self.retentionManager = RetentionManager(policy: retentionPolicy)
         thumbnailCache.countLimit = 100
@@ -92,34 +120,7 @@ class FrameBuffer {
             return
         }
 
-        // Save to disk (skip near-duplicates to reduce churn)
-        // Hash computation runs concurrently on background thread
-        Task(priority: .utility) {
-            do {
-                // Compute perceptual hash on background thread (via @concurrent)
-                let hash = await PerceptualHash.compute(from: cgImage)
-                guard shouldStoreFrame(hash: hash, timestamp: timestamp) else { return }
-                let metadata = try await frameStore.saveFrame(
-                    cgImage,
-                    timestamp: timestamp,
-                    hash: hash,
-                    options: saveOptions
-                )
-
-                let frame = StoredFrame(
-                    id: metadata.id,
-                    timestamp: metadata.timestamp,
-                    hash: metadata.hash
-                )
-
-                recordStoredFrame(frame)
-                enqueueFrameForBackgroundOCR(frame)
-
-                await pruneIfNeeded()
-            } catch {
-                print("Failed to save frame: \(error)")
-            }
-        }
+        enqueueIngest(cgImage: cgImage, timestamp: timestamp, syncContinuation: nil, prioritiseSync: false)
     }
 
     /// Add a frame synchronously (awaits save completion). Used when opening overlay.
@@ -128,20 +129,34 @@ class FrameBuffer {
             return
         }
 
-        do {
-            let hash = await PerceptualHash.compute(from: cgImage)
-            guard shouldStoreFrame(hash: hash, timestamp: timestamp) else { return }
-            let metadata = try await frameStore.saveFrame(
-                cgImage,
-                timestamp: timestamp,
-                hash: hash,
-                options: saveOptions
-            )
-            let frame = StoredFrame(id: metadata.id, timestamp: metadata.timestamp, hash: metadata.hash)
-            recordStoredFrame(frame)
-            enqueueFrameForBackgroundOCR(frame)
-        } catch {
-            print("Failed to save frame: \(error)")
+        while !Task.isCancelled {
+            do {
+                try await waitUntilNotClearing()
+            } catch is CancellationError {
+                return
+            } catch {
+                return
+            }
+
+            guard !Task.isCancelled else { return }
+
+            let result = await withCheckedContinuation { continuation in
+                enqueueIngest(
+                    cgImage: cgImage,
+                    timestamp: timestamp,
+                    syncContinuation: continuation,
+                    prioritiseSync: true
+                )
+            }
+
+            guard !Task.isCancelled else { return }
+
+            switch result {
+            case .completed:
+                return
+            case .retryAfterClear:
+                continue
+            }
         }
     }
 
@@ -149,6 +164,22 @@ class FrameBuffer {
 
     func getFrames() -> [StoredFrame] {
         frames
+    }
+
+    func containsFrame(id: UUID) -> Bool {
+        frames.contains { $0.id == id }
+    }
+
+    func cacheOCRTextIfCurrent(_ text: String, for frame: StoredFrame) async -> Bool {
+        guard shouldContinueOCR(for: frame) else { return false }
+        await textCache.setText(text, for: frame.id, timestamp: frame.timestamp)
+
+        guard shouldContinueOCR(for: frame) else {
+            await textCache.removeText(for: frame.id)
+            return false
+        }
+
+        return true
     }
 
     /// Get frames with near-duplicates removed for smoother browsing.
@@ -240,11 +271,32 @@ class FrameBuffer {
     // MARK: - Management
 
     func clear() async throws {
+        activeClearOperationCount += 1
+        isBufferClearing = true
+        defer {
+            activeClearOperationCount -= 1
+            if activeClearOperationCount == 0 {
+                isBufferClearing = false
+                let waiters = clearWaiters
+                clearWaiters.removeAll()
+                for resume in waiters {
+                    resume.continuation.resume(returning: .ready)
+                }
+            }
+        }
+
+        ingestGeneration += 1
+        ingestProcessorSerial += 1
+        ingestProcessorTask?.cancel()
+        ingestProcessorTask = nil
+        let stuckSync = ingestQueue.compactMap { $0.syncContinuation }
+        ingestQueue.removeAll()
+        for resume in stuckSync {
+            resume.resume(returning: .retryAfterClear)
+        }
         cancelBackgroundOCRIndexing(clearQueue: true)
         try await frameStore.clear()
         frames.removeAll()
-        lastStoredHash = nil
-        lastStoredTimestamp = nil
         thumbnailCache.removeAllObjects()
         await textCache.clear()
     }
@@ -277,6 +329,9 @@ class FrameBuffer {
     }
 
     func flushCaches() async {
+        while let ingestProcessorTask {
+            await ingestProcessorTask.value
+        }
         await frameStore.flushManifest()
         await textCache.save()
     }
@@ -289,15 +344,156 @@ class FrameBuffer {
         frames = metadata
             .sorted { $0.timestamp < $1.timestamp }
             .map { StoredFrame(id: $0.id, timestamp: $0.timestamp, hash: $0.hash) }
-
-        if let lastFrame = frames.last, lastFrame.hash != 0 {
-            lastStoredHash = lastFrame.hash
-            lastStoredTimestamp = lastFrame.timestamp
-        }
     }
 
     func enableBlackFrameFilter(for seconds: TimeInterval) {
         blackFrameFilterUntil = Date().addingTimeInterval(seconds)
+    }
+
+    private func waitUntilNotClearing() async throws {
+        guard isBufferClearing else { return }
+
+        let waiterID = UUID()
+        let result = await withTaskCancellationHandler(operation: {
+            await withCheckedContinuation { continuation in
+                clearWaiters.append((id: waiterID, continuation: continuation))
+                if Task.isCancelled {
+                    cancelClearWaiter(id: waiterID)
+                }
+            }
+        }, onCancel: {
+            Task { @MainActor [weak self] in
+                self?.cancelClearWaiter(id: waiterID)
+            }
+        })
+
+        if case .cancelled = result {
+            throw CancellationError()
+        }
+    }
+
+    private func cancelClearWaiter(id: UUID) {
+        guard let index = clearWaiters.firstIndex(where: { $0.id == id }) else { return }
+        let continuation = clearWaiters.remove(at: index).continuation
+        continuation.resume(returning: .cancelled)
+    }
+
+    private func enqueueIngest(
+        cgImage: CGImage,
+        timestamp: Date,
+        syncContinuation: CheckedContinuation<SyncIngestResult, Never>?,
+        prioritiseSync: Bool
+    ) {
+        if isBufferClearing {
+            syncContinuation?.resume(returning: .retryAfterClear)
+            return
+        }
+
+        let pending = PendingIngest(
+            cgImage: cgImage,
+            timestamp: timestamp,
+            generation: ingestGeneration,
+            syncContinuation: syncContinuation
+        )
+
+        if prioritiseSync {
+            ingestQueue.removeAll { $0.syncContinuation == nil }
+        }
+
+        ingestQueue.append(pending)
+        trimIngestQueueIfNeeded()
+        startIngestProcessorIfNeeded()
+    }
+
+    /// Drops oldest async-only pending captures until at most `maxIngestBacklog` remain.
+    private func trimIngestQueueIfNeeded() {
+        while ingestQueue.count > maxIngestBacklog,
+              let dropIndex = ingestQueue.firstIndex(where: { $0.syncContinuation == nil }) {
+            ingestQueue.remove(at: dropIndex)
+        }
+    }
+
+    private func startIngestProcessorIfNeeded() {
+        guard ingestProcessorTask == nil, !ingestQueue.isEmpty else { return }
+        ingestProcessorSerial += 1
+        let processorSerial = ingestProcessorSerial
+        ingestProcessorTask = Task(priority: .utility) { [weak self] in
+            guard let self else { return }
+            await self.drainIngestQueueOnMainActor(processorSerial: processorSerial)
+        }
+    }
+
+    private func drainIngestQueueOnMainActor(processorSerial: Int) async {
+        while !Task.isCancelled {
+            guard let work = dequeueIngestWork() else { break }
+            let hash = await PerceptualHash.compute(from: work.cgImage)
+            await processHashedIngest(work, hash: hash)
+        }
+        guard processorSerial == ingestProcessorSerial else { return }
+        ingestProcessorTask = nil
+        if !ingestQueue.isEmpty {
+            startIngestProcessorIfNeeded()
+        }
+    }
+
+    private func dequeueIngestWork() -> PendingIngest? {
+        guard !ingestQueue.isEmpty else { return nil }
+        return ingestQueue.removeFirst()
+    }
+
+    private func processHashedIngest(_ work: PendingIngest, hash: UInt64) async {
+        let result: SyncIngestResult
+        if !matchesIngestGeneration(work.generation) {
+            result = .retryAfterClear
+        } else {
+            result = await persistIngestedFrame(
+                cgImage: work.cgImage,
+                timestamp: work.timestamp,
+                hash: hash,
+                ingestGeneration: work.generation
+            )
+        }
+        work.syncContinuation?.resume(returning: result)
+    }
+
+    private func matchesIngestGeneration(_ generation: Int) -> Bool {
+        generation == ingestGeneration
+    }
+
+    private func persistIngestedFrame(
+        cgImage: CGImage,
+        timestamp: Date,
+        hash: UInt64,
+        ingestGeneration generation: Int
+    ) async -> SyncIngestResult {
+        guard generation == ingestGeneration else { return .retryAfterClear }
+        guard shouldStoreFrame(hash: hash, timestamp: timestamp) else { return .completed }
+        do {
+            let metadata = try await frameStore.saveFrame(
+                cgImage,
+                timestamp: timestamp,
+                hash: hash,
+                options: saveOptions
+            )
+            guard generation == ingestGeneration else {
+                try? await frameStore.pruneFrames(ids: [metadata.id])
+                return .retryAfterClear
+            }
+            let frame = StoredFrame(
+                id: metadata.id,
+                timestamp: metadata.timestamp,
+                hash: metadata.hash
+            )
+            recordStoredFrame(frame)
+            enqueueFrameForBackgroundOCR(frame)
+            await pruneIfNeeded()
+            return .completed
+        } catch is CancellationError {
+            return .retryAfterClear
+        } catch {
+            print("Failed to save frame: \(error)")
+            return .completed
+        }
     }
 
     private func pruneIfNeeded() async {
@@ -316,6 +512,11 @@ class FrameBuffer {
         let toPrune = retentionManager.framesToPrune(frames: frames, currentTime: now)
         guard !toPrune.isEmpty else { return }
 
+        ocrPruningFrameIDs.formUnion(toPrune)
+        defer {
+            ocrPruningFrameIDs.subtract(toPrune)
+        }
+
         do {
             try await frameStore.pruneFrames(ids: toPrune)
             frames.removeAll { toPrune.contains($0.id) }
@@ -329,42 +530,39 @@ class FrameBuffer {
     }
 
     private func shouldStoreFrame(hash: UInt64, timestamp: Date) -> Bool {
-        guard let lastHash = lastStoredHash, let lastTime = lastStoredTimestamp else {
+        let insertionIndex = frameInsertionIndex(for: timestamp)
+        guard insertionIndex > 0 else {
             return true
         }
 
-        let timeSinceLast = timestamp.timeIntervalSince(lastTime)
+        let previousFrame = frames[insertionIndex - 1]
+        guard previousFrame.hash != 0 else { return true }
+
+        let timeSinceLast = timestamp.timeIntervalSince(previousFrame.timestamp)
         guard timeSinceLast < duplicatePolicy.minimumSpacing else { return true }
 
-        let distance = PerceptualHash.hammingDistance(hash, lastHash)
+        let distance = PerceptualHash.hammingDistance(hash, previousFrame.hash)
         return distance > duplicatePolicy.hashThreshold
     }
 
-    private func recordStoredFrame(_ frame: StoredFrame) {
-        if let last = frames.last, frame.timestamp >= last.timestamp {
-            frames.append(frame)
-        } else if frames.isEmpty {
-            frames.append(frame)
-        } else {
-            var low = 0
-            var high = frames.count
-            while low < high {
-                let mid = (low + high) / 2
-                if frames[mid].timestamp <= frame.timestamp {
-                    low = mid + 1
-                } else {
-                    high = mid
-                }
+    private func frameInsertionIndex(for timestamp: Date) -> Int {
+        var low = 0
+        var high = frames.count
+
+        while low < high {
+            let mid = (low + high) / 2
+            if frames[mid].timestamp <= timestamp {
+                low = mid + 1
+            } else {
+                high = mid
             }
-            frames.insert(frame, at: low)
         }
-        if frame.hash != 0 {
-            lastStoredHash = frame.hash
-            lastStoredTimestamp = frame.timestamp
-        } else {
-            lastStoredHash = nil
-            lastStoredTimestamp = frame.timestamp
-        }
+
+        return low
+    }
+
+    private func recordStoredFrame(_ frame: StoredFrame) {
+        frames.insert(frame, at: frameInsertionIndex(for: frame.timestamp))
     }
 
     private func enqueueFrameForBackgroundOCR(_ frame: StoredFrame) {
@@ -445,6 +643,13 @@ class FrameBuffer {
         return frame
     }
 
+    private func shouldContinueOCR(for frame: StoredFrame) -> Bool {
+        guard !Task.isCancelled else { return false }
+        guard !isBufferClearing else { return false }
+        guard !ocrPruningFrameIDs.contains(frame.id) else { return false }
+        return containsFrame(id: frame.id)
+    }
+
     private func runBackgroundOCRIndexingLoop() async {
         defer {
             ocrIndexingTask = nil
@@ -461,6 +666,10 @@ class FrameBuffer {
                 continue
             }
 
+            guard shouldContinueOCR(for: frame) else {
+                continue
+            }
+
             if await textCache.hasCachedText(for: frame.id) {
                 continue
             }
@@ -469,7 +678,9 @@ class FrameBuffer {
                 let startedAt = Date()
                 let image = try await frameStore.loadFullImage(id: frame.id)
                 let text = await TextRecognitionManager.extractText(from: image)
-                await textCache.setText(text, for: frame.id, timestamp: frame.timestamp)
+                guard await cacheOCRTextIfCurrent(text, for: frame) else {
+                    continue
+                }
 
                 let duration = Date().timeIntervalSince(startedAt)
                 let lag = Date().timeIntervalSince(frame.timestamp)

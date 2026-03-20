@@ -14,7 +14,7 @@ enum FrameStoreError: Error {
     case manifestCorrupted
 }
 
-struct FrameSaveOptions: Sendable, Equatable {
+nonisolated struct FrameSaveOptions: Sendable, Equatable {
     let quality: CGFloat
     let thumbnailQuality: CGFloat
     let generateThumbnail: Bool

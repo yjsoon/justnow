@@ -7,7 +7,7 @@ import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
 
-enum ImageEncoder {
+nonisolated enum ImageEncoder {
     static let thumbnailMaxSize: CGFloat = 200
     static let thumbnailQuality: CGFloat = 0.7
     static let fullImageQuality: CGFloat = 0.85

@@ -145,6 +145,7 @@ class OverlayViewModel {
 
     func clearSearch() {
         searchTask?.cancel()
+        searchTask = nil
         searchQuery = ""
         searchResults = []
         isSearchInProgress = false
@@ -156,6 +157,7 @@ class OverlayViewModel {
     func performSearch() {
         print("[JustNow] performSearch() called with query: '\(searchQuery)'")
         searchTask?.cancel()
+        searchTask = nil
         guard !searchQuery.isEmpty else {
             print("[JustNow] Query is empty, returning")
             searchResults = []
@@ -218,14 +220,22 @@ class OverlayViewModel {
                 await withTaskGroup(of: Bool.self) { group in
                     for frame in batch {
                         group.addTask {
+                            guard !Task.isCancelled else {
+                                return false
+                            }
+
                             guard let image = try? await buffer.getFullImage(for: frame) else {
                                 return false
                             }
+
                             let text = await TextRecognitionManager.extractText(from: image)
 
+                            guard !Task.isCancelled else {
+                                return false
+                            }
+
                             // Persist OCR text to indexed cache
-                            await cache.setText(text, for: frame.id, timestamp: frame.timestamp)
-                            return true
+                            return await buffer.cacheOCRTextIfCurrent(text, for: frame)
                         }
                     }
 
@@ -649,11 +659,17 @@ struct FramePreviewView: View {
             image = nil
 
             do {
-                image = try await frameBuffer.getFullImage(for: frame)
+                let loadedImage = try await frameBuffer.getFullImage(for: frame)
+                guard !Task.isCancelled else { return }
+                image = loadedImage
+            } catch is CancellationError {
+                return
             } catch {
+                guard !Task.isCancelled else { return }
                 loadFailed = true
             }
 
+            guard !Task.isCancelled else { return }
             isLoading = false
         }
     }

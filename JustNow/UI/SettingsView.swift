@@ -260,14 +260,10 @@ struct SettingsView: View {
             await updateStorageInfo()
         }
         .task(id: updaterIdentity) {
-            await MainActor.run {
-                syncUpdaterState()
-            }
+            syncUpdaterState()
         }
         .task(id: launchAtLoginIdentity) {
-            await MainActor.run {
-                syncLaunchAtLoginState()
-            }
+            syncLaunchAtLoginState()
         }
         .task {
             await refreshTelemetryLoop()
@@ -294,7 +290,10 @@ struct SettingsView: View {
 
     private func updateStorageInfo() async {
         if let buffer = context.frameBuffer {
-            storageSize = await buffer.totalStorageSize()
+            let bufferIdentity = ObjectIdentifier(buffer)
+            let totalStorageSize = await buffer.totalStorageSize()
+            guard !Task.isCancelled, context.frameBuffer.map(ObjectIdentifier.init) == bufferIdentity else { return }
+            storageSize = totalStorageSize
             frameCount = buffer.frameCount
         } else {
             storageSize = 0
@@ -317,9 +316,8 @@ struct SettingsView: View {
     private func refreshTelemetryLoop() async {
         while !Task.isCancelled {
             let snapshot = await SearchTelemetry.shared.snapshot()
-            await MainActor.run {
-                telemetrySnapshot = snapshot
-            }
+            guard !Task.isCancelled else { return }
+            telemetrySnapshot = snapshot
             try? await Task.sleep(for: .seconds(2))
         }
     }
