@@ -37,8 +37,8 @@ class OverlayWindowController: NSObject {
     }
 
     func showOverlay(
-        recentTimelineWindow: TimeInterval = RecentTimelineWindow.defaultValue.timeInterval,
-        rewindHistoryOption: RewindHistoryOption = .defaultValue
+        recentTimelineWindow: TimeInterval,
+        rewindHistoryOption: RewindHistoryOption
     ) {
         guard window == nil, let screen = NSScreen.main else { return }
 
@@ -177,6 +177,7 @@ class OverlayWindowController: NSObject {
     func hideOverlay() {
         // Resume pruning
         frameBuffer.isPruningPaused = false
+        viewModel?.clearSearch()
 
         if let monitor = keyEventMonitor {
             NSEvent.removeMonitor(monitor)

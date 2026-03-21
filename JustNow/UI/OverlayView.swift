@@ -10,6 +10,12 @@ import os.log
 
 private let logger = Logger(subsystem: "sg.tk.JustNow", category: "OverlayView")
 
+nonisolated enum SearchOCRBatchResult: Sendable {
+    case ocrPersisted
+    case frameLoadFailed
+    case skipped
+}
+
 enum SearchTimeScope: String, CaseIterable {
     case fiveMinutes
     case oneHour
@@ -145,6 +151,7 @@ class OverlayViewModel {
 
     func clearSearch() {
         searchTask?.cancel()
+        searchTask = nil
         searchQuery = ""
         searchResults = []
         isSearchInProgress = false
@@ -156,6 +163,7 @@ class OverlayViewModel {
     func performSearch() {
         print("[JustNow] performSearch() called with query: '\(searchQuery)'")
         searchTask?.cancel()
+        searchTask = nil
         guard !searchQuery.isEmpty else {
             print("[JustNow] Query is empty, returning")
             searchResults = []
@@ -215,25 +223,36 @@ class OverlayViewModel {
                 let batch = Array(uncachedFrames[batchStart..<batchEnd])
 
                 // Process batch in parallel
-                await withTaskGroup(of: Bool.self) { group in
+                await withTaskGroup(of: SearchOCRBatchResult.self) { group in
                     for frame in batch {
                         group.addTask {
-                            guard let image = try? await buffer.getFullImage(for: frame) else {
-                                return false
+                            guard !Task.isCancelled else {
+                                return .skipped
                             }
+
+                            guard let image = try? await buffer.getFullImage(for: frame) else {
+                                return .frameLoadFailed
+                            }
+
                             let text = await TextRecognitionManager.extractText(from: image)
 
+                            guard !Task.isCancelled else {
+                                return .skipped
+                            }
+
                             // Persist OCR text to indexed cache
-                            await cache.setText(text, for: frame.id, timestamp: frame.timestamp)
-                            return true
+                            return await buffer.cacheOCRTextIfCurrent(text, for: frame) ? .ocrPersisted : .skipped
                         }
                     }
 
-                    for await didOCR in group {
-                        if didOCR {
+                    for await result in group {
+                        switch result {
+                        case .ocrPersisted:
                             ocrRuns += 1
-                        } else {
+                        case .frameLoadFailed:
                             loadFailures += 1
+                        case .skipped:
+                            break
                         }
                     }
                 }
@@ -649,11 +668,17 @@ struct FramePreviewView: View {
             image = nil
 
             do {
-                image = try await frameBuffer.getFullImage(for: frame)
+                let loadedImage = try await frameBuffer.getFullImage(for: frame)
+                guard !Task.isCancelled else { return }
+                image = loadedImage
+            } catch is CancellationError {
+                return
             } catch {
+                guard !Task.isCancelled else { return }
                 loadFailed = true
             }
 
+            guard !Task.isCancelled else { return }
             isLoading = false
         }
     }

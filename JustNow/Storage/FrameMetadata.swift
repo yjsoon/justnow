@@ -5,7 +5,7 @@
 
 import Foundation
 
-struct FrameMetadata: Codable, Identifiable, Sendable {
+nonisolated struct FrameMetadata: Codable, Identifiable, Sendable {
     let id: UUID
     let timestamp: Date
     let hash: UInt64
@@ -14,7 +14,7 @@ struct FrameMetadata: Codable, Identifiable, Sendable {
     let fileSize: Int64
 }
 
-struct FrameManifest: Codable, Sendable {
+nonisolated struct FrameManifest: Codable, Sendable {
     var version: Int = 1
     var frames: [FrameMetadata] = []
     var lastModified: Date = Date()

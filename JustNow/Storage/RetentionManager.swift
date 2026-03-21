@@ -5,12 +5,12 @@
 
 import Foundation
 
-struct RetentionTier: Sendable, Equatable {
+nonisolated struct RetentionTier: Sendable, Equatable {
     let maxAge: TimeInterval
     let minimumSpacing: TimeInterval
 }
 
-struct RetentionPolicy: Sendable, Equatable {
+nonisolated struct RetentionPolicy: Sendable, Equatable {
     let maximumAge: TimeInterval
     let tiers: [RetentionTier]
 

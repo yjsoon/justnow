@@ -7,14 +7,13 @@ import Foundation
 import SQLite3
 import os.log
 
-private let logger = Logger(subsystem: "sg.tk.JustNow", category: "TextCache")
-
 enum TextCacheError: Error {
     case sqlite(String)
 }
 
 /// Caches OCR-extracted text for frames to speed up subsequent searches
 actor TextCache {
+    nonisolated private static let logger = Logger(subsystem: "sg.tk.JustNow", category: "TextCache")
     private let databaseURL: URL
     private let legacyCacheURL: URL
     private var db: OpaquePointer?
@@ -34,13 +33,13 @@ actor TextCache {
             db = connection
             try Self.createSchema(on: connection)
             try Self.repairIndex(on: connection)
-            logger.info("Text cache ready with \(Self.countRows(in: connection)) entries")
+            Self.logger.info("Text cache ready with \(Self.countRows(in: connection)) entries")
 
             Task { [weak self] in
                 await self?.migrateLegacyCacheIfNeeded()
             }
         } catch {
-            logger.error("Failed to initialise text cache: \(error.localizedDescription)")
+            Self.logger.error("Failed to initialise text cache: \(error.localizedDescription)")
             if let db {
                 sqlite3_close(db)
                 self.db = nil
@@ -116,7 +115,15 @@ actor TextCache {
                 }
             }
         } catch {
-            logger.error("Failed to cache OCR text: \(error.localizedDescription)")
+            Self.logger.error("Failed to cache OCR text: \(error.localizedDescription)")
+        }
+    }
+
+    func removeText(for frameID: UUID) {
+        do {
+            try delete(frameIDs: [frameID])
+        } catch {
+            Self.logger.error("Failed to remove OCR text: \(error.localizedDescription)")
         }
     }
 
@@ -291,9 +298,9 @@ actor TextCache {
             guard !staleIDs.isEmpty else { return }
 
             try delete(frameIDs: staleIDs)
-            logger.info("Pruned \(staleIDs.count) stale OCR cache entries")
+            Self.logger.info("Pruned \(staleIDs.count) stale OCR cache entries")
         } catch {
-            logger.error("Failed to prune OCR cache: \(error.localizedDescription)")
+            Self.logger.error("Failed to prune OCR cache: \(error.localizedDescription)")
         }
     }
 
@@ -305,7 +312,7 @@ actor TextCache {
                 try execute("DELETE FROM frame_text;")
             }
         } catch {
-            logger.error("Failed to clear OCR cache: \(error.localizedDescription)")
+            Self.logger.error("Failed to clear OCR cache: \(error.localizedDescription)")
         }
     }
 
@@ -386,7 +393,7 @@ actor TextCache {
         do {
             try migrateLegacyJSONIfNeeded()
         } catch {
-            logger.error("Failed to migrate legacy OCR cache: \(error.localizedDescription)")
+            Self.logger.error("Failed to migrate legacy OCR cache: \(error.localizedDescription)")
         }
     }
 
@@ -439,7 +446,7 @@ actor TextCache {
             }
         }
 
-        logger.info("Migrated \(legacy.count) legacy OCR cache entries into SQLite")
+        Self.logger.info("Migrated \(legacy.count) legacy OCR cache entries into SQLite")
     }
 
     private func delete(frameIDs: [UUID]) throws {

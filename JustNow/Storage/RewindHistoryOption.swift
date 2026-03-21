@@ -5,7 +5,7 @@
 
 import Foundation
 
-enum RewindHistoryOption: Double, CaseIterable, Identifiable {
+nonisolated enum RewindHistoryOption: Double, CaseIterable, Identifiable {
     case thirtyMinutes = 1800
     case twoHours = 7200
     case eightHours = 28800

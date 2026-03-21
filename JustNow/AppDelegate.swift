@@ -98,6 +98,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     private var isPausedForOverlay = false
     private var wasCapturingBeforeSession = false
     private var isPausedForSession = false
+    private var overlayPresentationTask: Task<Void, Never>?
+    private var setupCaptureTask: Task<Void, Never>?
+    private var pendingCaptureStartTask: Task<Void, Never>?
+    private var pendingCaptureStartGeneration = 0
+    private var isTerminationFlushInProgress = false
     private var idleTransitionTimer: Timer?
     private var didRequestScreenRecordingPermissionThisLaunch = false
     private var didShowPermissionAlertThisLaunch = false
@@ -174,9 +179,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         if let monitor = inputEventMonitor {
             NSEvent.removeMonitor(monitor)
         }
-        Task { @MainActor in
-            await frameBuffer?.flushCaches()
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isTerminationFlushInProgress else { return .terminateLater }
+
+        isTerminationFlushInProgress = true
+        overlayPresentationTask?.cancel()
+        setupCaptureTask?.cancel()
+        cancelPendingCaptureStart()
+
+        Task { @MainActor [weak self] in
+            guard let self else {
+                sender.reply(toApplicationShouldTerminate: true)
+                return
+            }
+
+            defer {
+                self.isTerminationFlushInProgress = false
+                sender.reply(toApplicationShouldTerminate: true)
+            }
+
+            await self.setupCaptureTask?.value
+            await self.captureManager?.stopCapture()
+            await self.frameBuffer?.flushCaches()
         }
+
+        return .terminateLater
     }
 
     func applicationDidResignActive(_ notification: Notification) {
@@ -285,60 +314,92 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     private func setupCapture() {
         captureManager = ScreenCaptureManager()
 
-        Task { @MainActor in
+        setupCaptureTask?.cancel()
+        setupCaptureTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.setupCaptureTask = nil }
+
             // Initialize frame buffer (loads persisted frames from disk)
             do {
-                let retentionPolicy = currentRetentionPolicy()
+                let retentionPolicy = self.currentRetentionPolicy()
                 let buffer = try await FrameBuffer(retentionPolicy: retentionPolicy)
-                frameBuffer = buffer
-                lastAppliedRetentionPolicy = retentionPolicy
-                settingsContext.frameBuffer = buffer
+                guard !Task.isCancelled else { return }
+
+                self.frameBuffer = buffer
+                self.lastAppliedRetentionPolicy = retentionPolicy
+                self.settingsContext.frameBuffer = buffer
 
                 let loadedCount = buffer.frameCount
                 if loadedCount > 0 {
                     print("Loaded \(loadedCount) frames from disk")
                 }
             } catch {
+                if error is CancellationError || Task.isCancelled {
+                    return
+                }
                 print("Failed to initialize frame buffer: \(error)")
                 // Show error but don't quit
-                showErrorAlert(error)
+                self.showErrorAlert(error)
                 return
             }
 
-            captureManager.delegate = self
-            let preflightPolicy = computeCapturePolicy()
-            captureManager.updateCaptureInterval(preflightPolicy.interval)
-            captureManager.updateCaptureScale(preflightPolicy.scale)
-            frameBuffer?.updateSaveOptions(
+            guard !Task.isCancelled else { return }
+
+            self.captureManager.delegate = self
+            let preflightPolicy = self.computeCapturePolicy()
+            self.captureManager.updateCaptureInterval(preflightPolicy.interval)
+            self.captureManager.updateCaptureScale(preflightPolicy.scale)
+            self.frameBuffer?.updateSaveOptions(
                 preflightPolicy.saveOptions,
                 duplicatePolicy: preflightPolicy.duplicatePolicy
             )
-            frameBuffer?.updateOCRIndexingPolicy(preflightPolicy.ocrIndexingPolicy)
+            self.frameBuffer?.updateOCRIndexingPolicy(preflightPolicy.ocrIndexingPolicy)
 
-            guard !isUserPaused else {
-                updateCaptureStatus("Paused (User)")
+            guard self.canStartCaptureNow() || self.isUserPaused else {
+                if self.isPausedForOverlay || self.overlayController?.isVisible == true {
+                    self.updateCaptureStatus("Paused (Overlay)")
+                } else if self.isPausedForSession {
+                    self.updateCaptureStatus("Session Inactive")
+                }
                 return
             }
 
-            switch resolveLaunchPermissionState() {
+            guard !self.isUserPaused else {
+                self.updateCaptureStatus("Paused (User)")
+                return
+            }
+
+            switch self.resolveLaunchPermissionState() {
             case .granted:
                 do {
-                    try await captureManager.startCapture()
-                    updateCaptureStatus("Active")
-                    lastAppliedPolicy = nil
-                    updateCapturePolicy()
+                    try await self.captureManager.startCapture()
+                    guard !Task.isCancelled else { return }
+                    guard self.canStartCaptureNow() else {
+                        await self.captureManager.stopCapture()
+                        if self.isPausedForOverlay || self.overlayController?.isVisible == true {
+                            self.updateCaptureStatus("Paused (Overlay)")
+                        } else if self.isPausedForSession {
+                            self.updateCaptureStatus("Session Inactive")
+                        }
+                        return
+                    }
+                    self.updateCaptureStatus("Active")
+                    self.lastAppliedPolicy = nil
+                    self.updateCapturePolicy()
+                } catch is CancellationError {
+                    return
                 } catch CaptureError.permissionDenied {
-                    updateCaptureStatus("No Permission")
-                    showPermissionAlert()
+                    self.updateCaptureStatus("No Permission")
+                    self.showPermissionAlert()
                 } catch {
-                    updateCaptureStatus("Error")
-                    showErrorAlert(error)
+                    self.updateCaptureStatus("Error")
+                    self.showErrorAlert(error)
                 }
             case .requestedThisLaunch:
-                updateCaptureStatus("Awaiting Permission")
+                self.updateCaptureStatus("Awaiting Permission")
             case .deniedPreviously:
-                updateCaptureStatus("No Permission")
-                showPermissionAlert()
+                self.updateCaptureStatus("No Permission")
+                self.showPermissionAlert()
             }
         }
     }
@@ -348,8 +409,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
         // Re-evaluate capture policy periodically (battery, low power, thermal)
         capturePolicyTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.updateCapturePolicy()
+            guard let self else { return }
+            Task { @MainActor [self] in
+                self.updateCapturePolicy()
             }
         }
         capturePolicyTimer?.tolerance = 10.0
@@ -361,9 +423,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
-                self?.updateCapturePolicy()
-                await self?.updateRetentionPolicyIfNeeded()
+            guard let self else { return }
+            Task { @MainActor [self] in
+                self.updateCapturePolicy()
+                await self.updateRetentionPolicyIfNeeded()
             }
         }
 
@@ -372,8 +435,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
-                self?.updateCapturePolicy()
+            guard let self else { return }
+            Task { @MainActor [self] in
+                self.updateCapturePolicy()
             }
         }
     }
@@ -382,8 +446,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         inputEventMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel, .mouseMoved]
         ) { [weak self] _ in
-            Task { @MainActor in
-                self?.handleUserActivity()
+            guard let self else { return }
+            Task { @MainActor [self] in
+                self.handleUserActivity()
             }
         }
     }
@@ -438,6 +503,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     }
 
     @objc private func handleSleep() {
+        cancelPendingCaptureStart()
         Task { @MainActor in
             updateCaptureStatus("Sleeping...")
             await captureManager.stopCapture()
@@ -452,6 +518,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     }
 
     @objc private func handleScreenSleep() {
+        cancelPendingCaptureStart()
         Task { @MainActor in
             updateCaptureStatus("Screen Off")
             await captureManager.stopCapture()
@@ -475,10 +542,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
     private func pauseCaptureForSession() {
         guard !isPausedForSession else { return }
+        let wasActivelyCapturing = captureManager.isCapturing
+        let shouldResumeCaptureAfterSession =
+            captureManager.isCapturing
+            || setupCaptureTask != nil
+            || pendingCaptureStartTask != nil
+            || (isPausedForOverlay && wasCapturingBeforeOverlay)
         isPausedForSession = true
-        wasCapturingBeforeSession = captureManager.isCapturing
+        wasCapturingBeforeSession = shouldResumeCaptureAfterSession
+        cancelPendingCaptureStart()
 
-        guard wasCapturingBeforeSession else { return }
+        guard wasActivelyCapturing else { return }
         Task { @MainActor in
             updateCaptureStatus("Session Inactive")
             await captureManager.stopCapture()
@@ -496,46 +570,118 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         resumeCapture(reason: "session active")
     }
 
+    private func cancelPendingCaptureStart() {
+        pendingCaptureStartGeneration += 1
+        pendingCaptureStartTask?.cancel()
+        pendingCaptureStartTask = nil
+    }
+
+    private func canStartCaptureNow() -> Bool {
+        !isUserPaused && !isPausedForOverlay && !isPausedForSession && overlayController?.isVisible != true
+    }
+
+    private func captureWasActiveOrPendingBeforeOverlayPause() -> Bool {
+        captureManager.isCapturing
+            || setupCaptureTask != nil
+            || pendingCaptureStartTask != nil
+            || (isPausedForSession && wasCapturingBeforeSession)
+    }
+
+    private func startCaptureIfAllowed(successMessage: String, failurePrefix: String, failureStatus: String) async -> Bool {
+        guard !Task.isCancelled, canStartCaptureNow() else { return false }
+
+        do {
+            try await captureManager.startCapture()
+            guard !Task.isCancelled, canStartCaptureNow() else {
+                await captureManager.stopCapture()
+                return false
+            }
+            updateCaptureStatus("Active")
+            lastAppliedPolicy = nil
+            updateCapturePolicy()
+            print(successMessage)
+            return true
+        } catch is CancellationError {
+            return false
+        } catch CaptureError.permissionDenied {
+            updateCaptureStatus("No Permission")
+            showPermissionAlert()
+            return false
+        } catch {
+            print("\(failurePrefix): \(error)")
+            updateCaptureStatus(failureStatus)
+            return false
+        }
+    }
+
     private func resumeCapture(reason: String) {
-        Task { @MainActor in
-            guard !isUserPaused else {
+        if setupCaptureTask != nil {
+            cancelPendingCaptureStart()
+            if isUserPaused {
                 updateCaptureStatus("Paused (User)")
-                return
-            }
-
-            guard overlayController?.isVisible != true else {
+            } else if isPausedForOverlay || overlayController?.isVisible == true {
                 updateCaptureStatus("Paused (Overlay)")
+            } else if isPausedForSession {
+                updateCaptureStatus("Session Inactive")
+            } else {
+                updateCaptureStatus("Resuming...")
+            }
+            return
+        }
+
+        cancelPendingCaptureStart()
+        let generation = pendingCaptureStartGeneration
+        pendingCaptureStartTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if generation == self.pendingCaptureStartGeneration {
+                    self.pendingCaptureStartTask = nil
+                }
+            }
+
+            guard self.canStartCaptureNow() else {
+                if self.isUserPaused {
+                    self.updateCaptureStatus("Paused (User)")
+                } else if self.isPausedForOverlay || self.overlayController?.isVisible == true {
+                    self.updateCaptureStatus("Paused (Overlay)")
+                } else if self.isPausedForSession {
+                    self.updateCaptureStatus("Session Inactive")
+                }
                 return
             }
 
-            updateCaptureStatus("Resuming...")
+            self.updateCaptureStatus("Resuming...")
 
             // Delay to let system stabilise
             try? await Task.sleep(for: .seconds(2))
 
-            do {
-                try await captureManager.startCapture()
-                updateCaptureStatus("Active")
-                lastAppliedPolicy = nil
-                updateCapturePolicy()
-                print("Capture resumed after \(reason)")
-            } catch {
-                print("Failed to resume capture after \(reason): \(error)")
-                updateCaptureStatus("Error")
-
-                // Retry once more after another delay
-                try? await Task.sleep(for: .seconds(3))
-                do {
-                    try await captureManager.startCapture()
-                    updateCaptureStatus("Active")
-                    lastAppliedPolicy = nil
-                    updateCapturePolicy()
-                    print("Capture resumed on retry")
-                } catch {
-                    print("Retry also failed: \(error)")
-                    updateCaptureStatus("Failed")
-                }
+            guard !Task.isCancelled,
+                  generation == self.pendingCaptureStartGeneration,
+                  self.canStartCaptureNow() else {
+                return
             }
+
+            let didStart = await self.startCaptureIfAllowed(
+                successMessage: "Capture resumed after \(reason)",
+                failurePrefix: "Failed to resume capture after \(reason)",
+                failureStatus: "Error"
+            )
+            guard !didStart else { return }
+
+            // Retry once more after another delay.
+            try? await Task.sleep(for: .seconds(3))
+
+            guard !Task.isCancelled,
+                  generation == self.pendingCaptureStartGeneration,
+                  self.canStartCaptureNow() else {
+                return
+            }
+
+            _ = await self.startCaptureIfAllowed(
+                successMessage: "Capture resumed on retry",
+                failurePrefix: "Retry also failed",
+                failureStatus: "Failed"
+            )
         }
     }
 
@@ -546,24 +692,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     }
 
     func captureManagerDidStop(_ manager: ScreenCaptureManager) {
-        guard overlayController?.isVisible != true, !isPausedForOverlay, !isUserPaused else { return }
+        guard overlayController?.isVisible != true, !isPausedForOverlay, !isPausedForSession, !isUserPaused else { return }
         print("Capture stopped unexpectedly, attempting restart...")
-        updateCaptureStatus("Restarting...")
         appNapPreventer.stopActivity()
+        cancelPendingCaptureStart()
+        let generation = pendingCaptureStartGeneration
+        pendingCaptureStartTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if generation == self.pendingCaptureStartGeneration {
+                    self.pendingCaptureStartTask = nil
+                }
+            }
 
-        Task { @MainActor in
+            guard self.canStartCaptureNow() else { return }
+            self.updateCaptureStatus("Restarting...")
             try? await Task.sleep(for: .seconds(2))
 
-            do {
-                try await captureManager.startCapture()
-                updateCaptureStatus("Active")
-                lastAppliedPolicy = nil
-                updateCapturePolicy()
-                print("Capture restarted successfully")
-            } catch {
-                print("Failed to restart capture: \(error)")
-                updateCaptureStatus("Stopped")
+            guard !Task.isCancelled,
+                  generation == self.pendingCaptureStartGeneration,
+                  self.canStartCaptureNow() else {
+                return
             }
+
+            _ = await self.startCaptureIfAllowed(
+                successMessage: "Capture restarted successfully",
+                failurePrefix: "Failed to restart capture",
+                failureStatus: "Stopped"
+            )
         }
     }
 
@@ -578,6 +734,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         }
 
         if isUserPaused {
+            cancelPendingCaptureStart()
             Task { @MainActor in
                 updateCaptureStatus("Paused (User)")
                 await captureManager.stopCapture()
@@ -593,7 +750,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     // MARK: - Actions
 
     @objc private func toggleOverlay() {
-        if let controller = overlayController, controller.isVisible {
+        if let overlayPresentationTask {
+            overlayPresentationTask.cancel()
+            self.overlayPresentationTask = nil
+        } else if let controller = overlayController, controller.isVisible {
             controller.hideOverlay()
         } else {
             showOverlay()
@@ -602,31 +762,38 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
     @objc private func showOverlay() {
         guard let frameBuffer = frameBuffer else { return }
+        guard overlayPresentationTask == nil else { return }
 
-        Task { @MainActor in
+        overlayPresentationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.overlayPresentationTask = nil }
+
             // Capture a fresh frame immediately so the overlay has the latest state
-            if let image = await captureManager.captureNow() {
+            if let image = await self.captureManager.captureNow() {
+                guard !Task.isCancelled else { return }
                 await frameBuffer.addFrameSync(image, timestamp: Date())
             }
 
-            if overlayController == nil {
-                overlayController = OverlayWindowController(
+            guard !Task.isCancelled else { return }
+
+            if self.overlayController == nil {
+                self.overlayController = OverlayWindowController(
                     frameBuffer: frameBuffer,
-                    dismissShortcutKeyCode: overlayDismissKeyCode,
-                    dismissShortcutModifiers: overlayDismissModifiers,
+                    dismissShortcutKeyCode: self.overlayDismissKeyCode,
+                    dismissShortcutModifiers: self.overlayDismissModifiers,
                     onVisibilityChanged: { [weak self] isVisible in
                         self?.handleOverlayVisibilityChanged(isVisible: isVisible)
                     }
                 )
             } else {
-                overlayController?.updateDismissShortcut(
-                    keyCode: overlayDismissKeyCode,
-                    modifiers: overlayDismissModifiers
+                self.overlayController?.updateDismissShortcut(
+                    keyCode: self.overlayDismissKeyCode,
+                    modifiers: self.overlayDismissModifiers
                 )
             }
-            let recentTimelineWindow = RecentTimelineWindow.resolved(from: recentTimelineWindowSeconds)
-            let rewindHistoryOption = RewindHistoryOption.resolved(from: rewindHistorySeconds)
-            overlayController?.showOverlay(
+            let recentTimelineWindow = RecentTimelineWindow.resolved(from: self.recentTimelineWindowSeconds)
+            let rewindHistoryOption = RewindHistoryOption.resolved(from: self.rewindHistorySeconds)
+            self.overlayController?.showOverlay(
                 recentTimelineWindow: recentTimelineWindow.timeInterval,
                 rewindHistoryOption: rewindHistoryOption
             )
@@ -643,10 +810,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
     private func pauseCaptureForOverlay() {
         guard !isPausedForOverlay else { return }
+        let wasActivelyCapturing = captureManager.isCapturing
+        wasCapturingBeforeOverlay = captureWasActiveOrPendingBeforeOverlayPause()
         isPausedForOverlay = true
-        wasCapturingBeforeOverlay = captureManager.isCapturing
+        cancelPendingCaptureStart()
 
-        guard wasCapturingBeforeOverlay else { return }
+        guard wasActivelyCapturing else { return }
         Task { @MainActor in
             updateCaptureStatus("Paused (Overlay)")
             await captureManager.stopCapture()
@@ -660,17 +829,43 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         guard wasCapturingBeforeOverlay else { return }
         wasCapturingBeforeOverlay = false
 
-        Task { @MainActor in
-            updateCaptureStatus("Resuming...")
-            do {
-                try await captureManager.startCapture()
-                updateCaptureStatus("Active")
-                lastAppliedPolicy = nil
-                updateCapturePolicy()
-            } catch {
-                updateCaptureStatus("Error")
-                print("Failed to resume capture after overlay: \(error)")
+        if setupCaptureTask != nil {
+            cancelPendingCaptureStart()
+            if isUserPaused {
+                updateCaptureStatus("Paused (User)")
+            } else if isPausedForSession {
+                updateCaptureStatus("Session Inactive")
+            } else {
+                updateCaptureStatus("Resuming...")
             }
+            return
+        }
+
+        cancelPendingCaptureStart()
+        let generation = pendingCaptureStartGeneration
+        pendingCaptureStartTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if generation == self.pendingCaptureStartGeneration {
+                    self.pendingCaptureStartTask = nil
+                }
+            }
+
+            guard self.canStartCaptureNow() else {
+                if self.isUserPaused {
+                    self.updateCaptureStatus("Paused (User)")
+                } else if self.isPausedForSession {
+                    self.updateCaptureStatus("Session Inactive")
+                }
+                return
+            }
+
+            self.updateCaptureStatus("Resuming...")
+            _ = await self.startCaptureIfAllowed(
+                successMessage: "Capture resumed after overlay",
+                failurePrefix: "Failed to resume capture after overlay",
+                failureStatus: "Error"
+            )
         }
     }
 
@@ -860,8 +1055,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         guard remaining > 0 else { return }
 
         idleTransitionTimer = Timer.scheduledTimer(withTimeInterval: remaining, repeats: false) { [weak self] _ in
-            Task { @MainActor in
-                self?.updateCapturePolicy()
+            guard let self else { return }
+            Task { @MainActor [self] in
+                self.updateCapturePolicy()
             }
         }
         idleTransitionTimer?.tolerance = min(remaining * 0.2, 5.0)
