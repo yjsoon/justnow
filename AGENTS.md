@@ -121,6 +121,11 @@ Release process and signing/deployment details are documented in:
 - Stable release publishing should also deploy `site/` to Cloudflare Pages unless `--skip-site-deploy` is explicitly requested.
 - Cloudflare Pages is the intended host for `justnow.tk.sg`; use `wrangler.jsonc` and `Docs/cloudflare-pages.md` as the source of truth for site deployment.
 - Keep menu bar recording controls visually in sync: when pause/resume state changes, update both the menu item and the status item icon.
+- In Settings, prefer native macOS patterns when aiming for system look and feel; use `Form` semantics and `LabeledContent` for label/control rows where appropriate.
+- Settings rows should usually control real persisted behaviour rather than restating a fixed implementation detail.
+- Product-facing settings copy should describe user outcomes rather than internal engine details such as retention compaction mechanics.
+- Keep click-outside overlay dismissal; if keyboard dismissal becomes configurable, preserve `Escape` as the simple default.
+- In the timeline UI, keep the recent-detail boundary and label priority aligned with the configured recent window rather than a hard-coded cutoff.
 - If UI copy mentions a nominal capture interval, sanity-check it against adaptive throttling and deduplicated browsing so the user-facing wording still matches observed behaviour.
 - Avoid stacking a custom permission alert on top of a macOS TCC prompt during first-launch flows; if the system dialog is already doing the ask, defer app guidance until after the user responds.
 - When a SwiftUI view is exposed through both a `Settings` scene and an AppKit-hosted window, centralise construction and shared dependencies so both entry points stay in sync.
