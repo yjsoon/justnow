@@ -30,6 +30,8 @@ extension ScreenCaptureDelegate {
 /// This avoids the persistent purple "sharing" indicator in the menu bar.
 @MainActor
 class ScreenCaptureManager: NSObject {
+    private let maximumConsecutiveCaptureFailures = 3
+
     private var filter: SCContentFilter?
     private var config: SCStreamConfiguration?
     private var displayDimensions: (width: Int, height: Int)?
@@ -51,6 +53,7 @@ class ScreenCaptureManager: NSObject {
     /// Global gate so periodic capture and overlay refreshes never issue overlapping screenshot requests.
     private var isCaptureRequestInFlight = false
     private var captureRequestWaiters: [(id: UUID, continuation: CheckedContinuation<CaptureTurnWaitResult, Never>)] = []
+    private var consecutiveCaptureFailures = 0
 
     static func hasScreenRecordingPermission() -> Bool {
         CGPreflightScreenCaptureAccess()
@@ -91,6 +94,7 @@ class ScreenCaptureManager: NSObject {
         displayDimensions = dimensions
         config = cfg
 
+        consecutiveCaptureFailures = 0
         isCapturing = true
         captureScheduleRevision += 1
         nextCaptureAt = Date()
@@ -110,6 +114,7 @@ class ScreenCaptureManager: NSObject {
         captureLoopSerial += 1
         captureScheduleRevision += 1
         isCapturing = false
+        consecutiveCaptureFailures = 0
         nextCaptureAt = nil
         captureLoopTask = nil
         previousLoop?.cancel()
@@ -300,13 +305,27 @@ class ScreenCaptureManager: NSObject {
         do {
             let image = try await captureImageSerially(expectedLoopSerial: loopSerial)
             guard isCapturing, !Task.isCancelled, loopSerial == captureLoopSerial else { return }
+            consecutiveCaptureFailures = 0
             let timestamp = Date()
             delegate?.captureManager(self, didCaptureFrame: image, at: timestamp)
         } catch is CancellationError {
             // Expected when stopping capture.
         } catch {
-            print("Screenshot capture failed: \(error)")
+            handleCaptureFailure(error, loopSerial: loopSerial)
         }
+    }
+
+    private func handleCaptureFailure(_ error: Error, loopSerial: Int) {
+        guard isCapturing, loopSerial == captureLoopSerial else { return }
+
+        consecutiveCaptureFailures += 1
+        let failureCount = consecutiveCaptureFailures
+        print("Screenshot capture failed (\(failureCount)/\(maximumConsecutiveCaptureFailures)): \(error)")
+
+        guard failureCount >= maximumConsecutiveCaptureFailures else { return }
+
+        _ = stopCaptureLoop()
+        delegate?.captureManagerDidStop(self)
     }
 
     private func applyCaptureScale(to config: SCStreamConfiguration) {

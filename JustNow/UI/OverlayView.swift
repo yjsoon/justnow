@@ -10,6 +10,12 @@ import os.log
 
 private let logger = Logger(subsystem: "sg.tk.JustNow", category: "OverlayView")
 
+nonisolated enum SearchOCRBatchResult: Sendable {
+    case ocrPersisted
+    case frameLoadFailed
+    case skipped
+}
+
 enum SearchTimeScope: String, CaseIterable {
     case fiveMinutes
     case oneHour
@@ -217,33 +223,36 @@ class OverlayViewModel {
                 let batch = Array(uncachedFrames[batchStart..<batchEnd])
 
                 // Process batch in parallel
-                await withTaskGroup(of: Bool.self) { group in
+                await withTaskGroup(of: SearchOCRBatchResult.self) { group in
                     for frame in batch {
                         group.addTask {
                             guard !Task.isCancelled else {
-                                return false
+                                return .skipped
                             }
 
                             guard let image = try? await buffer.getFullImage(for: frame) else {
-                                return false
+                                return .frameLoadFailed
                             }
 
                             let text = await TextRecognitionManager.extractText(from: image)
 
                             guard !Task.isCancelled else {
-                                return false
+                                return .skipped
                             }
 
                             // Persist OCR text to indexed cache
-                            return await buffer.cacheOCRTextIfCurrent(text, for: frame)
+                            return await buffer.cacheOCRTextIfCurrent(text, for: frame) ? .ocrPersisted : .skipped
                         }
                     }
 
-                    for await didOCR in group {
-                        if didOCR {
+                    for await result in group {
+                        switch result {
+                        case .ocrPersisted:
                             ocrRuns += 1
-                        } else {
+                        case .frameLoadFailed:
                             loadFailures += 1
+                        case .skipped:
+                            break
                         }
                     }
                 }
