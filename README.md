@@ -8,7 +8,7 @@ A native macOS menu bar app that continuously captures screenshots and lets you 
 - **Perceptual hashing**: Skips near-identical frames to save memory (30-50% savings)
 - **Exponential decay**: Recent frames kept at full density, older frames thinned out
 - **Recent detail**: Browse the newest 1, 2, or 5 minutes using every stored frame before older history is collapsed
-- **Battery conscious**: Can reduce quality/background work on battery without changing your chosen cadence
+- **Battery conscious**: Can capture less often, lower image quality, and slow background indexing when power or thermal conditions tighten
 - **Fullscreen overlay**: Press ⌘⌥J to view timeline, scroll/drag to navigate
 - **Menu bar only**: Runs silently with no dock icon
 

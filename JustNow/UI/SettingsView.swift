@@ -13,9 +13,6 @@ struct SettingsView: View {
     @AppStorage("recentTimelineWindowSeconds")
     private var recentTimelineWindowSeconds: Double = RecentTimelineWindow.defaultValue.rawValue
     @AppStorage("reduceCaptureOnBattery") private var reduceCaptureOnBattery: Bool = true
-    @AppStorage("keepConfiguredCaptureCadenceOnBattery")
-    private var keepConfiguredCaptureCadenceOnBattery: Bool = true
-    @AppStorage("backgroundSearchIndexingEnabled") private var backgroundSearchIndexingEnabled: Bool = true
     @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 38  // J key
     @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
     @AppStorage("overlayDismissKeyCode") private var overlayDismissKeyCode: Int = 53
@@ -158,26 +155,11 @@ struct SettingsView: View {
             }
 
             Section {
-                Toggle("Reduce capture rate on battery", isOn: $reduceCaptureOnBattery)
-                Text("When enabled, JustNow can lower image quality and throttle background work on battery power, thermal pressure, or extended idle time. Capture cadence only changes if the setting below is off.")
+                Toggle("Reduce power use automatically", isOn: $reduceCaptureOnBattery)
+                Text("On battery / in Low Power Mode / under thermal pressure / when idle for a while: This setting makes JustNow capture less often, save lower-quality images, and slow background search indexing.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-
-                Toggle("Keep configured capture cadence on battery", isOn: $keepConfiguredCaptureCadenceOnBattery)
-                    .disabled(!reduceCaptureOnBattery)
-                Text("Preserves the interval you chose when unplugged or in Low Power Mode. Battery savings come from lower image quality and background throttling instead.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                if isSearchEnabled {
-                    Toggle("Background OCR indexing for search", isOn: $backgroundSearchIndexingEnabled)
-                    Text("Indexes recent frames in the background so searches return faster. Automatically throttled on battery, low power mode, and thermal pressure.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             } header: {
                 Text("Battery")
             }

@@ -84,9 +84,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     @AppStorage("recentTimelineWindowSeconds")
     private var recentTimelineWindowSeconds: Double = RecentTimelineWindow.defaultValue.rawValue
     @AppStorage("reduceCaptureOnBattery") private var reduceCaptureOnBattery: Bool = true
-    @AppStorage("keepConfiguredCaptureCadenceOnBattery")
-    private var keepConfiguredCaptureCadenceOnBattery: Bool = true
-    @AppStorage("backgroundSearchIndexingEnabled") private var backgroundSearchIndexingEnabled: Bool = true
     @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 38  // J key
     @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
     @AppStorage("overlayDismissKeyCode") private var overlayDismissKeyCode: Int = 53
@@ -946,7 +943,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         var scale = 2
         var saveOptions = FrameSaveOptions.standard
         var duplicatePolicy = DuplicateFramePolicy.exact(atMostEvery: captureInterval)
-        var ocrIndexEnabled = FeatureFlags.isSearchEnabled && backgroundSearchIndexingEnabled
+        var ocrIndexEnabled = FeatureFlags.isSearchEnabled
         var ocrIndexInterval = ocrIndexBaseInterval
         var ocrIndexQueueDepth = ocrIndexBaseQueueDepth
         var ocrIndexMaxAge = ocrIndexMaxFrameAge
@@ -954,10 +951,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         if onBattery || lowPowerMode {
             scale = 1
             saveOptions = .lowPower
-            if !keepConfiguredCaptureCadenceOnBattery {
-                interval *= batteryMultiplier
-                duplicatePolicy = .lowPower
-            }
+            interval *= batteryMultiplier
+            duplicatePolicy = .lowPower
 
             ocrIndexInterval = ocrIndexBatteryInterval
             ocrIndexQueueDepth = ocrIndexBatteryQueueDepth
@@ -968,18 +963,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             if batteryCharge <= batteryCriticalThreshold {
                 scale = 1
                 saveOptions = .lowPower
-                if !keepConfiguredCaptureCadenceOnBattery {
-                    interval *= batteryCriticalMultiplier
-                    duplicatePolicy = .lowPower
-                }
+                interval *= batteryCriticalMultiplier
+                duplicatePolicy = .lowPower
                 ocrIndexEnabled = false
             } else if batteryCharge <= batteryLowThreshold {
                 scale = 1
                 saveOptions = .lowPower
-                if !keepConfiguredCaptureCadenceOnBattery {
-                    interval *= batteryLowMultiplier
-                    duplicatePolicy = .lowPower
-                }
+                interval *= batteryLowMultiplier
+                duplicatePolicy = .lowPower
 
                 ocrIndexInterval = max(ocrIndexInterval, ocrIndexBatteryInterval)
                 ocrIndexQueueDepth = min(ocrIndexQueueDepth, ocrIndexBatteryQueueDepth)
@@ -1022,7 +1013,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             maxFrameAge: ocrIndexMaxAge
         )
 
-        let batteryCanRelaxCadence = (onBattery || lowPowerMode) && !keepConfiguredCaptureCadenceOnBattery
+        let batteryCanRelaxCadence = onBattery || lowPowerMode
         let allowAppNap = batteryCanRelaxCadence || isIdle || isThermalConstrained || interval >= 5
         let shouldPreventAppNap = !allowAppNap
 
