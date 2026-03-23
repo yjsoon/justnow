@@ -3,6 +3,21 @@
     <channel>
         <title>JustNow</title>
         <item>
+            <title>0.2.0</title>
+            <pubDate>Mon, 23 Mar 2026 22:00:33 +0800</pubDate>
+            <link>https://justnow.tk.sg</link>
+            <sparkle:fullReleaseNotesLink>https://justnow.tk.sg/releases/</sparkle:fullReleaseNotesLink>
+            <sparkle:version>8</sparkle:version>
+            <sparkle:shortVersionString>0.2.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown">- Added drag-to-grab text in rewind so you can select part of a frame and copy cleaned OCR text straight to the clipboard.
+- Added rewind settings for a copied-text confirmation sound and an optional text-grab debug preview.
+- Improved text-grab OCR quality and selection feedback, and simplified adaptive power settings.
+</description>
+            <enclosure url="https://github.com/yjsoon/justnow/releases/download/v0.2.0/JustNow-v0.2.0-macos.zip" length="3564958" type="application/octet-stream" sparkle:edSignature="ODKDaT8IUOTJN0Lc3TgnaQ7GCuuRcF6cn6BpojCKSg7SJZ38w40FHYXIXyQg+pBK/5Ktu8vvI46xZ4WtcHwtBA==" />
+        </item>
+        <item>
             <title>0.1.6</title>
             <pubDate>Fri, 13 Mar 2026 14:06:30 +0800</pubDate>
             <link>https://justnow.tk.sg</link>
@@ -27,19 +42,6 @@
             <description sparkle:format="markdown">- Fix timeline detail window mismatch by @yjsoon in https://github.com/yjsoon/justnow/pull/8
 </description>
             <enclosure url="https://github.com/yjsoon/justnow/releases/download/v0.1.5/JustNow-v0.1.5-macos.zip" length="3446428" type="application/octet-stream" sparkle:edSignature="W93xiU872x388ezIPeKYUf9iSViMhJ2Tk0XDAlOaH3uiTNflpqmPCz9NROqdZaW5x46IcwR+xNTDkQ1GmOZeBA==" />
-        </item>
-        <item>
-            <title>0.1.4</title>
-            <pubDate>Thu, 12 Mar 2026 11:36:30 +0800</pubDate>
-            <link>https://justnow.tk.sg</link>
-            <sparkle:fullReleaseNotesLink>https://justnow.tk.sg/releases/</sparkle:fullReleaseNotesLink>
-            <sparkle:version>5</sparkle:version>
-            <sparkle:shortVersionString>0.1.4</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown">- Fix settings window reopen crash and add regression test by @yjsoon in https://github.com/yjsoon/justnow/pull/7
-</description>
-            <enclosure url="https://github.com/yjsoon/justnow/releases/download/v0.1.4/JustNow-v0.1.4-macos.zip" length="3490259" type="application/octet-stream" sparkle:edSignature="12fyauk8RZPEqZaxPLqEmg8oHtrYwyUW1mojjpm6qp6Gn54oeBKgT6NkayPVhKginlHAuDAyPbJGcXlM1nW1CA==" />
         </item>
     </channel>
 </rss>
