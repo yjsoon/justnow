@@ -119,16 +119,13 @@ struct TextGrabSelectionOverlay: View {
                     .gesture(selectionGesture(displayedImageRect: displayedImageRect))
 
                 if let selectionRect {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Color.white.opacity(isProcessing ? 0.12 : 0.08))
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(Color.white.opacity(isProcessing ? 0.08 : 0.04))
                         .overlay {
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
                                 .strokeBorder(
-                                    Color.white.opacity(isProcessing ? 0.85 : 0.65),
-                                    style: StrokeStyle(
-                                        lineWidth: 1.5,
-                                        dash: isProcessing ? [] : [8, 5]
-                                    )
+                                    Color.white.opacity(isProcessing ? 0.74 : 0.42),
+                                    lineWidth: 1.25
                                 )
                         }
                         .frame(width: selectionRect.width, height: selectionRect.height)
@@ -148,6 +145,7 @@ struct TextGrabSelectionOverlay: View {
             bannerResetTask?.cancel()
             selectionRect = nil
             debugSnapshot = nil
+            bannerState = .hint
             releaseCrosshairCursor()
         }
     }

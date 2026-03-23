@@ -77,6 +77,19 @@ final class TextRecognitionManagerTests: XCTestCase {
         XCTAssertEqual(cropRect, CGRect(x: 200, y: 80, width: 400, height: 200))
     }
 
+    func testCropRectDefaultPaddingStaysTightForSmallSelections() throws {
+        let selectionRect = CGRect(x: 10, y: 10, width: 40, height: 24)
+        let cropRect = try XCTUnwrap(
+            TextGrabGeometry.cropRect(
+                for: selectionRect,
+                displayedImageRect: CGRect(x: 0, y: 0, width: 200, height: 100),
+                imageSize: CGSize(width: 400, height: 200)
+            )
+        )
+
+        XCTAssertEqual(cropRect, CGRect(x: 19, y: 19, width: 82, height: 50))
+    }
+
     func testSelectionRectClampsToDisplayedBounds() {
         let selectionRect = TextGrabGeometry.selectionRect(
             from: CGPoint(x: -20, y: 40),

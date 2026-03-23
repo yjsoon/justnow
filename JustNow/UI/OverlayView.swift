@@ -494,6 +494,11 @@ struct ContentAreaView: View {
         .onChange(of: viewModel.selectedIndex) { _, _ in
             textGrabBannerState = .hint
         }
+        .onChange(of: displayedFrames.count) { _, frameCount in
+            if frameCount == 0 {
+                textGrabBannerState = .hint
+            }
+        }
     }
 }
 

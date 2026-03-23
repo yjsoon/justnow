@@ -45,8 +45,8 @@ enum TextGrabGeometry {
         for selectionRect: CGRect,
         displayedImageRect: CGRect,
         imageSize: CGSize,
-        paddingFraction: CGFloat = 0.06,
-        minimumPadding: CGFloat = 10
+        paddingFraction: CGFloat = 0.02,
+        minimumPadding: CGFloat = 0
     ) -> CGRect? {
         guard selectionRect.width > 0, selectionRect.height > 0 else { return nil }
         guard displayedImageRect.width > 0, displayedImageRect.height > 0 else { return nil }
