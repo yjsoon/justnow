@@ -293,7 +293,7 @@ struct TextGrabSelectionOverlay: View {
     }
 }
 
-struct TextGrabBanner: View {
+struct TextGrabToast: View {
     let state: TextGrabBannerState
 
     var body: some View {
@@ -319,21 +319,17 @@ struct TextGrabBanner: View {
                         Text(subtitle)
                             .font(.system(size: 11))
                             .foregroundStyle(.white.opacity(0.72))
-                            .lineLimit(2)
+                            .lineLimit(1)
                     }
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.black.opacity(0.5))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                    )
+            .padding(.horizontal, 16)
+            .padding(.vertical, 11)
+            .background(Color.black.opacity(0.62), in: Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
             )
-            .animation(.easeInOut(duration: 0.18), value: state)
         }
     }
 }

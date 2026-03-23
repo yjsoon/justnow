@@ -433,6 +433,7 @@ struct ContentAreaView: View {
     var viewModel: OverlayViewModel
 
     private var displayedFrames: [StoredFrame] { viewModel.displayedFrames }
+    @State private var textGrabBannerState: TextGrabBannerState = .hint
 
     var body: some View {
         VStack(spacing: 0) {
@@ -447,7 +448,11 @@ struct ContentAreaView: View {
             Spacer()
 
             if let frame = displayedFrames[safe: viewModel.selectedIndex] {
-                FramePreviewView(frame: frame, frameBuffer: viewModel.frameBuffer)
+                FramePreviewView(
+                    frame: frame,
+                    frameBuffer: viewModel.frameBuffer,
+                    textGrabBannerState: $textGrabBannerState
+                )
                     .padding(.horizontal, 60)
                     .padding(.top, viewModel.isSearchAvailable && viewModel.isSearching ? 20 : 40)
             } else if !viewModel.isSearching && viewModel.timelineFrames.isEmpty {
@@ -480,12 +485,15 @@ struct ContentAreaView: View {
 
             Spacer()
 
-            TimelineSlider(viewModel: viewModel)
+            TimelineSlider(viewModel: viewModel, textGrabBannerState: textGrabBannerState)
                 .frame(height: 100)
                 .padding(.horizontal, 40)
                 .padding(.bottom, 50)
         }
         .animation(.easeInOut(duration: 0.2), value: viewModel.isSearchAvailable && viewModel.isSearching)
+        .onChange(of: viewModel.selectedIndex) { _, _ in
+            textGrabBannerState = .hint
+        }
     }
 }
 
@@ -647,19 +655,19 @@ struct CompactInstructionLabelStyle: LabelStyle {
 struct FramePreviewView: View {
     let frame: StoredFrame
     let frameBuffer: FrameBuffer
+    @Binding var textGrabBannerState: TextGrabBannerState
 
     @AppStorage("textGrabSoundEnabled") private var textGrabSoundEnabled: Bool = true
     @AppStorage("textGrabDebugPreviewEnabled") private var textGrabDebugPreviewEnabled: Bool = false
     @State private var image: CGImage?
     @State private var isLoading = false
     @State private var loadFailed = false
-    @State private var textGrabBannerState: TextGrabBannerState = .hint
     @State private var textGrabDebugSnapshot: TextGrabDebugSnapshot?
 
     var body: some View {
         Group {
             if let image = image {
-                ZStack(alignment: .topLeading) {
+                ZStack {
                     Image(nsImage: imageFromCGImage(image))
                         .resizable()
                         .aspectRatio(contentMode: .fit)
@@ -680,10 +688,6 @@ struct FramePreviewView: View {
                                     .allowsHitTesting(false)
                             }
                         }
-
-                    TextGrabBanner(state: textGrabBannerState)
-                        .padding(20)
-                        .allowsHitTesting(false)
                 }
                 .clipShape(.rect(cornerRadius: 16))
                 .shadow(color: .black.opacity(0.5), radius: 30)
@@ -739,6 +743,7 @@ struct FramePreviewView: View {
 
 private struct TimelineSlider: View {
     var viewModel: OverlayViewModel
+    let textGrabBannerState: TextGrabBannerState
 
     private var displayedFrames: [StoredFrame] { viewModel.displayedFrames }
     private var frameCount: Int { displayedFrames.count }
@@ -789,25 +794,39 @@ private struct TimelineSlider: View {
             .padding(.vertical, 12)
             .darkBarBackground(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
 
-            // Combined footer: frame count + timestamp + search indicator
-            HStack(spacing: 6) {
-                if viewModel.isSearching && !viewModel.searchQuery.isEmpty {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.5))
-                }
-                Text(framePositionLabel)
-                    .fontWeight(.medium)
-                if let frame = currentFrame {
-                    Text("·")
-                        .foregroundStyle(.white.opacity(0.4))
-                    Text(formatRelativeTime(frame.timestamp))
-                        .foregroundStyle(.white.opacity(0.9))
+            ZStack {
+                footerMetadata
+                    .opacity(textGrabBannerState == .hint ? 1 : 0)
+
+                if textGrabBannerState != .hint {
+                    TextGrabToast(state: textGrabBannerState)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
-            .font(.system(size: 13, design: .monospaced))
-            .foregroundStyle(.white.opacity(0.7))
+            .frame(minHeight: 44)
+            .animation(.spring(response: 0.28, dampingFraction: 0.86), value: textGrabBannerState)
         }
+    }
+
+    @ViewBuilder
+    private var footerMetadata: some View {
+        HStack(spacing: 6) {
+            if viewModel.isSearching && !viewModel.searchQuery.isEmpty {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+            Text(framePositionLabel)
+                .fontWeight(.medium)
+            if let frame = currentFrame {
+                Text("·")
+                    .foregroundStyle(.white.opacity(0.4))
+                Text(formatRelativeTime(frame.timestamp))
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+        }
+        .font(.system(size: 13, design: .monospaced))
+        .foregroundStyle(.white.opacity(0.7))
     }
 
     private var framePositionLabel: String {
