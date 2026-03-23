@@ -109,9 +109,13 @@ class OverlayViewModel {
     var searchProgress: Double = 0
     private var searchTask: Task<Void, Never>?
 
+    var isSearchAvailable: Bool {
+        FeatureFlags.isSearchEnabled
+    }
+
     /// Frames to display (filtered if searching, all otherwise)
     var displayedFrames: [StoredFrame] {
-        isSearching && !searchQuery.isEmpty ? searchResults : timelineFrames
+        isSearchAvailable && isSearching && !searchQuery.isEmpty ? searchResults : timelineFrames
     }
 
     var displayedFrameCount: Int {
@@ -141,6 +145,10 @@ class OverlayViewModel {
     }
 
     func toggleSearch() {
+        guard isSearchAvailable else {
+            clearSearch()
+            return
+        }
         print("[JustNow] toggleSearch called, isSearching was: \(isSearching)")
         isSearching.toggle()
         print("[JustNow] isSearching is now: \(isSearching)")
@@ -152,6 +160,7 @@ class OverlayViewModel {
     func clearSearch() {
         searchTask?.cancel()
         searchTask = nil
+        isSearching = false
         searchQuery = ""
         searchResults = []
         isSearchInProgress = false
@@ -161,6 +170,10 @@ class OverlayViewModel {
     }
 
     func performSearch() {
+        guard isSearchAvailable else {
+            clearSearch()
+            return
+        }
         print("[JustNow] performSearch() called with query: '\(searchQuery)'")
         searchTask?.cancel()
         searchTask = nil
@@ -424,7 +437,7 @@ struct ContentAreaView: View {
     var body: some View {
         VStack(spacing: 0) {
             // Search bar
-            if viewModel.isSearching {
+            if viewModel.isSearchAvailable && viewModel.isSearching {
                 SearchBarView(viewModel: viewModel)
                     .padding(.top, 60)
                     .padding(.horizontal, 200)
@@ -436,7 +449,7 @@ struct ContentAreaView: View {
             if let frame = displayedFrames[safe: viewModel.selectedIndex] {
                 FramePreviewView(frame: frame, frameBuffer: viewModel.frameBuffer)
                     .padding(.horizontal, 60)
-                    .padding(.top, viewModel.isSearching ? 20 : 40)
+                    .padding(.top, viewModel.isSearchAvailable && viewModel.isSearching ? 20 : 40)
             } else if !viewModel.isSearching && viewModel.timelineFrames.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "clock.badge.exclamationmark")
@@ -445,11 +458,15 @@ struct ContentAreaView: View {
                     Text("No frames in this rewind window")
                         .font(.headline)
                         .foregroundStyle(.white.opacity(0.6))
-                    Text("Search can still look through the last hour.")
+                    Text(
+                        viewModel.isSearchAvailable
+                            ? "Search can still look through the last hour."
+                            : "Increase rewind history in Settings to keep older frames visible here."
+                    )
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.45))
                 }
-            } else if viewModel.isSearching && displayedFrames.isEmpty && !viewModel.isSearchInProgress {
+            } else if viewModel.isSearchAvailable && viewModel.isSearching && displayedFrames.isEmpty && !viewModel.isSearchInProgress {
                 // No results state
                 VStack(spacing: 12) {
                     Image(systemName: "magnifyingglass")
@@ -468,7 +485,7 @@ struct ContentAreaView: View {
                 .padding(.horizontal, 40)
                 .padding(.bottom, 50)
         }
-        .animation(.easeInOut(duration: 0.2), value: viewModel.isSearching)
+        .animation(.easeInOut(duration: 0.2), value: viewModel.isSearchAvailable && viewModel.isSearching)
     }
 }
 
@@ -546,7 +563,6 @@ struct SearchBarView: View {
 
             Button {
                 viewModel.clearSearch()
-                viewModel.isSearching = false
             }
             label: {
                 Label("Clear search", systemImage: "xmark.circle.fill")
@@ -599,7 +615,9 @@ struct InstructionsOverlay: View {
                 Spacer()
                 HStack(spacing: 16) {
                     Label("← →", systemImage: "arrow.left.arrow.right")
-                    Label("/", systemImage: "magnifyingglass")
+                    if FeatureFlags.isSearchEnabled {
+                        Label("/", systemImage: "magnifyingglass")
+                    }
                 }
                 .labelStyle(CompactInstructionLabelStyle())
                 .font(.system(size: 11, weight: .medium))

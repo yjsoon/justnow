@@ -10,6 +10,11 @@ import HotKey
 import Carbon.HIToolbox
 import Sparkle
 
+enum FeatureFlags {
+    /// Temporary kill switch while in-app search is hidden from release builds.
+    static let isSearchEnabled = false
+}
+
 enum RecentTimelineWindow: Double, CaseIterable, Identifiable {
     case oneMinute = 60
     case twoMinutes = 120
@@ -941,7 +946,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         var scale = 2
         var saveOptions = FrameSaveOptions.standard
         var duplicatePolicy = DuplicateFramePolicy.exact(atMostEvery: captureInterval)
-        var ocrIndexEnabled = backgroundSearchIndexingEnabled
+        var ocrIndexEnabled = FeatureFlags.isSearchEnabled && backgroundSearchIndexingEnabled
         var ocrIndexInterval = ocrIndexBaseInterval
         var ocrIndexQueueDepth = ocrIndexBaseQueueDepth
         var ocrIndexMaxAge = ocrIndexMaxFrameAge

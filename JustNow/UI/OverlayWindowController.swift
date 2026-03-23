@@ -50,7 +50,9 @@ class OverlayWindowController: NSObject {
             recentWindow: recentTimelineWindow,
             maximumAge: rewindHistoryOption.duration
         )
-        let searchableFrames = frameBuffer.getFilteredFrames(recentWindow: recentTimelineWindow)
+        let searchableFrames = FeatureFlags.isSearchEnabled
+            ? frameBuffer.getFilteredFrames(recentWindow: recentTimelineWindow)
+            : []
         let vm = OverlayViewModel(
             timelineFrames: timelineFrames,
             searchableFrames: searchableFrames,
@@ -108,28 +110,28 @@ class OverlayWindowController: NSObject {
 
             switch event.keyCode {
             case 53: // ESC
-                if vm.isSearching {
+                if vm.isSearchAvailable && vm.isSearching {
                     vm.clearSearch()
-                    vm.isSearching = false
                 } else {
                     self.hideOverlay()
                 }
                 return nil
             case 44: // "/" key - toggle search
+                guard vm.isSearchAvailable else { return nil }
                 if !vm.isSearching {
                     vm.toggleSearch()
                     return nil
                 }
                 return event // Pass through if already searching (for typing)
             case 36: // Return key - trigger search
-                if vm.isSearching && !vm.searchQuery.isEmpty {
+                if vm.isSearchAvailable && vm.isSearching && !vm.searchQuery.isEmpty {
                     print("[JustNow] Return key pressed, triggering search")
                     vm.performSearch()
                     return nil
                 }
                 return event
             case 123: // Left arrow
-                if vm.isSearching { return event } // Let text field handle it
+                if vm.isSearchAvailable && vm.isSearching { return event } // Let text field handle it
                 if event.modifierFlags.contains(.command) {
                     vm.goToStart()
                 } else if event.modifierFlags.contains(.option) {
@@ -139,7 +141,7 @@ class OverlayWindowController: NSObject {
                 }
                 return nil
             case 124: // Right arrow
-                if vm.isSearching { return event } // Let text field handle it
+                if vm.isSearchAvailable && vm.isSearching { return event } // Let text field handle it
                 if event.modifierFlags.contains(.command) {
                     vm.goToEnd()
                 } else if event.modifierFlags.contains(.option) {
