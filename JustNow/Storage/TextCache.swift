@@ -47,6 +47,26 @@ actor TextCache {
         }
     }
 
+    /// Test-only initializer that places the database in a custom directory.
+    init(directory: URL) {
+        self.databaseURL = directory.appendingPathComponent("text_cache.sqlite")
+        self.legacyCacheURL = directory.appendingPathComponent("text_cache.json")
+
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let connection = try Self.openDatabase(at: databaseURL)
+            db = connection
+            try Self.createSchema(on: connection)
+            try Self.repairIndex(on: connection)
+        } catch {
+            Self.logger.error("Failed to initialise text cache: \(error.localizedDescription)")
+            if let db {
+                sqlite3_close(db)
+                self.db = nil
+            }
+        }
+    }
+
     deinit {
         if let db {
             sqlite3_close(db)
