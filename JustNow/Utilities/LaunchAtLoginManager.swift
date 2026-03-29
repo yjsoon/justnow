@@ -3,13 +3,20 @@
 //  JustNow
 //
 
+import os
 import ServiceManagement
 
 enum LaunchAtLoginError: LocalizedError {
     case serviceUnavailable
+    case registrationFailed(underlying: any Error)
 
     var errorDescription: String? {
-        "Launch on startup is not available in this build."
+        switch self {
+        case .serviceUnavailable:
+            "Launch on startup is not available in this build."
+        case .registrationFailed(let underlying):
+            "Could not toggle launch on startup: \(underlying.localizedDescription). Try moving JustNow to /Applications, or restart your Mac."
+        }
     }
 }
 
@@ -38,22 +45,29 @@ final class LaunchAtLoginManager {
     }
 
     var canConfigure: Bool {
-        switch service.status {
-        case .enabled, .notRegistered, .requiresApproval:
-            true
-        case .notFound:
-            false
-        @unknown default:
-            false
-        }
+        // Always allow attempts — .notFound is common when the BTM database
+        // hasn't catalogued the app yet (e.g. CLI installs).  Calling
+        // register() often resolves the state, and if it truly can't work the
+        // error is surfaced in the settings alert.
+        true
     }
 
+    private static let log = Logger(subsystem: "sg.tk.JustNow", category: "LaunchAtLogin")
+
     func setEnabled(_ isEnabled: Bool) throws -> ChangeResult {
+        Self.log.info("setEnabled(\(isEnabled)), current status: \(String(describing: self.service.status))")
+
         if isEnabled {
             if service.status != .enabled {
-                try service.register()
+                do {
+                    try service.register()
+                } catch {
+                    Self.log.error("register() failed: \(error)")
+                    throw LaunchAtLoginError.registrationFailed(underlying: error)
+                }
             }
 
+            Self.log.info("After register, status: \(String(describing: self.service.status))")
             return service.status == .requiresApproval ? .requiresApproval : .updated
         }
 
@@ -61,10 +75,8 @@ final class LaunchAtLoginManager {
         case .enabled, .requiresApproval:
             try service.unregister()
             return .updated
-        case .notRegistered:
+        case .notRegistered, .notFound:
             return .updated
-        case .notFound:
-            throw LaunchAtLoginError.serviceUnavailable
         @unknown default:
             throw LaunchAtLoginError.serviceUnavailable
         }
