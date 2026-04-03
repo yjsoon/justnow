@@ -6,7 +6,7 @@
     <title>JustNow — rewind your screen</title>
     <meta
       name="description"
-      content="A free, open-source macOS menu bar app that quietly records your screen so you can scroll back and grab text from things you just closed."
+      content="A free macOS menu bar app that lets you rewind your screen and copy text from whatever you just closed. No AI circus."
     >
     <link rel="stylesheet" href="/styles.css">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -29,10 +29,9 @@
       <section class="hero">
         <h1>You just closed that window.<br>Now get it back.</h1>
         <p class="hero-sub">
-          JustNow is a tiny macOS menu bar app that quietly screenshots your
-          screen every few seconds, so you can rewind to what you were just
-          looking at. Drag over any frame to grab text straight to your
-          clipboard. That's basically it.
+          JustNow keeps a short, local history of your screen so you can rewind
+          to the thing you just closed and copy the bit you needed. No cloud.
+          No subscription. No AI trying to be your life coach.
         </p>
         <div class="hero-actions">
           <a class="btn btn-primary" href="https://github.com/yjsoon/justnow/releases/latest">
@@ -43,7 +42,7 @@
           </a>
         </div>
         <p class="hero-note">
-          Free and open source. Requires macOS 15+. Signed and notarised.
+          Free, open source, signed, notarised. Requires macOS 15+.
         </p>
       </section>
 
@@ -55,82 +54,46 @@
           height="1169"
         >
         <figcaption>
-          Rewind a few moments, drag over what you need, and copy text straight from the frame.
+          Rewind a moment. Drag the bit you want. Move on with your life.
         </figcaption>
       </figure>
-
-      <section class="why">
-        <h2>Why this exists</h2>
-        <p>
-          <a href="https://rewind.ai">Rewind.ai</a> was great at this job,
-          then got acquired and pivoted to AI. All I really wanted was a way to
-          scroll back a few minutes and copy that thing I accidentally closed
-          &mdash; no AI summaries, no cloud sync, no subscription. So I built
-          this.
-        </p>
-      </section>
 
       <hr class="sep">
 
       <section class="features">
-        <h2>What it does</h2>
+        <h2>Why it’s useful</h2>
         <div class="feature-list">
 
           <div class="feature">
-            <h3>Hotkey rewind</h3>
+            <h3>Rewind fast</h3>
             <p>
-              Press <kbd>&#8984;&#8997;J</kbd> to open a fullscreen timeline of
-              your recent screen history. Scrub backwards with arrow keys,
-              scroll, or click. Press Escape to dismiss.
+              Hit <kbd>&#8984;&#8997;J</kbd>, scrub backwards, find the thing,
+              leave. No ceremony.
             </p>
           </div>
 
           <div class="feature">
-            <h3>Drag-to-grab text</h3>
+            <h3>Grab text from old frames</h3>
             <p>
-              See something you want in a frame? Drag over it. JustNow runs OCR
-              on the selection and copies cleaned-up text straight to your
-              clipboard. Handy for URLs, error messages, or that one-time code
-              you let disappear.
+              Drag over a frame and JustNow copies the text. Handy for links,
+              errors, codes, and other nonsense you forgot to save.
             </p>
           </div>
 
           <div class="feature">
-            <h3>Smart capture</h3>
+            <h3>Private by default</h3>
             <p>
-              Perceptual hashing skips duplicate frames, so a static screen
-              doesn't waste storage. Configurable history from 30 minutes up to
-              24 hours, with tiered compaction keeping recent frames at full
-              detail.
+              Everything stays on your Mac in
+              <code>~/Library/Application&nbsp;Support/JustNow/</code>. As it
+              should.
             </p>
           </div>
 
           <div class="feature">
-            <h3>Battery-aware</h3>
+            <h3>Doesn’t act important</h3>
             <p>
-              On battery or under thermal pressure, capture frequency and
-              resolution scale down automatically. At low battery, background
-              OCR pauses entirely. It tries not to be the reason your fans
-              spin up.
-            </p>
-          </div>
-
-          <div class="feature">
-            <h3>Local and private</h3>
-            <p>
-              Everything stays in
-              <code>~/Library/Application&nbsp;Support/JustNow/</code>.
-              No cloud, no network calls, no telemetry. One-click "clear all
-              history" in Settings if you want a fresh start.
-            </p>
-          </div>
-
-          <div class="feature">
-            <h3>No purple dot</h3>
-            <p>
-              Uses one-shot ScreenCaptureKit screenshots instead of a
-              continuous stream, so you don't get the persistent purple
-              screen-sharing indicator in your menu bar.
+              Duplicate frames get skipped, battery use is kept in check, and
+              there’s no permanent purple “look at me” screen-sharing dot.
             </p>
           </div>
 
@@ -140,31 +103,27 @@
       <hr class="sep">
 
       <section class="details">
-        <h2>Details</h2>
+        <h2>The boring but useful bits</h2>
         <dl class="details-grid">
           <div class="detail">
             <dt>Price</dt>
-            <dd>Free, forever</dd>
+            <dd>Free</dd>
           </div>
           <div class="detail">
-            <dt>Requirements</dt>
-            <dd>macOS 15 (Sequoia) or later</dd>
+            <dt>Platform</dt>
+            <dd>macOS 15+</dd>
           </div>
           <div class="detail">
             <dt>Permissions</dt>
-            <dd>Screen Recording (the only one)</dd>
+            <dd>Screen Recording only</dd>
           </div>
           <div class="detail">
             <dt>Updates</dt>
-            <dd>Built-in via Sparkle; checks automatically</dd>
-          </div>
-          <div class="detail">
-            <dt>Licence</dt>
-            <dd>Open source on <a href="https://github.com/yjsoon/justnow">GitHub</a></dd>
+            <dd>Built-in via Sparkle</dd>
           </div>
           <div class="detail">
             <dt>Hotkey</dt>
-            <dd>Fully configurable (default <kbd>&#8984;&#8997;J</kbd>)</dd>
+            <dd>Default <kbd>&#8984;&#8997;J</kbd>, fully configurable</dd>
           </div>
         </dl>
       </section>
@@ -178,7 +137,7 @@
         </div>
         <p class="footer-colophon">
           Built by <a href="https://github.com/yjsoon">@yjsoon</a> because
-          fat fingers happen.
+          “where did that go?” gets old fast.
         </p>
       </footer>
 
