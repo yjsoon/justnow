@@ -108,6 +108,8 @@ class OverlayViewModel {
     var isSearchInProgress = false
     var searchProgress: Double = 0
     private var searchTask: Task<Void, Never>?
+    var isTextGrabActive = false
+    private var cancelTextGrabHandler: (() -> Void)?
 
     var isSearchAvailable: Bool {
         FeatureFlags.isSearchEnabled
@@ -167,6 +169,17 @@ class OverlayViewModel {
         searchProgress = 0
         // Reset to end of full frames
         selectedIndex = max(0, timelineFrames.count - 1)
+    }
+
+    func setTextGrabCancellationHandler(_ handler: (() -> Void)?) {
+        cancelTextGrabHandler = handler
+    }
+
+    @discardableResult
+    func cancelTextGrabIfNeeded() -> Bool {
+        guard isTextGrabActive else { return false }
+        cancelTextGrabHandler?()
+        return true
     }
 
     func performSearch() {
@@ -450,6 +463,7 @@ struct ContentAreaView: View {
             if let frame = displayedFrames[safe: viewModel.selectedIndex] {
                 FramePreviewView(
                     frame: frame,
+                    viewModel: viewModel,
                     frameBuffer: viewModel.frameBuffer,
                     textGrabBannerState: $textGrabBannerState
                 )
@@ -659,6 +673,7 @@ struct CompactInstructionLabelStyle: LabelStyle {
 
 struct FramePreviewView: View {
     let frame: StoredFrame
+    let viewModel: OverlayViewModel
     let frameBuffer: FrameBuffer
     @Binding var textGrabBannerState: TextGrabBannerState
 
@@ -679,6 +694,7 @@ struct FramePreviewView: View {
                         .overlay {
                             TextGrabSelectionOverlay(
                                 image: image,
+                                viewModel: viewModel,
                                 soundEnabled: textGrabSoundEnabled,
                                 debugCaptureEnabled: textGrabDebugPreviewEnabled,
                                 bannerState: $textGrabBannerState,

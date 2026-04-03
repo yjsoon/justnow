@@ -110,7 +110,9 @@ class OverlayWindowController: NSObject {
 
             switch event.keyCode {
             case 53: // ESC
-                if vm.isSearchAvailable && vm.isSearching {
+                if vm.cancelTextGrabIfNeeded() {
+                    return nil
+                } else if vm.isSearchAvailable && vm.isSearching {
                     vm.clearSearch()
                 } else {
                     self.hideOverlay()

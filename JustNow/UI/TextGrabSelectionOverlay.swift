@@ -88,8 +88,68 @@ enum TextGrabBannerState: Equatable {
     }
 }
 
+// MARK: - Screenshot Cursor
+
+/// A cursor designed to look like the macOS screenshot capture cursor.
+/// Shows a compact target with dark strokes and a faint white outline.
+enum ScreenshotCursor {
+    static let shared: NSCursor = {
+        let size: CGFloat = 44
+        let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+            let ctx = NSGraphicsContext.current?.cgContext
+            guard let context = ctx else { return false }
+
+            let center = CGPoint(x: rect.midX, y: rect.midY)
+            let armRadius: CGFloat = 14
+            let centerGapRadius: CGFloat = 1.5
+            let centerRingRadius: CGFloat = 6.4
+
+            let drawTargetArms: (NSColor, CGFloat) -> Void = { color, lineWidth in
+                context.setStrokeColor(color.cgColor)
+                context.setLineWidth(lineWidth)
+                context.setLineCap(.round)
+
+                context.move(to: CGPoint(x: center.x - armRadius, y: center.y))
+                context.addLine(to: CGPoint(x: center.x - centerGapRadius, y: center.y))
+                context.move(to: CGPoint(x: center.x + centerGapRadius, y: center.y))
+                context.addLine(to: CGPoint(x: center.x + armRadius, y: center.y))
+
+                context.move(to: CGPoint(x: center.x, y: center.y - armRadius))
+                context.addLine(to: CGPoint(x: center.x, y: center.y - centerGapRadius))
+                context.move(to: CGPoint(x: center.x, y: center.y + centerGapRadius))
+                context.addLine(to: CGPoint(x: center.x, y: center.y + armRadius))
+
+                context.strokePath()
+            }
+
+            let drawCenterRing: (NSColor, CGFloat) -> Void = { color, lineWidth in
+                let ringRect = CGRect(
+                    x: center.x - centerRingRadius,
+                    y: center.y - centerRingRadius,
+                    width: centerRingRadius * 2,
+                    height: centerRingRadius * 2
+                )
+                context.setStrokeColor(color.cgColor)
+                context.setLineWidth(lineWidth)
+                context.strokeEllipse(in: ringRect)
+            }
+
+            drawTargetArms(NSColor.white.withAlphaComponent(0.39), 3)
+            drawCenterRing(NSColor.white.withAlphaComponent(0.39), 2.9)
+
+            drawTargetArms(NSColor.black.withAlphaComponent(0.96), 1.7)
+            drawCenterRing(NSColor.black.withAlphaComponent(0.96), 1.6)
+
+            return true
+        }
+
+        return NSCursor(image: image, hotSpot: NSPoint(x: size / 2, y: size / 2))
+    }()
+}
+
 struct TextGrabSelectionOverlay: View {
     let image: CGImage
+    let viewModel: OverlayViewModel
     let soundEnabled: Bool
     let debugCaptureEnabled: Bool
     @Binding var bannerState: TextGrabBannerState
@@ -99,7 +159,10 @@ struct TextGrabSelectionOverlay: View {
     @State private var isProcessing = false
     @State private var selectionTask: Task<Void, Never>?
     @State private var bannerResetTask: Task<Void, Never>?
-    @State private var hasCrosshairCursor = false
+    @State private var hasScreenshotCursor = false
+    @State private var pointerLocation: CGPoint?
+    @State private var displayedImageRectSnapshot: CGRect = .zero
+    @State private var isCurrentDragCancelled = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -113,40 +176,48 @@ struct TextGrabSelectionOverlay: View {
             ZStack(alignment: .topLeading) {
                 Color.clear
                     .contentShape(Rectangle())
-                    .onHover { isInside in
-                        updateCrosshairCursor(isInside: isInside, isEnabled: !isProcessing)
-                    }
                     .gesture(selectionGesture(displayedImageRect: displayedImageRect))
+                    .overlay(
+                        PointerTrackingView { phase in
+                            handlePointerPhase(phase, displayedImageRect: displayedImageRect)
+                        }
+                    )
 
                 if let selectionRect {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(Color.white.opacity(isProcessing ? 0.08 : 0.04))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .strokeBorder(
-                                    Color.white.opacity(isProcessing ? 0.74 : 0.42),
-                                    lineWidth: 1.25
-                                )
-                        }
+                    SelectionBox(isProcessing: isProcessing)
                         .frame(width: selectionRect.width, height: selectionRect.height)
                         .offset(x: selectionRect.minX, y: selectionRect.minY)
-                        .overlay {
-                            if isProcessing {
-                                ProgressView()
-                                    .progressViewStyle(.circular)
-                                    .tint(.white)
-                            }
-                        }
                 }
             }
+            .onAppear {
+                displayedImageRectSnapshot = displayedImageRect
+                viewModel.setTextGrabCancellationHandler(cancelTextGrab)
+                syncTextGrabState()
+            }
+            .onChange(of: selectionRect) { _, _ in
+                syncTextGrabState()
+            }
+            .onChange(of: isProcessing) { _, _ in
+                syncTextGrabState()
+                reevaluateCursor(displayedImageRect: displayedImageRect)
+            }
+            .onChange(of: displayedImageRect) { _, newDisplayedImageRect in
+                displayedImageRectSnapshot = newDisplayedImageRect
+                reevaluateCursor(displayedImageRect: newDisplayedImageRect)
+            }
         }
-        .onDisappear {
+            .onDisappear {
             selectionTask?.cancel()
             bannerResetTask?.cancel()
+            viewModel.isTextGrabActive = false
+            viewModel.setTextGrabCancellationHandler(nil)
             selectionRect = nil
+            isCurrentDragCancelled = false
+            pointerLocation = nil
+            displayedImageRectSnapshot = .zero
             debugSnapshot = nil
             bannerState = .hint
-            releaseCrosshairCursor()
+            releaseScreenshotCursor()
         }
     }
 
@@ -154,6 +225,10 @@ struct TextGrabSelectionOverlay: View {
         return DragGesture(minimumDistance: 4)
             .onChanged { value in
                 guard !isProcessing else { return }
+                guard !isCurrentDragCancelled else {
+                    selectionRect = nil
+                    return
+                }
                 guard displayedImageRect.contains(value.startLocation) else {
                     selectionRect = nil
                     return
@@ -167,6 +242,12 @@ struct TextGrabSelectionOverlay: View {
             }
             .onEnded { value in
                 guard !isProcessing else { return }
+                guard !isCurrentDragCancelled else {
+                    isCurrentDragCancelled = false
+                    selectionRect = nil
+                    updateBanner(.hint)
+                    return
+                }
                 guard displayedImageRect.contains(value.startLocation) else {
                     selectionRect = nil
                     return
@@ -204,7 +285,7 @@ struct TextGrabSelectionOverlay: View {
 
         selectionTask?.cancel()
         isProcessing = true
-        updateCrosshairCursor(isInside: false, isEnabled: false)
+        updateScreenshotCursor(isInsideImage: false, isEnabled: false)
         if debugCaptureEnabled {
             debugSnapshot = TextGrabDebugSnapshot(image: croppedImage, cropRect: cropRect)
         } else {
@@ -264,20 +345,72 @@ struct TextGrabSelectionOverlay: View {
         sound.play()
     }
 
-    private func updateCrosshairCursor(isInside: Bool, isEnabled: Bool) {
-        if isInside, isEnabled, !hasCrosshairCursor {
-            NSCursor.crosshair.push()
-            hasCrosshairCursor = true
-        } else if (!isInside || !isEnabled), hasCrosshairCursor {
+    private func updateScreenshotCursor(isInsideImage: Bool, isEnabled: Bool) {
+        let shouldShowScreenshotCursor = isInsideImage && isEnabled
+
+        if shouldShowScreenshotCursor {
+            if !hasScreenshotCursor {
+                ScreenshotCursor.shared.push()
+                hasScreenshotCursor = true
+            }
+            ScreenshotCursor.shared.set()
+        } else if hasScreenshotCursor {
             NSCursor.pop()
-            hasCrosshairCursor = false
+            NSCursor.current.set()
+            hasScreenshotCursor = false
         }
     }
 
-    private func releaseCrosshairCursor() {
-        guard hasCrosshairCursor else { return }
+    private func releaseScreenshotCursor() {
+        guard hasScreenshotCursor else { return }
         NSCursor.pop()
-        hasCrosshairCursor = false
+        NSCursor.current.set()
+        hasScreenshotCursor = false
+    }
+
+    private func handlePointerPhase(_ phase: PointerTrackingView.Phase, displayedImageRect: CGRect) {
+        switch phase {
+        case .active(let location):
+            pointerLocation = location
+            updateScreenshotCursor(
+                isInsideImage: displayedImageRect.contains(location),
+                isEnabled: !isProcessing
+            )
+        case .ended:
+            pointerLocation = nil
+            updateScreenshotCursor(isInsideImage: false, isEnabled: false)
+        }
+    }
+
+    private func reevaluateCursor(displayedImageRect: CGRect) {
+        guard let pointerLocation else {
+            updateScreenshotCursor(isInsideImage: false, isEnabled: false)
+            return
+        }
+
+        updateScreenshotCursor(
+            isInsideImage: displayedImageRect.contains(pointerLocation),
+            isEnabled: !isProcessing
+        )
+    }
+
+    private func syncTextGrabState() {
+        viewModel.isTextGrabActive = selectionRect != nil || isProcessing
+    }
+
+    private func cancelTextGrab() {
+        if selectionRect != nil && !isProcessing {
+            isCurrentDragCancelled = true
+        }
+        selectionTask?.cancel()
+        selectionTask = nil
+        bannerResetTask?.cancel()
+        bannerResetTask = nil
+        selectionRect = nil
+        isProcessing = false
+        debugSnapshot = nil
+        updateBanner(.hint)
+        reevaluateCursor(displayedImageRect: displayedImageRectSnapshot)
     }
 
     private static func previewSnippet(for text: String) -> String {
@@ -374,5 +507,167 @@ struct TextGrabDebugPreview: View {
         OCR input \(Int(size.width))×\(Int(size.height)) px
         crop \(Int(snapshot.cropRect.minX)),\(Int(snapshot.cropRect.minY))
         """
+    }
+}
+
+private struct PointerTrackingView: NSViewRepresentable {
+    enum Phase {
+        case active(CGPoint)
+        case ended
+    }
+
+    let onPhaseChange: (Phase) -> Void
+
+    func makeNSView(context: Context) -> PointerTrackingNSView {
+        let view = PointerTrackingNSView()
+        view.onPhaseChange = onPhaseChange
+        return view
+    }
+
+    func updateNSView(_ nsView: PointerTrackingNSView, context: Context) {
+        nsView.onPhaseChange = onPhaseChange
+    }
+}
+
+private final class PointerTrackingNSView: NSView {
+    var onPhaseChange: ((PointerTrackingView.Phase) -> Void)?
+    private var trackingArea: NSTrackingArea?
+    private var mouseMovedMonitor: Any?
+    private var keyWindowObserver: NSObjectProtocol?
+
+    override var isFlipped: Bool { true }
+
+    deinit {
+        tearDownWindowTracking()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+
+        let options: NSTrackingArea.Options = [
+            .activeAlways,
+            .inVisibleRect,
+            .mouseEnteredAndExited,
+            .mouseMoved
+        ]
+        let area = NSTrackingArea(rect: .zero, options: options, owner: self, userInfo: nil)
+        addTrackingArea(area)
+        trackingArea = area
+
+        refreshPointerLocation()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        tearDownWindowTracking()
+        window?.acceptsMouseMovedEvents = true
+        setUpWindowTracking()
+        refreshPointerLocation()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        publishActivePhase(for: event.locationInWindow)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        publishActivePhase(for: event.locationInWindow)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onPhaseChange?(.ended)
+    }
+
+    func refreshPointerLocation() {
+        guard let window else {
+            onPhaseChange?(.ended)
+            return
+        }
+
+        let localPoint = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        if bounds.contains(localPoint) {
+            onPhaseChange?(.active(localPoint))
+        } else {
+            onPhaseChange?(.ended)
+        }
+    }
+
+    private func publishActivePhase(for locationInWindow: CGPoint) {
+        let localPoint = convert(locationInWindow, from: nil)
+        if bounds.contains(localPoint) {
+            onPhaseChange?(.active(localPoint))
+        } else {
+            onPhaseChange?(.ended)
+        }
+    }
+
+    private func setUpWindowTracking() {
+        guard let window else { return }
+
+        keyWindowObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refreshPointerLocation()
+            DispatchQueue.main.async {
+                self?.refreshPointerLocation()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                self?.refreshPointerLocation()
+            }
+        }
+
+        mouseMovedMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved]) { [weak self] event in
+            guard let self, event.window === self.window else { return event }
+            self.publishActivePhase(for: event.locationInWindow)
+            return event
+        }
+    }
+
+    private func tearDownWindowTracking() {
+        if let mouseMovedMonitor {
+            NSEvent.removeMonitor(mouseMovedMonitor)
+            self.mouseMovedMonitor = nil
+        }
+
+        if let keyWindowObserver {
+            NotificationCenter.default.removeObserver(keyWindowObserver)
+            self.keyWindowObserver = nil
+        }
+    }
+}
+
+// MARK: - Selection Box View
+
+/// A macOS-style selection box with high-contrast borders that work on all backgrounds.
+/// Features: semi-transparent dark fill, bright white inner border, dark outer shadow for contrast.
+struct SelectionBox: View {
+    let isProcessing: Bool
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(Color.black.opacity(isProcessing ? 0.2 : 0.14))
+
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(Color.white.opacity(isProcessing ? 0.7 : 0.58), lineWidth: 1.8)
+                .shadow(color: Color.black.opacity(0.5), radius: 3, x: 0, y: 1)
+        }
+        .overlay {
+            if isProcessing {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .tint(.white)
+                    .scaleEffect(1.2)
+            }
+        }
     }
 }
