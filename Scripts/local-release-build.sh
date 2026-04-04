@@ -250,33 +250,28 @@ create_applications_alias "${STAGING_DIR}"
 ditto -c -k --sequesterRsrc --keepParent "${APP_PATH}" "${ZIP_PATH}"
 
 if command -v create-dmg >/dev/null 2>&1; then
+  CREATE_DMG_ARGS=(
+    --window-pos 200 120
+    --window-size 560 360
+    --icon-size 120
+    --text-size 12
+    --icon "${APP_NAME}.app" "${APP_ICON_X}" "${APP_ICON_Y}"
+    --icon "Applications" "${APPS_ICON_X}" "${APPS_ICON_Y}"
+    --hide-extension "${APP_NAME}.app"
+    --no-internet-enable
+    --volname "${APP_NAME}"
+  )
+
   if [ -f "${BG_PATH}" ]; then
-    create-dmg \
-      --window-pos 200 120 \
-      --window-size 560 360 \
-      --icon-size 120 \
-      --text-size 12 \
-      --icon "${APP_NAME}.app" "${APP_ICON_X}" "${APP_ICON_Y}" \
-      --icon "Applications" "${APPS_ICON_X}" "${APPS_ICON_Y}" \
-      --hide-extension "${APP_NAME}.app" \
-      --no-internet-enable \
-      --volname "${APP_NAME}" \
-      --background "${BG_PATH}" \
-      "${DMG_PATH}" \
-      "${STAGING_DIR}/"
-  else
-    create-dmg \
-      --window-pos 200 120 \
-      --window-size 560 360 \
-      --icon-size 120 \
-      --text-size 12 \
-      --icon "${APP_NAME}.app" "${APP_ICON_X}" "${APP_ICON_Y}" \
-      --icon "Applications" "${APPS_ICON_X}" "${APPS_ICON_Y}" \
-      --hide-extension "${APP_NAME}.app" \
-      --no-internet-enable \
-      --volname "${APP_NAME}" \
-      "${DMG_PATH}" \
-      "${STAGING_DIR}/"
+    CREATE_DMG_ARGS+=(--background "${BG_PATH}")
+  fi
+
+  CREATE_DMG_ARGS+=("${DMG_PATH}" "${STAGING_DIR}/")
+
+  if ! create-dmg "${CREATE_DMG_ARGS[@]}"; then
+    echo "create-dmg failed; retrying without Finder AppleScript prettifying (--skip-jenkins)." >&2
+    rm -f "${DMG_PATH}"
+    create-dmg --skip-jenkins "${CREATE_DMG_ARGS[@]}"
   fi
 else
   echo "create-dmg not found; skipping .dmg creation. Install with: brew install create-dmg"
