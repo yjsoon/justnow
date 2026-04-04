@@ -16,6 +16,8 @@ struct SettingsView: View {
     @AppStorage("reduceCaptureOnBattery") private var reduceCaptureOnBattery: Bool = true
     @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 38  // J key
     @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
+    @AppStorage("capturePauseShortcutKeyCode") private var capturePauseShortcutKeyCode: Int = 38  // J key
+    @AppStorage("capturePauseShortcutModifiers") private var capturePauseShortcutModifiers: Int = 1_703_936  // ⌘⌥⇧
     @AppStorage("overlayDismissKeyCode") private var overlayDismissKeyCode: Int = 53
     @AppStorage("overlayDismissModifiers") private var overlayDismissModifiers: Int = 0
     @AppStorage("textGrabSoundEnabled") private var textGrabSoundEnabled: Bool = true
@@ -48,10 +50,12 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            } header: {
+                Text("General")
+            }
 
-                HStack {
-                    Text("Show")
-                    Spacer()
+            Section {
+                shortcutRow("Open rewind") {
                     KeyboardShortcutRecorder(
                         keyCode: $shortcutKeyCode,
                         modifiers: $shortcutModifiers
@@ -61,9 +65,17 @@ struct SettingsView: View {
                     .onChange(of: shortcutModifiers) { _, _ in context.notifyShortcutChanged() }
                 }
 
-                HStack {
-                    Text("Hide")
-                    Spacer()
+                shortcutRow("Pause or resume recording") {
+                    KeyboardShortcutRecorder(
+                        keyCode: $capturePauseShortcutKeyCode,
+                        modifiers: $capturePauseShortcutModifiers
+                    )
+                    .frame(maxWidth: 240)
+                    .onChange(of: capturePauseShortcutKeyCode) { _, _ in context.notifyShortcutChanged() }
+                    .onChange(of: capturePauseShortcutModifiers) { _, _ in context.notifyShortcutChanged() }
+                }
+
+                shortcutRow("Close rewind") {
                     KeyboardShortcutRecorder(
                         keyCode: $overlayDismissKeyCode,
                         modifiers: $overlayDismissModifiers,
@@ -71,9 +83,23 @@ struct SettingsView: View {
                         placeholder: "Press key"
                     )
                     .frame(maxWidth: 240)
+                    .onChange(of: overlayDismissKeyCode) { _, _ in context.notifyShortcutChanged() }
+                    .onChange(of: overlayDismissModifiers) { _, _ in context.notifyShortcutChanged() }
+                }
+
+                Text("These shortcuts work across macOS while JustNow is running. Keep each action on a distinct shortcut.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let shortcutConflictMessage {
+                    Text(shortcutConflictMessage)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             } header: {
-                Text("General")
+                Text("Keyboard Shortcuts")
             }
 
             Section {
@@ -413,6 +439,42 @@ struct SettingsView: View {
                 }
             }
         )
+    }
+
+    @ViewBuilder
+    private func shortcutRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(alignment: .center, spacing: 16) {
+            Text(title)
+            Spacer(minLength: 16)
+            content()
+                .frame(width: 240, alignment: .trailing)
+        }
+    }
+
+    private var shortcutConflictMessage: String? {
+        let shortcuts: [(label: String, keyCode: Int, modifiers: Int)] = [
+            ("Open rewind", shortcutKeyCode, shortcutModifiers),
+            ("Pause or resume recording", capturePauseShortcutKeyCode, capturePauseShortcutModifiers),
+            ("Close rewind", overlayDismissKeyCode, overlayDismissModifiers)
+        ]
+
+        for index in shortcuts.indices {
+            let current = shortcuts[index]
+            guard current.keyCode != -1 else { continue }
+
+            guard index + 1 < shortcuts.count else { continue }
+
+            for comparisonIndex in (index + 1)..<shortcuts.count {
+                let comparison = shortcuts[comparisonIndex]
+                guard comparison.keyCode != -1 else { continue }
+
+                if current.keyCode == comparison.keyCode && current.modifiers == comparison.modifiers {
+                    return "\(current.label) and \(comparison.label) should not share the same shortcut."
+                }
+            }
+        }
+
+        return nil
     }
 }
 

@@ -10,6 +10,147 @@ import HotKey
 import Carbon.HIToolbox
 import Sparkle
 
+private final class StatusMenuActionItemView: NSView {
+    private let titleField = NSTextField(labelWithString: "")
+    private let accessoryImageView = NSImageView()
+    private var trackingArea: NSTrackingArea?
+    private var isHovered = false {
+        didSet {
+            needsDisplay = true
+            updateAppearance()
+        }
+    }
+
+    weak var menuItem: NSMenuItem?
+
+    override var isFlipped: Bool { true }
+
+    init(width: CGFloat = 220) {
+        super.init(frame: NSRect(x: 0, y: 0, width: width, height: 28))
+        setup()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func configure(title: String, accessorySystemImageName: String) {
+        titleField.stringValue = title
+        accessoryImageView.image = NSImage(
+            systemSymbolName: accessorySystemImageName,
+            accessibilityDescription: title
+        )
+        accessoryImageView.image?.isTemplate = true
+        updateAppearance()
+    }
+
+    override func viewWillDraw() {
+        super.viewWillDraw()
+        // Menu keyboard navigation updates `enclosingMenuItem.isHighlighted` without toggling hover;
+        // refresh label and symbol colours whenever AppKit is about to draw this row.
+        updateAppearance()
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+
+        if isHovered || enclosingMenuItem?.isHighlighted == true {
+            NSColor.selectedContentBackgroundColor.setFill()
+            dirtyRect.fill()
+        }
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        // If the menu dismisses while the pointer is still over this row, AppKit may not send mouseExited.
+        if newWindow == nil {
+            isHovered = false
+        }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        self.trackingArea = trackingArea
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let location = convert(event.locationInWindow, from: nil)
+        guard bounds.contains(location),
+              let menuItem,
+              let action = menuItem.action else {
+            return
+        }
+
+        isHovered = false
+        let target = menuItem.target ?? NSApp.target(forAction: action, to: nil, from: menuItem)
+        menuItem.menu?.cancelTracking()
+        NSApp.sendAction(action, to: target, from: menuItem)
+    }
+
+    private func setup() {
+        titleField.lineBreakMode = .byTruncatingTail
+        titleField.font = .menuFont(ofSize: 0)
+
+        accessoryImageView.symbolConfiguration = .init(pointSize: 12, weight: .semibold)
+        accessoryImageView.imageScaling = .scaleProportionallyDown
+
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let stackView = NSStackView(views: [titleField, spacer, accessoryImageView])
+        stackView.orientation = .horizontal
+        stackView.alignment = .centerY
+        stackView.distribution = .fill
+        stackView.spacing = 8
+        stackView.edgeInsets = NSEdgeInsets(top: 5, left: 12, bottom: 5, right: 12)
+
+        addSubview(stackView)
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            stackView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stackView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stackView.topAnchor.constraint(equalTo: topAnchor),
+            stackView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            accessoryImageView.widthAnchor.constraint(equalToConstant: 14)
+        ])
+
+        titleField.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        titleField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        accessoryImageView.setContentHuggingPriority(.required, for: .horizontal)
+        accessoryImageView.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        updateAppearance()
+    }
+
+    private func updateAppearance() {
+        let isHighlighted = isHovered || enclosingMenuItem?.isHighlighted == true
+        titleField.textColor = isHighlighted ? .selectedMenuItemTextColor : .labelColor
+        accessoryImageView.contentTintColor = isHighlighted ? .selectedMenuItemTextColor : .secondaryLabelColor
+    }
+}
+
 enum FeatureFlags {
     /// Temporary kill switch while in-app search is hidden from release builds.
     static let isSearchEnabled = false
@@ -51,7 +192,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     private var captureManager: ScreenCaptureManager!
     private var frameBuffer: FrameBuffer?
     private var overlayController: OverlayWindowController?
-    private var hotKey: HotKey?
+    private var overlayHotKey: HotKey?
+    private var capturePauseHotKey: HotKey?
     private lazy var updaterController = SPUStandardUpdaterController(
         startingUpdater: false,
         updaterDelegate: nil,
@@ -66,7 +208,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             self?.checkForUpdates(nil)
         },
         onShortcutChanged: { [weak self] in
-            self?.registerHotKey()
+            self?.keyboardShortcutsDidChange()
         }
     )
     private lazy var settingsWindowCoordinator = SettingsWindowCoordinator(
@@ -86,6 +228,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     @AppStorage("reduceCaptureOnBattery") private var reduceCaptureOnBattery: Bool = true
     @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 38  // J key
     @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
+    @AppStorage("capturePauseShortcutKeyCode") private var capturePauseShortcutKeyCode: Int = 38  // J key
+    @AppStorage("capturePauseShortcutModifiers") private var capturePauseShortcutModifiers: Int = 1_703_936  // ⌘⌥⇧
     @AppStorage("overlayDismissKeyCode") private var overlayDismissKeyCode: Int = 53
     @AppStorage("overlayDismissModifiers") private var overlayDismissModifiers: Int = 0
     private var capturePolicyTimer: Timer?
@@ -155,6 +299,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         static let captureStatus = 101
         static let pauseToggle = 102
         static let permissionHelp = 103
+        static let showTimeline = 104
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -229,12 +374,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
         let showItem = NSMenuItem(title: "Show Timeline", action: #selector(showOverlay), keyEquivalent: "")
         showItem.target = self
+        showItem.tag = MenuItemTag.showTimeline
         showItem.keyEquivalentModifierMask = [.command, .option]
+        showItem.view = makeMenuActionView(for: showItem)
         menu.addItem(showItem)
 
         let pauseItem = NSMenuItem(title: "Pause Recording", action: #selector(toggleCapturePause), keyEquivalent: "")
         pauseItem.target = self
         pauseItem.tag = MenuItemTag.pauseToggle
+        pauseItem.view = makeMenuActionView(for: pauseItem)
         menu.addItem(pauseItem)
 
         menu.addItem(NSMenuItem.separator())
@@ -281,6 +429,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
         menu.delegate = self
         statusItem.menu = menu
+        updateShowTimelineMenuItem()
         updatePauseMenuItem()
     }
 
@@ -288,24 +437,55 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         registerHotKey()
     }
 
+    private func keyboardShortcutsDidChange() {
+        registerHotKey()
+        overlayController?.updateDismissShortcut(
+            keyCode: overlayDismissKeyCode,
+            modifiers: overlayDismissModifiers
+        )
+    }
+
     func registerHotKey() {
-        // Clear existing hotkey
-        hotKey = nil
+        overlayHotKey = nil
+        capturePauseHotKey = nil
 
-        // Don't register if no shortcut set
-        guard shortcutKeyCode != -1 else { return }
-
-        // Convert stored modifiers to NSEvent.ModifierFlags
-        let flags = NSEvent.ModifierFlags(rawValue: UInt(shortcutModifiers))
-        var carbonMods: UInt32 = 0
-        if flags.contains(.command) { carbonMods |= UInt32(cmdKey) }
-        if flags.contains(.option) { carbonMods |= UInt32(optionKey) }
-        if flags.contains(.control) { carbonMods |= UInt32(controlKey) }
-        if flags.contains(.shift) { carbonMods |= UInt32(shiftKey) }
-
-        hotKey = HotKey(carbonKeyCode: UInt32(shortcutKeyCode), carbonModifiers: carbonMods)
-        hotKey?.keyDownHandler = { [weak self] in
+        // Global Carbon hotkeys: at most one registration per key+modifier pair. Open rewind wins over pause
+        // when they match. Pause is also skipped if it matches the close rewind shortcut, which is handled
+        // locally while the overlay is open—otherwise both handlers could fire for one key press.
+        overlayHotKey = makeHotKey(
+            keyCode: shortcutKeyCode,
+            modifiers: shortcutModifiers
+        ) { [weak self] in
             self?.toggleOverlay()
+        }
+
+        guard capturePauseShortcutKeyCode != -1 else { return }
+
+        if shortcutsConflict(
+            capturePauseShortcutKeyCode,
+            capturePauseShortcutModifiers,
+            shortcutKeyCode,
+            shortcutModifiers
+        ) {
+            print("Skipping pause hotkey registration because it matches the open rewind shortcut")
+            return
+        }
+
+        if shortcutsConflict(
+            capturePauseShortcutKeyCode,
+            capturePauseShortcutModifiers,
+            overlayDismissKeyCode,
+            overlayDismissModifiers
+        ) {
+            print("Skipping pause hotkey registration because it matches the close rewind shortcut")
+            return
+        }
+
+        capturePauseHotKey = makeHotKey(
+            keyCode: capturePauseShortcutKeyCode,
+            modifiers: capturePauseShortcutModifiers
+        ) { [weak self] in
+            self?.toggleCapturePause()
         }
     }
 
@@ -1078,7 +1258,54 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         guard let menu = statusItem.menu,
               let item = menu.item(withTag: MenuItemTag.pauseToggle) else { return }
         item.title = isUserPaused ? "Resume Recording" : "Pause Recording"
-        item.state = isUserPaused ? .on : .off
+        item.state = .off
+        item.image = nil
+        (item.view as? StatusMenuActionItemView)?.configure(
+            title: item.title,
+            accessorySystemImageName: isUserPaused ? "play.fill" : "pause.fill"
+        )
+    }
+
+    private func updateShowTimelineMenuItem() {
+        guard let menu = statusItem.menu,
+              let item = menu.item(withTag: MenuItemTag.showTimeline) else { return }
+        item.image = nil
+        (item.view as? StatusMenuActionItemView)?.configure(
+            title: item.title,
+            accessorySystemImageName: "backward.fill"
+        )
+    }
+
+    private func makeHotKey(
+        keyCode: Int,
+        modifiers: Int,
+        handler: @escaping () -> Void
+    ) -> HotKey? {
+        guard keyCode != -1 else { return nil }
+
+        let flags = NSEvent.ModifierFlags(rawValue: UInt(modifiers))
+        var carbonMods: UInt32 = 0
+        if flags.contains(.command) { carbonMods |= UInt32(cmdKey) }
+        if flags.contains(.option) { carbonMods |= UInt32(optionKey) }
+        if flags.contains(.control) { carbonMods |= UInt32(controlKey) }
+        if flags.contains(.shift) { carbonMods |= UInt32(shiftKey) }
+
+        let hotKey = HotKey(carbonKeyCode: UInt32(keyCode), carbonModifiers: carbonMods)
+        hotKey.keyDownHandler = handler
+        return hotKey
+    }
+
+    private func shortcutsConflict(_ lhsKeyCode: Int, _ lhsModifiers: Int, _ rhsKeyCode: Int, _ rhsModifiers: Int) -> Bool {
+        lhsKeyCode != -1
+            && rhsKeyCode != -1
+            && lhsKeyCode == rhsKeyCode
+            && lhsModifiers == rhsModifiers
+    }
+
+    private func makeMenuActionView(for item: NSMenuItem) -> StatusMenuActionItemView {
+        let view = StatusMenuActionItemView()
+        view.menuItem = item
+        return view
     }
 
     private func updateStatusItemButtonAppearance() {

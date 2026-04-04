@@ -23,7 +23,7 @@ JustNow is a native macOS menu bar app that keeps a rolling record of your recen
 1. Download and open JustNow.
 2. Grant Screen Recording permission when macOS asks.
 3. Let it run in the menu bar.
-4. Press `⌘⌥J` to open the rewind timeline.
+4. Press `⌘⌥J` to open the rewind timeline, or `⌘⌥⇧J` to pause or resume recording.
 5. Scroll or drag to move through recent history.
 6. Drag over visible text in the current frame to copy it from OCR.
 7. Press `Escape` to close the overlay.
@@ -41,7 +41,7 @@ You can adjust:
 - show a text-grab debug preview of the OCR crop
 - automatic power saving behaviour
 - launch on startup
-- show and hide shortcuts
+- open, pause or resume, and close shortcuts
 
 ## Building From Source
 
