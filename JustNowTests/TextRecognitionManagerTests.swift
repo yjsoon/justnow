@@ -99,4 +99,58 @@ final class TextRecognitionManagerTests: XCTestCase {
 
         XCTAssertEqual(selectionRect, CGRect(x: 0, y: 40, width: 100, height: 60))
     }
+
+    func testHighlightRectsPreferWordBoxesForPrefixMatches() {
+        let menuRect = CGRect(x: 0.12, y: 0.55, width: 0.14, height: 0.08)
+        let barRect = CGRect(x: 0.28, y: 0.55, width: 0.1, height: 0.08)
+        let layout = SearchTextLayout(
+            lines: [
+                SearchTextLine(
+                    text: "Menu bar",
+                    rect: CGRect(x: 0.1, y: 0.52, width: 0.32, height: 0.12),
+                    words: [
+                        SearchTextWord(text: "Menu", rect: menuRect),
+                        SearchTextWord(text: "bar", rect: barRect)
+                    ]
+                )
+            ]
+        )
+
+        XCTAssertEqual(layout.highlightRects(matching: "men"), [menuRect])
+        XCTAssertEqual(layout.highlightRects(matching: "menu bar"), [menuRect, barRect])
+    }
+
+    func testHighlightRectsFallBackToLineRectWhenWordBoxesAreMissing() {
+        let lineRect = CGRect(x: 0.18, y: 0.34, width: 0.4, height: 0.11)
+        let layout = SearchTextLayout(
+            lines: [
+                SearchTextLine(
+                    text: "Window capture paused",
+                    rect: lineRect,
+                    words: []
+                )
+            ]
+        )
+
+        XCTAssertEqual(layout.highlightRects(matching: "capture"), [lineRect])
+    }
+
+    func testDisplayedRectFlipsNormalisedVisionCoordinatesIntoOverlaySpace() {
+        let displayedRect = TextGrabGeometry.displayedRect(
+            forNormalisedImageRect: CGRect(x: 0.25, y: 0.5, width: 0.25, height: 0.25),
+            displayedImageRect: CGRect(x: 10, y: 20, width: 100, height: 200)
+        )
+
+        XCTAssertEqual(displayedRect, CGRect(x: 35, y: 70, width: 25, height: 50))
+    }
+
+    func testPaddedDisplayedRectAddsFivePointsAndClampsToImageBounds() {
+        let displayedRect = TextGrabGeometry.paddedDisplayedRect(
+            forNormalisedImageRect: CGRect(x: 0.02, y: 0.9, width: 0.2, height: 0.08),
+            displayedImageRect: CGRect(x: 10, y: 20, width: 100, height: 200),
+            padding: 5
+        )
+
+        XCTAssertEqual(displayedRect, CGRect(x: 10, y: 20, width: 27, height: 25))
+    }
 }

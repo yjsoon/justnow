@@ -9,7 +9,7 @@ JustNow is a native macOS menu bar app that keeps a rolling record of your recen
 - Opens a fullscreen rewind timeline from the menu bar with a configurable hotkey
 - Keeps recent history at full detail, then compacts older history automatically
 - Lets you keep between 30 minutes and 24 hours of rewind history
-- Lets you search indexed text across your retained history from the overlay
+- Lets you search indexed text across your retained history from the overlay, with matching words highlighted in the frame preview
 - Drag over a rewind frame to OCR on-screen text and copy the cleaned result to the clipboard
 - Adapts capture behaviour when your Mac is on battery, idle, or under thermal pressure
 - Stays out of the way with a menu bar-only interface and no Dock icon
@@ -26,7 +26,7 @@ JustNow is a native macOS menu bar app that keeps a rolling record of your recen
 3. Let it run in the menu bar.
 4. Press `⌘⌥J` to open the rewind timeline, or `⌘⌥⇧J` to pause or resume recording.
 5. Scroll or drag to move through recent history.
-6. Press `/` in the overlay to search indexed text across your retained history.
+6. Press `/` in the overlay to search indexed text across your retained history and jump through highlighted matches.
 7. Drag over visible text in the current frame to copy it from OCR.
 8. Press `Escape` to close the overlay.
 

@@ -69,6 +69,25 @@ actor TextCache {
         return String(cString: cText)
     }
 
+    func getSearchLayout(for frameID: UUID) -> SearchTextLayout? {
+        guard let statement = try? prepare(
+            "SELECT layout_json FROM frame_search_layout WHERE frame_id = ? LIMIT 1;"
+        ) else {
+            return nil
+        }
+        defer { sqlite3_finalize(statement) }
+
+        guard bindText(frameID.uuidString, to: statement, index: 1),
+              sqlite3_step(statement) == SQLITE_ROW,
+              let cText = sqlite3_column_text(statement, 0) else {
+            return nil
+        }
+
+        let json = String(cString: cText)
+        guard let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(SearchTextLayout.self, from: data)
+    }
+
     /// Cache extracted text for a frame
     func setText(_ text: String, for frameID: UUID, timestamp: Date = Date()) {
         do {
@@ -116,6 +135,39 @@ actor TextCache {
             }
         } catch {
             Self.logger.error("Failed to cache OCR text: \(error.localizedDescription)")
+        }
+    }
+
+    func setSearchLayout(_ layout: SearchTextLayout, for frameID: UUID, timestamp: Date = Date()) {
+        do {
+            let data = try JSONEncoder().encode(layout)
+            guard let json = String(data: data, encoding: .utf8) else {
+                throw sqliteError(message: "Failed to encode search layout JSON")
+            }
+
+            try withTransaction {
+                guard let upsert = try? prepare(
+                    """
+                    INSERT INTO frame_search_layout (frame_id, updated_at, layout_json)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(frame_id) DO UPDATE SET
+                        updated_at = excluded.updated_at,
+                        layout_json = excluded.layout_json;
+                    """
+                ) else {
+                    throw sqliteError(message: "Failed to prepare search layout upsert statement")
+                }
+                defer { sqlite3_finalize(upsert) }
+
+                guard bindText(frameID.uuidString, to: upsert, index: 1),
+                      bindDouble(timestamp.timeIntervalSince1970, to: upsert, index: 2),
+                      bindText(json, to: upsert, index: 3),
+                      sqlite3_step(upsert) == SQLITE_DONE else {
+                    throw sqliteError(message: "Failed to upsert search layout")
+                }
+            }
+        } catch {
+            Self.logger.error("Failed to cache search layout: \(error.localizedDescription)")
         }
     }
 
@@ -308,6 +360,7 @@ actor TextCache {
     func clear() {
         do {
             try withTransaction {
+                try execute("DELETE FROM frame_search_layout;")
                 try execute("DELETE FROM frame_text_fts;")
                 try execute("DELETE FROM frame_text;")
             }
@@ -361,6 +414,17 @@ actor TextCache {
                 frame_id UNINDEXED,
                 text,
                 tokenize = 'unicode61 remove_diacritics 2'
+            );
+            """
+            ,
+            on: db
+        )
+        try execute(
+            """
+            CREATE TABLE IF NOT EXISTS frame_search_layout (
+                frame_id TEXT PRIMARY KEY,
+                updated_at REAL NOT NULL,
+                layout_json TEXT NOT NULL
             );
             """
             ,
@@ -467,6 +531,12 @@ actor TextCache {
                 }
                 defer { sqlite3_finalize(deleteFTS) }
 
+                let deleteLayoutSQL = "DELETE FROM frame_search_layout WHERE frame_id IN (\(placeholders));"
+                guard let deleteLayout = try? prepare(deleteLayoutSQL) else {
+                    throw sqliteError(message: "Failed to prepare search layout delete statement")
+                }
+                defer { sqlite3_finalize(deleteLayout) }
+
                 var bindIndex: Int32 = 1
                 for frameID in chunk {
                     guard bindText(frameID.uuidString, to: deletePrimary, index: bindIndex) else {
@@ -487,6 +557,17 @@ actor TextCache {
                 }
                 guard sqlite3_step(deleteFTS) == SQLITE_DONE else {
                     throw sqliteError(message: "Failed deleting FTS rows")
+                }
+
+                bindIndex = 1
+                for frameID in chunk {
+                    guard bindText(frameID.uuidString, to: deleteLayout, index: bindIndex) else {
+                        throw sqliteError(message: "Failed binding search layout delete frame ID")
+                    }
+                    bindIndex += 1
+                }
+                guard sqlite3_step(deleteLayout) == SQLITE_DONE else {
+                    throw sqliteError(message: "Failed deleting search layout rows")
                 }
             }
         }
@@ -559,11 +640,7 @@ actor TextCache {
     }
 
     private func ftsQuery(from query: String) -> String? {
-        let tokens = query
-            .lowercased()
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { !$0.isEmpty }
-
+        let tokens = SearchQueryTokeniser.tokens(from: query)
         guard !tokens.isEmpty else { return nil }
 
         return tokens

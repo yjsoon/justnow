@@ -83,6 +83,42 @@ enum TextGrabGeometry {
         return clamped
     }
 
+    static func displayedRect(
+        forNormalisedImageRect normalisedRect: CGRect,
+        displayedImageRect: CGRect
+    ) -> CGRect {
+        let clampedRect = CGRect(
+            x: min(max(normalisedRect.minX, 0), 1),
+            y: min(max(normalisedRect.minY, 0), 1),
+            width: min(max(normalisedRect.width, 0), 1),
+            height: min(max(normalisedRect.height, 0), 1)
+        )
+
+        return CGRect(
+            x: displayedImageRect.minX + clampedRect.minX * displayedImageRect.width,
+            y: displayedImageRect.minY + (1 - clampedRect.maxY) * displayedImageRect.height,
+            width: clampedRect.width * displayedImageRect.width,
+            height: clampedRect.height * displayedImageRect.height
+        )
+    }
+
+    static func paddedDisplayedRect(
+        forNormalisedImageRect normalisedRect: CGRect,
+        displayedImageRect: CGRect,
+        padding: CGFloat
+    ) -> CGRect {
+        let baseRect = displayedRect(
+            forNormalisedImageRect: normalisedRect,
+            displayedImageRect: displayedImageRect
+        )
+        guard padding > 0 else { return baseRect }
+
+        let expandedRect = baseRect.insetBy(dx: -padding, dy: -padding)
+        let clampedRect = expandedRect.intersection(displayedImageRect)
+        guard !clampedRect.isNull else { return .zero }
+        return clampedRect
+    }
+
     private static func clamp(_ point: CGPoint, within bounds: CGRect) -> CGPoint {
         CGPoint(
             x: min(max(point.x, bounds.minX), bounds.maxX),

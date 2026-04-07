@@ -279,6 +279,35 @@ class FrameBuffer {
         try await frameStore.loadFullImage(id: frame.id)
     }
 
+    func getSearchLayout(for frame: StoredFrame, image: CGImage? = nil) async -> SearchTextLayout? {
+        if let cached = await textCache.getSearchLayout(for: frame.id) {
+            return cached
+        }
+
+        guard shouldContinueOCR(for: frame) else { return nil }
+
+        do {
+            let sourceImage: CGImage
+            if let image {
+                sourceImage = image
+            } else {
+                sourceImage = try await frameStore.loadFullImage(id: frame.id)
+            }
+
+            guard !Task.isCancelled else { return nil }
+            guard let layout = await TextRecognitionManager.extractSearchLayout(from: sourceImage),
+                  !layout.isEmpty else {
+                return nil
+            }
+            guard shouldContinueOCR(for: frame) else { return nil }
+
+            await textCache.setSearchLayout(layout, for: frame.id, timestamp: frame.timestamp)
+            return layout
+        } catch {
+            return nil
+        }
+    }
+
     /// Get thumbnail, with caching
     func getThumbnail(for frame: StoredFrame) async -> NSImage? {
         let key = frame.id as NSUUID

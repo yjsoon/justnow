@@ -608,7 +608,16 @@ struct FramePreviewView: View {
     @State private var image: CGImage?
     @State private var isLoading = false
     @State private var loadFailed = false
+    @State private var searchTextLayout: SearchTextLayout?
     @State private var textGrabDebugSnapshot: TextGrabDebugSnapshot?
+
+    private var shouldShowSearchHighlights: Bool {
+        viewModel.isSearchAvailable && viewModel.isSearching && !viewModel.searchQuery.isEmpty
+    }
+
+    private var searchHighlightLoadKey: String {
+        "\(frame.id.uuidString)|\(shouldShowSearchHighlights)|\(image == nil ? "pending" : "ready")"
+    }
 
     var body: some View {
         Group {
@@ -618,15 +627,26 @@ struct FramePreviewView: View {
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .overlay {
-                            TextGrabSelectionOverlay(
-                                image: image,
-                                viewModel: viewModel,
-                                soundEnabled: textGrabSoundEnabled,
-                                debugCaptureEnabled: textGrabDebugPreviewEnabled,
-                                bannerState: $textGrabBannerState,
-                                debugSnapshot: $textGrabDebugSnapshot
-                            )
-                            .id(frame.id)
+                            ZStack {
+                                if shouldShowSearchHighlights, let searchTextLayout {
+                                    SearchHighlightOverlay(
+                                        image: image,
+                                        layout: searchTextLayout,
+                                        query: viewModel.searchQuery
+                                    )
+                                    .allowsHitTesting(false)
+                                }
+
+                                TextGrabSelectionOverlay(
+                                    image: image,
+                                    viewModel: viewModel,
+                                    soundEnabled: textGrabSoundEnabled,
+                                    debugCaptureEnabled: textGrabDebugPreviewEnabled,
+                                    bannerState: $textGrabBannerState,
+                                    debugSnapshot: $textGrabDebugSnapshot
+                                )
+                                .id(frame.id)
+                            }
                         }
                         .overlay(alignment: .bottomLeading) {
                             if textGrabDebugPreviewEnabled, let textGrabDebugSnapshot {
@@ -663,6 +683,7 @@ struct FramePreviewView: View {
             isLoading = true
             loadFailed = false
             image = nil
+            searchTextLayout = nil
             textGrabBannerState = .hint
             textGrabDebugSnapshot = nil
 
@@ -683,6 +704,73 @@ struct FramePreviewView: View {
         .onChange(of: textGrabDebugPreviewEnabled) { _, isEnabled in
             if !isEnabled {
                 textGrabDebugSnapshot = nil
+            }
+        }
+        .task(id: searchHighlightLoadKey) {
+            guard shouldShowSearchHighlights, let image else {
+                searchTextLayout = nil
+                return
+            }
+
+            let layout = await frameBuffer.getSearchLayout(for: frame, image: image)
+            guard !Task.isCancelled else { return }
+            searchTextLayout = layout
+        }
+    }
+}
+
+private struct SearchHighlightOverlay: View {
+    let image: CGImage
+    let layout: SearchTextLayout
+    let query: String
+
+    private let rectPadding: CGFloat = 5
+
+    var body: some View {
+        GeometryReader { proxy in
+            let displayedSize = proxy.size
+            let displayedImageRect =
+                TextGrabGeometry.displayedImageRect(
+                    for: CGSize(width: image.width, height: image.height),
+                    fittedWithin: displayedSize
+                ) ?? CGRect(origin: .zero, size: displayedSize)
+            let highlightRects = layout.highlightRects(matching: query)
+
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(highlightRects.enumerated()), id: \.offset) { _, normalisedRect in
+                    let displayedRect = TextGrabGeometry.paddedDisplayedRect(
+                        forNormalisedImageRect: normalisedRect,
+                        displayedImageRect: displayedImageRect,
+                        padding: rectPadding
+                    )
+                    let cornerRadius = max(10, min(displayedRect.width, displayedRect.height) * 0.22)
+
+                    if displayedRect.width > 0, displayedRect.height > 0 {
+                        RoundedRectangle(
+                            cornerRadius: cornerRadius,
+                            style: .continuous
+                        )
+                        .fill(Color(red: 1.0, green: 0.82, blue: 0.14).opacity(0.18))
+                        .overlay {
+                            ZStack {
+                                RoundedRectangle(
+                                    cornerRadius: cornerRadius,
+                                    style: .continuous
+                                )
+                                .stroke(Color.black.opacity(0.36), lineWidth: 4)
+
+                                RoundedRectangle(
+                                    cornerRadius: cornerRadius,
+                                    style: .continuous
+                                )
+                                .stroke(Color(red: 1.0, green: 0.93, blue: 0.52).opacity(0.96), lineWidth: 2)
+                            }
+                        }
+                        .shadow(color: Color.black.opacity(0.18), radius: 5)
+                        .frame(width: displayedRect.width, height: displayedRect.height)
+                        .offset(x: displayedRect.minX, y: displayedRect.minY)
+                    }
+                }
             }
         }
     }
