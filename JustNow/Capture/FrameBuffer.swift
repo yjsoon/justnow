@@ -78,6 +78,14 @@ private struct PendingIngest {
     let syncContinuation: CheckedContinuation<SyncIngestResult, Never>?
 }
 
+private final class CachedCGImageBox {
+    let image: CGImage
+
+    init(_ image: CGImage) {
+        self.image = image
+    }
+}
+
 @MainActor
 class FrameBuffer {
     private var frames: [StoredFrame] = []
@@ -113,6 +121,8 @@ class FrameBuffer {
 
     // Thumbnail cache for quick access
     private let thumbnailCache = NSCache<NSUUID, NSImage>()
+    private let fullImageCache = NSCache<NSUUID, CachedCGImageBox>()
+    private var inFlightFullImageLoads: [UUID: Task<CachedCGImageBox, Error>] = [:]
 
     // OCR text cache for faster subsequent searches
     let textCache = TextCache()
@@ -121,6 +131,7 @@ class FrameBuffer {
         self.frameStore = try FrameStore()
         self.retentionManager = RetentionManager(policy: retentionPolicy)
         thumbnailCache.countLimit = 100
+        fullImageCache.countLimit = 24
 
         // Load persisted frames
         await loadPersistedFrames()
@@ -276,7 +287,14 @@ class FrameBuffer {
 
     /// Load full-resolution image from disk
     func getFullImage(for frame: StoredFrame) async throws -> CGImage {
-        try await frameStore.loadFullImage(id: frame.id)
+        try await loadFullImageBox(for: frame).image
+    }
+
+    func prefetchFullImages(for frames: [StoredFrame]) async {
+        for frame in frames {
+            guard !Task.isCancelled else { return }
+            _ = try? await loadFullImageBox(for: frame)
+        }
     }
 
     func getSearchLayout(for frame: StoredFrame, image: CGImage? = nil) async -> SearchTextLayout? {
@@ -358,6 +376,8 @@ class FrameBuffer {
         try await frameStore.clear()
         frames.removeAll()
         thumbnailCache.removeAllObjects()
+        fullImageCache.removeAllObjects()
+        inFlightFullImageLoads.removeAll()
         await textCache.clear()
     }
 
@@ -436,6 +456,34 @@ class FrameBuffer {
         guard let index = clearWaiters.firstIndex(where: { $0.id == id }) else { return }
         let continuation = clearWaiters.remove(at: index).continuation
         continuation.resume(returning: .cancelled)
+    }
+
+    private func loadFullImageBox(for frame: StoredFrame) async throws -> CachedCGImageBox {
+        let key = frame.id as NSUUID
+        if let cached = fullImageCache.object(forKey: key) {
+            return cached
+        }
+
+        if let inFlight = inFlightFullImageLoads[frame.id] {
+            return try await inFlight.value
+        }
+
+        let store = frameStore
+        let loadTask = Task(priority: .userInitiated) {
+            let image = try await store.loadFullImage(id: frame.id)
+            return CachedCGImageBox(image)
+        }
+        inFlightFullImageLoads[frame.id] = loadTask
+
+        do {
+            let cachedImage = try await loadTask.value
+            fullImageCache.setObject(cachedImage, forKey: key)
+            inFlightFullImageLoads.removeValue(forKey: frame.id)
+            return cachedImage
+        } catch {
+            inFlightFullImageLoads.removeValue(forKey: frame.id)
+            throw error
+        }
     }
 
     private func enqueueIngest(

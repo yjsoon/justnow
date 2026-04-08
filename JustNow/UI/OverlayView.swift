@@ -85,6 +85,14 @@ enum SearchTimeScope: String, CaseIterable {
 @Observable
 @MainActor
 class OverlayViewModel {
+    private struct SearchRequest: Equatable {
+        let query: String
+        let scope: SearchTimeScope
+    }
+
+    private static let searchDebounceDelay: Duration = .milliseconds(220)
+    private static let fullImagePrefetchRadius = 3
+
     var selectedIndex: Int = 0
     let timelineFrames: [StoredFrame]
     let frameBuffer: FrameBuffer
@@ -98,9 +106,13 @@ class OverlayViewModel {
     var searchQuery = ""
     var searchTimeScope: SearchTimeScope = .all
     var searchResults: [StoredFrame] = []
+    var isSearchPending = false
     var isSearchInProgress = false
     var searchIndexStatus: SearchIndexStatus = .empty
+    private var searchDebounceTask: Task<Void, Never>?
     private var searchTask: Task<Void, Never>?
+    private var imagePrefetchTask: Task<Void, Never>?
+    private var resolvedSearchRequest: SearchRequest?
     var isTextGrabActive = false
     private var cancelTextGrabHandler: (() -> Void)?
 
@@ -108,9 +120,35 @@ class OverlayViewModel {
         FeatureFlags.isSearchEnabled
     }
 
+    var hasSearchQuery: Bool {
+        !normalisedSearchQuery.isEmpty
+    }
+
+    var isSearchLoading: Bool {
+        isSearchPending || isSearchInProgress
+    }
+
+    var shouldShowSearchingState: Bool {
+        isSearchAvailable && isSearching && hasSearchQuery && isSearchLoading
+    }
+
+    var shouldShowNoSearchResults: Bool {
+        isSearchAvailable
+            && isSearching
+            && hasSearchQuery
+            && !isSearchLoading
+            && resolvedSearchRequest == currentSearchRequest
+            && searchResults.isEmpty
+    }
+
+    var selectedFramePrefetchKey: String {
+        let selectedFrameID = displayedFrames[safe: selectedIndex]?.id.uuidString ?? "none"
+        return "\(selectedFrameID)|\(displayedFrameCount)"
+    }
+
     /// Frames to display (filtered if searching, all otherwise)
     var displayedFrames: [StoredFrame] {
-        isSearchAvailable && isSearching && !searchQuery.isEmpty ? searchResults : timelineFrames
+        isSearchAvailable && isSearching && hasSearchQuery ? searchResults : timelineFrames
     }
 
     var displayedFrameCount: Int {
@@ -153,12 +191,18 @@ class OverlayViewModel {
     }
 
     func clearSearch() {
+        searchDebounceTask?.cancel()
+        searchDebounceTask = nil
         searchTask?.cancel()
         searchTask = nil
+        imagePrefetchTask?.cancel()
+        imagePrefetchTask = nil
         isSearching = false
         searchQuery = ""
         searchResults = []
+        isSearchPending = false
         isSearchInProgress = false
+        resolvedSearchRequest = nil
         // Reset to end of full frames
         selectedIndex = max(0, timelineFrames.count - 1)
     }
@@ -180,39 +224,76 @@ class OverlayViewModel {
         let status = await frameBuffer.searchIndexStatus()
         searchIndexStatus = status
 
-        guard isSearchAvailable, isSearching, !searchQuery.isEmpty else { return }
-        guard !isSearchInProgress else { return }
+        guard isSearchAvailable, isSearching, hasSearchQuery else { return }
+        guard !isSearchLoading else { return }
         guard status.indexedFrames != previousIndexedFrames else { return }
 
-        performSearch()
+        performSearch(immediately: true)
     }
 
     /// Index-only search: queries the background OCR index without performing any query-time OCR.
-    func performSearch() {
-        guard isSearchAvailable else {
-            clearSearch()
-            return
-        }
+    func performSearch(immediately: Bool = false) {
+        guard isSearchAvailable, isSearching else { return }
+
+        searchDebounceTask?.cancel()
+        searchDebounceTask = nil
         searchTask?.cancel()
         searchTask = nil
-        guard !searchQuery.isEmpty else {
+
+        guard let request = currentSearchRequest else {
             searchResults = []
+            isSearchPending = false
+            isSearchInProgress = false
+            resolvedSearchRequest = nil
             return
         }
 
-        logger.info("Starting index-only search for: '\(self.searchQuery)'")
-
-        isSearchInProgress = true
         searchResults = []
+        resolvedSearchRequest = nil
 
-        let query = searchQuery
-        let scope = searchTimeScope
-        let searchCutoff = scope.cutoff(using: rewindHistoryOption)
+        if immediately {
+            beginSearch(for: request)
+            return
+        }
+
+        isSearchPending = true
+        isSearchInProgress = false
+
+        searchDebounceTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.searchDebounceDelay)
+            guard !Task.isCancelled else { return }
+
+            self?.resumeDebouncedSearch(for: request)
+        }
+    }
+
+    private var normalisedSearchQuery: String {
+        searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var currentSearchRequest: SearchRequest? {
+        guard hasSearchQuery else { return nil }
+        return SearchRequest(query: normalisedSearchQuery, scope: searchTimeScope)
+    }
+
+    private func resumeDebouncedSearch(for request: SearchRequest) {
+        guard isSearching else { return }
+        guard currentSearchRequest == request else { return }
+        beginSearch(for: request)
+    }
+
+    private func beginSearch(for request: SearchRequest) {
+        logger.info("Starting index-only search for: '\(request.query)'")
+
+        isSearchPending = false
+        isSearchInProgress = true
+
+        let searchCutoff = request.scope.cutoff(using: rewindHistoryOption)
         let buffer = frameBuffer
         let cache = frameBuffer.textCache
 
         searchTask = Task {
-            let matchedIDs = await cache.searchFrameIDs(matching: query, limit: 10_000, since: searchCutoff)
+            let matchedIDs = await cache.searchFrameIDs(matching: request.query, limit: 10_000, since: searchCutoff)
 
             guard !Task.isCancelled else { return }
 
@@ -236,6 +317,7 @@ class OverlayViewModel {
                 if !Task.isCancelled {
                     searchResults = finalResults
                     isSearchInProgress = false
+                    resolvedSearchRequest = request
                     // Select newest match while keeping the array chronological.
                     selectedIndex = max(0, finalResults.count - 1)
                 }
@@ -275,6 +357,26 @@ class OverlayViewModel {
     func goToEnd() {
         guard ensureDisplayedSelection() else { return }
         selectedIndex = max(0, displayedFrameCount - 1)
+    }
+
+    func prefetchImagesNearSelection() {
+        imagePrefetchTask?.cancel()
+        imagePrefetchTask = nil
+
+        guard ensureDisplayedSelection() else { return }
+
+        let lowerBound = max(0, selectedIndex - Self.fullImagePrefetchRadius)
+        let upperBound = min(displayedFrameCount - 1, selectedIndex + Self.fullImagePrefetchRadius)
+        let framesToPrefetch = (lowerBound...upperBound).compactMap { index -> StoredFrame? in
+            guard index != selectedIndex else { return nil }
+            return displayedFrames[safe: index]
+        }
+        guard !framesToPrefetch.isEmpty else { return }
+
+        let buffer = frameBuffer
+        imagePrefetchTask = Task(priority: .utility) {
+            await buffer.prefetchFullImages(for: framesToPrefetch)
+        }
     }
 
     func scrollBy(_ delta: CGFloat) {
@@ -386,8 +488,9 @@ struct ContentAreaView: View {
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.45))
                 }
-            } else if viewModel.isSearchAvailable && viewModel.isSearching && displayedFrames.isEmpty && !viewModel.isSearchInProgress {
-                // No results state
+            } else if viewModel.shouldShowSearchingState {
+                SearchSearchingStateView()
+            } else if viewModel.shouldShowNoSearchResults {
                 VStack(spacing: 12) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 40))
@@ -395,6 +498,9 @@ struct ContentAreaView: View {
                     Text("No matches found")
                         .font(.headline)
                         .foregroundStyle(.white.opacity(0.6))
+                    Text("Try a different word or broaden the time range.")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.45))
                 }
             }
 
@@ -406,6 +512,9 @@ struct ContentAreaView: View {
                 .padding(.bottom, 50)
         }
         .animation(.easeInOut(duration: 0.2), value: viewModel.isSearchAvailable && viewModel.isSearching)
+        .task(id: viewModel.selectedFramePrefetchKey) {
+            viewModel.prefetchImagesNearSelection()
+        }
         .onChange(of: viewModel.selectedIndex) { _, _ in
             textGrabBannerState = .hint
         }
@@ -473,14 +582,15 @@ struct SearchBarView: View {
                 .font(.system(size: 16))
                 .foregroundStyle(.white)
                 .focused($isFocused)
-                .onSubmit {
+                .onChange(of: viewModel.searchQuery) { _, _ in
                     viewModel.performSearch()
                 }
+                .onSubmit {
+                    viewModel.performSearch(immediately: true)
+                }
 
-            if viewModel.isSearchInProgress {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(.white)
+            if viewModel.isSearchLoading {
+                SearchingStatusBadge()
             } else if !viewModel.searchResults.isEmpty {
                 let status = viewModel.searchIndexStatus
                 let indexPercent = status.totalFrames > 0
@@ -521,8 +631,8 @@ struct SearchBarView: View {
                 ForEach(SearchTimeScope.allCases, id: \.self) { scope in
                     Button {
                         viewModel.searchTimeScope = scope
-                        if !viewModel.searchQuery.isEmpty {
-                            viewModel.performSearch()
+                        if viewModel.hasSearchQuery {
+                            viewModel.performSearch(immediately: true)
                         }
                     } label: {
                         if scope == viewModel.searchTimeScope {
@@ -558,6 +668,80 @@ struct SearchBarView: View {
                 try? await Task.sleep(for: .seconds(2))
             }
         }
+    }
+}
+
+private struct SearchSearchingStateView: View {
+    var body: some View {
+        VStack(spacing: 16) {
+            SearchingRippleBar(height: 16)
+                .frame(width: 240)
+
+            Text("Searching")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.82))
+
+            Text("Looking through indexed screen text as you type")
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.52))
+        }
+        .padding(.horizontal, 28)
+        .padding(.vertical, 24)
+        .darkBarBackground(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+}
+
+private struct SearchingStatusBadge: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            SearchingRippleBar(height: 10)
+                .frame(width: 54)
+
+            Text("Searching…")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.68))
+        }
+    }
+}
+
+private struct SearchingRippleBar: View {
+    private let trackColor = Color.white.opacity(0.08)
+    private let borderColor = Color.white.opacity(0.14)
+    private let rippleColors = [
+        Color(red: 0.36, green: 0.78, blue: 0.74).opacity(0.15),
+        Color(red: 0.95, green: 0.77, blue: 0.43).opacity(0.34),
+        Color(red: 0.45, green: 0.69, blue: 0.95).opacity(0.18),
+    ]
+
+    let height: CGFloat
+
+    var body: some View {
+        GeometryReader { proxy in
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+                let duration = 3.8
+                let progress = (context.date.timeIntervalSinceReferenceDate
+                    .truncatingRemainder(dividingBy: duration)) / duration
+                let glowWidth = max(proxy.size.width * 0.72, 44)
+                let travel = proxy.size.width + glowWidth
+                let offset = -glowWidth + travel * progress
+
+                Capsule(style: .continuous)
+                    .fill(trackColor)
+                    .overlay {
+                        Capsule(style: .continuous)
+                            .stroke(borderColor, lineWidth: 1)
+                    }
+                    .overlay(alignment: .leading) {
+                        LinearGradient(colors: rippleColors, startPoint: .leading, endPoint: .trailing)
+                            .frame(width: glowWidth)
+                            .blur(radius: height * 0.75)
+                            .offset(x: offset)
+                            .blendMode(.screen)
+                    }
+                    .clipShape(Capsule(style: .continuous))
+            }
+        }
+        .frame(height: height)
     }
 }
 
@@ -606,17 +790,26 @@ struct FramePreviewView: View {
     @AppStorage("textGrabSoundEnabled") private var textGrabSoundEnabled: Bool = true
     @AppStorage("textGrabDebugPreviewEnabled") private var textGrabDebugPreviewEnabled: Bool = false
     @State private var image: CGImage?
+    @State private var loadedFrameID: UUID?
     @State private var isLoading = false
+    @State private var showsDeferredLoadOverlay = false
     @State private var loadFailed = false
     @State private var searchTextLayout: SearchTextLayout?
     @State private var textGrabDebugSnapshot: TextGrabDebugSnapshot?
+    @State private var loadOverlayTask: Task<Void, Never>?
+
+    private let loadIndicatorDelay: Duration = .milliseconds(140)
 
     private var shouldShowSearchHighlights: Bool {
-        viewModel.isSearchAvailable && viewModel.isSearching && !viewModel.searchQuery.isEmpty
+        viewModel.isSearchAvailable && viewModel.isSearching && viewModel.hasSearchQuery
+    }
+
+    private var isShowingCurrentFrame: Bool {
+        loadedFrameID == frame.id
     }
 
     private var searchHighlightLoadKey: String {
-        "\(frame.id.uuidString)|\(shouldShowSearchHighlights)|\(image == nil ? "pending" : "ready")"
+        "\(frame.id.uuidString)|\(shouldShowSearchHighlights)|\(isShowingCurrentFrame ? "ready" : "pending")"
     }
 
     var body: some View {
@@ -628,7 +821,7 @@ struct FramePreviewView: View {
                         .aspectRatio(contentMode: .fit)
                         .overlay {
                             ZStack {
-                                if shouldShowSearchHighlights, let searchTextLayout {
+                                if isShowingCurrentFrame, shouldShowSearchHighlights, let searchTextLayout {
                                     SearchHighlightOverlay(
                                         image: image,
                                         layout: searchTextLayout,
@@ -637,22 +830,30 @@ struct FramePreviewView: View {
                                     .allowsHitTesting(false)
                                 }
 
-                                TextGrabSelectionOverlay(
-                                    image: image,
-                                    viewModel: viewModel,
-                                    soundEnabled: textGrabSoundEnabled,
-                                    debugCaptureEnabled: textGrabDebugPreviewEnabled,
-                                    bannerState: $textGrabBannerState,
-                                    debugSnapshot: $textGrabDebugSnapshot
-                                )
-                                .id(frame.id)
+                                if isShowingCurrentFrame {
+                                    TextGrabSelectionOverlay(
+                                        image: image,
+                                        viewModel: viewModel,
+                                        soundEnabled: textGrabSoundEnabled,
+                                        debugCaptureEnabled: textGrabDebugPreviewEnabled,
+                                        bannerState: $textGrabBannerState,
+                                        debugSnapshot: $textGrabDebugSnapshot
+                                    )
+                                    .id(frame.id)
+                                }
                             }
                         }
                         .overlay(alignment: .bottomLeading) {
-                            if textGrabDebugPreviewEnabled, let textGrabDebugSnapshot {
+                            if isShowingCurrentFrame, textGrabDebugPreviewEnabled, let textGrabDebugSnapshot {
                                 TextGrabDebugPreview(snapshot: textGrabDebugSnapshot)
                                     .padding(20)
                                     .allowsHitTesting(false)
+                            }
+                        }
+                        .overlay {
+                            if showsDeferredLoadOverlay && isLoading && !isShowingCurrentFrame {
+                                Rectangle()
+                                    .fill(.black.opacity(0.045))
                             }
                         }
                 }
@@ -680,26 +881,50 @@ struct FramePreviewView: View {
             }
         }
         .task(id: frame.id) {
+            loadOverlayTask?.cancel()
+            loadOverlayTask = nil
             isLoading = true
+            showsDeferredLoadOverlay = false
             loadFailed = false
-            image = nil
             searchTextLayout = nil
             textGrabBannerState = .hint
             textGrabDebugSnapshot = nil
 
+            if image != nil {
+                loadOverlayTask = Task {
+                    try? await Task.sleep(for: loadIndicatorDelay)
+                    guard !Task.isCancelled else { return }
+                    await MainActor.run {
+                        if isLoading && !isShowingCurrentFrame {
+                            showsDeferredLoadOverlay = true
+                        }
+                    }
+                }
+            }
+
             do {
                 let loadedImage = try await frameBuffer.getFullImage(for: frame)
                 guard !Task.isCancelled else { return }
+                loadOverlayTask?.cancel()
+                loadOverlayTask = nil
                 image = loadedImage
+                loadedFrameID = frame.id
             } catch is CancellationError {
+                loadOverlayTask?.cancel()
+                loadOverlayTask = nil
                 return
             } catch {
                 guard !Task.isCancelled else { return }
+                loadOverlayTask?.cancel()
+                loadOverlayTask = nil
+                image = nil
+                loadedFrameID = nil
                 loadFailed = true
             }
 
             guard !Task.isCancelled else { return }
             isLoading = false
+            showsDeferredLoadOverlay = false
         }
         .onChange(of: textGrabDebugPreviewEnabled) { _, isEnabled in
             if !isEnabled {
@@ -707,7 +932,7 @@ struct FramePreviewView: View {
             }
         }
         .task(id: searchHighlightLoadKey) {
-            guard shouldShowSearchHighlights, let image else {
+            guard shouldShowSearchHighlights, isShowingCurrentFrame, let image else {
                 searchTextLayout = nil
                 return
             }
@@ -783,7 +1008,7 @@ private struct TimelineSlider: View {
     private var displayedFrames: [StoredFrame] { viewModel.displayedFrames }
     private var frameCount: Int { displayedFrames.count }
     private var timelineMarkers: [TimelineMarker] {
-        guard !(viewModel.isSearching && !viewModel.searchQuery.isEmpty) else { return [] }
+        guard !(viewModel.isSearching && viewModel.hasSearchQuery) else { return [] }
         return timelineLandmarkMarkers(
             frames: displayedFrames,
             recentWindow: viewModel.recentTimelineWindow,
@@ -792,7 +1017,7 @@ private struct TimelineSlider: View {
     }
 
     private var colourSegments: [TimelineZoneFill] {
-        guard !(viewModel.isSearching && !viewModel.searchQuery.isEmpty) else {
+        guard !(viewModel.isSearching && viewModel.hasSearchQuery) else {
             return timelineColourSegments(frames: displayedFrames, borderPosition: nil)
         }
 
@@ -846,7 +1071,7 @@ private struct TimelineSlider: View {
     @ViewBuilder
     private var footerMetadata: some View {
         HStack(spacing: 6) {
-            if viewModel.isSearching && !viewModel.searchQuery.isEmpty {
+            if viewModel.isSearching && viewModel.hasSearchQuery {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 11))
                     .foregroundStyle(.white.opacity(0.5))

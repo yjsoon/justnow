@@ -122,9 +122,8 @@ class OverlayWindowController: NSObject {
                 }
                 return event // Pass through if already searching (for typing)
             case 36: // Return key - trigger search
-                if vm.isSearchAvailable && vm.isSearching && !vm.searchQuery.isEmpty {
-                    print("[JustNow] Return key pressed, triggering search")
-                    vm.performSearch()
+                if vm.isSearchAvailable && vm.isSearching && vm.hasSearchQuery {
+                    vm.performSearch(immediately: true)
                     return nil
                 }
                 return event
