@@ -10,6 +10,15 @@ import os.log
 
 private let logger = Logger(subsystem: "sg.tk.JustNow", category: "OverlayView")
 
+private enum OverlayChromeMetrics {
+    static let controlSize: CGFloat = 40
+    static let topPadding: CGFloat = 24
+    static let horizontalPadding: CGFloat = 28
+    static let contentSpacing: CGFloat = 12
+    static let sideSlotWidth: CGFloat = controlSize
+    static let searchBarTopPadding: CGFloat = topPadding + controlSize + contentSpacing
+}
+
 enum SearchTimeScope: String, CaseIterable {
     case fiveMinutes
     case oneHour
@@ -153,6 +162,14 @@ class OverlayViewModel {
 
     var displayedFrameCount: Int {
         displayedFrames.count
+    }
+
+    var canMoveLeft: Bool {
+        displayedFrameCount > 0 && selectedIndex > 0
+    }
+
+    var canMoveRight: Bool {
+        displayedFrameCount > 0 && selectedIndex < displayedFrameCount - 1
     }
 
     var hasRetainedFrames: Bool {
@@ -420,7 +437,7 @@ struct OverlayView: View {
                         ContentAreaView(viewModel: viewModel)
                     }
 
-                    InstructionsOverlay()
+                    OverlayTopBar(viewModel: viewModel)
                 }
             }
         }
@@ -456,7 +473,7 @@ struct ContentAreaView: View {
             // Search bar
             if viewModel.isSearchAvailable && viewModel.isSearching {
                 SearchBarView(viewModel: viewModel)
-                    .padding(.top, 60)
+                    .padding(.top, OverlayChromeMetrics.searchBarTopPadding)
                     .padding(.horizontal, 200)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
@@ -464,12 +481,33 @@ struct ContentAreaView: View {
             Spacer()
 
             if let frame = displayedFrames[safe: viewModel.selectedIndex] {
-                FramePreviewView(
-                    frame: frame,
-                    viewModel: viewModel,
-                    frameBuffer: viewModel.frameBuffer,
-                    textGrabBannerState: $textGrabBannerState
-                )
+                HStack(spacing: 20) {
+                    OverlayChromeButton(
+                        systemImage: "chevron.left",
+                        accessibilityLabel: "Previous frame",
+                        accessibilityHint: "Shows the next older captured frame.",
+                        toolTip: "Previous frame (Left Arrow)",
+                        isEnabled: viewModel.canMoveLeft,
+                        action: viewModel.moveLeft
+                    )
+
+                    FramePreviewView(
+                        frame: frame,
+                        viewModel: viewModel,
+                        frameBuffer: viewModel.frameBuffer,
+                        textGrabBannerState: $textGrabBannerState
+                    )
+                    .frame(maxWidth: .infinity)
+
+                    OverlayChromeButton(
+                        systemImage: "chevron.right",
+                        accessibilityLabel: "Next frame",
+                        accessibilityHint: "Shows the next newer captured frame.",
+                        toolTip: "Next frame (Right Arrow)",
+                        isEnabled: viewModel.canMoveRight,
+                        action: viewModel.moveRight
+                    )
+                }
                     .padding(.horizontal, 60)
                     .padding(.top, viewModel.isSearchAvailable && viewModel.isSearching ? 20 : 40)
             } else if !viewModel.isSearching && viewModel.timelineFrames.isEmpty {
@@ -523,6 +561,102 @@ struct ContentAreaView: View {
                 textGrabBannerState = .hint
             }
         }
+    }
+}
+
+private struct OverlayTopBar: View {
+    var viewModel: OverlayViewModel
+
+    @ViewBuilder
+    private var searchControl: some View {
+        if viewModel.isSearchAvailable {
+            OverlayChromeButton(
+                systemImage: "magnifyingglass",
+                accessibilityLabel: viewModel.isSearching ? "Close search" : "Open search",
+                accessibilityHint: viewModel.isSearching
+                    ? "Closes search and returns to the full timeline."
+                    : "Opens the search field for indexed screen text.",
+                toolTip: viewModel.isSearching ? "Close search (Escape)" : "Search (/)",
+                isSelected: viewModel.isSearching,
+                action: viewModel.toggleSearch
+            )
+        } else {
+            Color.clear
+                .frame(width: OverlayChromeMetrics.controlSize, height: OverlayChromeMetrics.controlSize)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+
+    var body: some View {
+        VStack {
+            HStack(spacing: 16) {
+                OverlayChromeButton(
+                    systemImage: "xmark",
+                    accessibilityLabel: "Close overlay",
+                    accessibilityHint: "Dismisses the rewind overlay.",
+                    toolTip: "Close (\u{238B})",
+                    action: viewModel.onDismiss
+                )
+                .frame(width: OverlayChromeMetrics.sideSlotWidth, alignment: .leading)
+
+                InstructionsOverlay()
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .layoutPriority(1)
+
+                searchControl
+                    .frame(width: OverlayChromeMetrics.sideSlotWidth, alignment: .trailing)
+            }
+            .padding(.horizontal, OverlayChromeMetrics.horizontalPadding)
+            .padding(.top, OverlayChromeMetrics.topPadding)
+
+            Spacer()
+        }
+    }
+}
+
+private struct OverlayChromeButton: View {
+    let systemImage: String
+    let accessibilityLabel: String
+    let accessibilityHint: String
+    let toolTip: String
+    var isEnabled: Bool = true
+    var isSelected: Bool = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(foregroundStyle)
+                .frame(width: 40, height: 40)
+                .background(backgroundFill, in: Circle())
+                .overlay {
+                    Circle()
+                        .stroke(borderColor, lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .help(toolTip)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint(accessibilityHint)
+        .opacity(isEnabled ? 1 : 0.45)
+    }
+
+    private var foregroundStyle: Color {
+        isSelected ? .black.opacity(0.88) : .white.opacity(isEnabled ? 0.86 : 0.46)
+    }
+
+    private var backgroundFill: Color {
+        if isSelected {
+            return Color.white.opacity(0.95)
+        }
+        return Color.black.opacity(0.72)
+    }
+
+    private var borderColor: Color {
+        isSelected ? .white.opacity(0.42) : .white.opacity(0.1)
     }
 }
 
@@ -747,26 +881,35 @@ private struct SearchingRippleBar: View {
 
 struct InstructionsOverlay: View {
     var body: some View {
-        VStack {
-            HStack {
-                Spacer()
-                HStack(spacing: 16) {
-                    Label("← →", systemImage: "arrow.left.arrow.right")
-                    Label("drag to grab text", systemImage: "text.viewfinder")
-                    if FeatureFlags.isSearchEnabled {
-                        Label("/", systemImage: "magnifyingglass")
-                    }
-                }
-                .labelStyle(CompactInstructionLabelStyle())
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.white.opacity(0.7))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .darkBarBackground(in: Capsule())
-                .padding()
-            }
-            Spacer()
+        ViewThatFits(in: .horizontal) {
+            instructionPill(textGrabLabel: "drag to grab text", showsSearchShortcut: FeatureFlags.isSearchEnabled)
+            instructionPill(textGrabLabel: "grab text", showsSearchShortcut: FeatureFlags.isSearchEnabled)
+            instructionPill(textGrabLabel: "grab", showsSearchShortcut: FeatureFlags.isSearchEnabled)
+            instructionPill(textGrabLabel: "", showsSearchShortcut: FeatureFlags.isSearchEnabled)
         }
+    }
+
+    private func instructionPill(textGrabLabel: String, showsSearchShortcut: Bool) -> some View {
+        HStack(spacing: 16) {
+            Label("← →", systemImage: "arrow.left.arrow.right")
+            if textGrabLabel.isEmpty {
+                Image(systemName: "text.viewfinder")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.5))
+            } else {
+                Label(textGrabLabel, systemImage: "text.viewfinder")
+            }
+            if showsSearchShortcut {
+                Label("/", systemImage: "magnifyingglass")
+            }
+        }
+        .labelStyle(CompactInstructionLabelStyle())
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(.white.opacity(0.7))
+        .lineLimit(1)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .darkBarBackground(in: Capsule())
     }
 }
 
