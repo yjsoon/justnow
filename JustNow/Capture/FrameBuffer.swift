@@ -66,11 +66,6 @@ private enum ClearWaitResult {
     case cancelled
 }
 
-private enum OCRIndexingWorkResult: Sendable {
-    case skipped
-    case completed(frame: StoredFrame, text: String, duration: TimeInterval, indexLag: TimeInterval)
-}
-
 private struct PendingIngest {
     let cgImage: CGImage
     let timestamp: Date
@@ -92,6 +87,9 @@ class FrameBuffer {
     private let frameStore: FrameStore
     private let retentionManager: RetentionManager
     private let blackFrameDetector = BlackFrameDetector.screenOff
+    private lazy var ocrIndexingWorker = OCRIndexingWorker(
+        dependencies: .live(frameStore: frameStore, textCache: textCache)
+    )
     private var blackFrameFilterUntil: Date?
     private var saveOptions: FrameSaveOptions = .standard
     private var duplicatePolicy: DuplicateFramePolicy = .standard
@@ -734,65 +732,23 @@ class FrameBuffer {
         while !Task.isCancelled {
             guard ocrIndexingPolicy.isEnabled else { return }
             let policy = ocrIndexingPolicy
-            let frames = ocrFrameQueue.dequeue(limit: policy.concurrentJobs)
+            let dequeuedFrames = ocrFrameQueue.dequeue(limit: policy.concurrentJobs)
             recordQueueDepthTelemetry()
-            guard !frames.isEmpty else { return }
+            guard !dequeuedFrames.isEmpty else { return }
 
-            await withTaskGroup(of: OCRIndexingWorkResult.self) { group in
-                for frame in frames {
-                    guard shouldContinueOCR(for: frame) else { continue }
+            let framesToIndex = dequeuedFrames.filter(shouldContinueOCR(for:))
+            let indexedFrames = await ocrIndexingWorker.index(frames: framesToIndex, policy: policy)
 
-                    let frameStore = self.frameStore
-                    let textCache = self.textCache
-                    let imageMaxPixelSize = policy.searchImageMaxPixelSize
-
-                    group.addTask {
-                        if await textCache.hasCachedText(for: frame.id) {
-                            return .skipped
-                        }
-
-                        let startedAt = Date()
-
-                        do {
-                            let image: CGImage
-                            if imageMaxPixelSize > 0 {
-                                image = try await frameStore.loadSearchIndexImage(
-                                    id: frame.id,
-                                    maxPixelSize: imageMaxPixelSize
-                                )
-                            } else {
-                                image = try await frameStore.loadFullImage(id: frame.id)
-                            }
-
-                            let text = await TextRecognitionManager.extractText(from: image)
-                            guard !Task.isCancelled else { return .skipped }
-
-                            return .completed(
-                                frame: frame,
-                                text: text,
-                                duration: Date().timeIntervalSince(startedAt),
-                                indexLag: Date().timeIntervalSince(frame.timestamp)
-                            )
-                        } catch {
-                            return .skipped
-                        }
-                    }
+            for indexedFrame in indexedFrames {
+                guard !Task.isCancelled else { return }
+                guard await cacheOCRTextIfCurrent(indexedFrame.text, for: indexedFrame.frame) else {
+                    continue
                 }
 
-                for await result in group {
-                    guard !Task.isCancelled else { return }
-
-                    switch result {
-                    case .skipped:
-                        continue
-                    case let .completed(frame, text, duration, indexLag):
-                        guard await cacheOCRTextIfCurrent(text, for: frame) else {
-                            continue
-                        }
-
-                        await searchTelemetry.recordBackgroundOCR(duration: duration, indexLag: indexLag)
-                    }
-                }
+                await searchTelemetry.recordBackgroundOCR(
+                    duration: indexedFrame.duration,
+                    indexLag: indexedFrame.indexLag
+                )
             }
 
             let sleepDuration = policy.minimumInterval
