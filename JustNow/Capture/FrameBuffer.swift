@@ -97,11 +97,9 @@ class FrameBuffer {
     private var lastPruneCheck: Date = .distantPast
     private let pruneInterval: TimeInterval = 30
     private var ocrIndexingPolicy: OCRIndexingPolicy = .disabled
-    private var ocrIndexQueue: [StoredFrame] = []
-    private var queuedOCRFrameIDs: Set<UUID> = []
+    private var ocrFrameQueue = OCRFrameQueue()
     private var ocrPruningFrameIDs: Set<UUID> = []
     private var ocrIndexingTask: Task<Void, Never>?
-    private var shouldDequeueNewestOCRFrame = true
     /// Bounded backlog of captures waiting to hash and persist. Sync captures discard older async backlog rather than reordering processing, so dedupe stays chronological.
     private var ingestQueue: [PendingIngest] = []
     private var ingestProcessorTask: Task<Void, Never>?
@@ -281,7 +279,7 @@ class FrameBuffer {
         return SearchIndexStatus(
             totalFrames: frames.count,
             indexedFrames: indexedFrames,
-            queuedFrames: ocrIndexQueue.count
+            queuedFrames: ocrFrameQueue.count
         )
     }
 
@@ -675,21 +673,14 @@ class FrameBuffer {
 
     private func enqueueFrameForBackgroundOCR(_ frame: StoredFrame) {
         guard ocrIndexingPolicy.isEnabled else { return }
-        guard !queuedOCRFrameIDs.contains(frame.id) else { return }
+        guard ocrFrameQueue.enqueue(frame) else { return }
 
-        ocrIndexQueue.append(frame)
-        queuedOCRFrameIDs.insert(frame.id)
         updateOCRIndexQueueState()
         startBackgroundOCRIndexingIfNeeded()
     }
 
     private func enqueueStoredFramesForBackgroundOCR() {
-        for frame in frames {
-            guard !queuedOCRFrameIDs.contains(frame.id) else { continue }
-            ocrIndexQueue.append(frame)
-            queuedOCRFrameIDs.insert(frame.id)
-        }
-
+        ocrFrameQueue.enqueue(contentsOf: frames)
         updateOCRIndexQueueState()
     }
 
@@ -712,46 +703,16 @@ class FrameBuffer {
         ocrIndexingTask = nil
 
         guard clearQueue else { return }
-        ocrIndexQueue.removeAll()
-        queuedOCRFrameIDs.removeAll()
-        shouldDequeueNewestOCRFrame = true
+        ocrFrameQueue.clear()
         recordQueueDepthTelemetry()
     }
 
     private func removeQueuedOCRFrames(ids: Set<UUID>) {
         guard !ids.isEmpty else { return }
-        guard !ocrIndexQueue.isEmpty else { return }
+        guard !ocrFrameQueue.isEmpty else { return }
 
-        ocrIndexQueue.removeAll { ids.contains($0.id) }
-        queuedOCRFrameIDs.subtract(ids)
+        ocrFrameQueue.remove(ids: ids)
         recordQueueDepthTelemetry()
-    }
-
-    private func dequeueNextFrameForOCR() -> StoredFrame? {
-        guard !ocrIndexQueue.isEmpty else { return nil }
-
-        let frame: StoredFrame
-        if shouldDequeueNewestOCRFrame {
-            frame = ocrIndexQueue.removeLast()
-        } else {
-            frame = ocrIndexQueue.removeFirst()
-        }
-        shouldDequeueNewestOCRFrame.toggle()
-        queuedOCRFrameIDs.remove(frame.id)
-        recordQueueDepthTelemetry()
-        return frame
-    }
-
-    private func dequeueFramesForOCR(limit: Int) -> [StoredFrame] {
-        let safeLimit = max(limit, 1)
-        var batch: [StoredFrame] = []
-        batch.reserveCapacity(safeLimit)
-
-        while batch.count < safeLimit, let frame = dequeueNextFrameForOCR() {
-            batch.append(frame)
-        }
-
-        return batch
     }
 
     private func shouldContinueOCR(for frame: StoredFrame) -> Bool {
@@ -764,7 +725,7 @@ class FrameBuffer {
     private func runBackgroundOCRIndexingLoop() async {
         defer {
             ocrIndexingTask = nil
-            if ocrIndexingPolicy.isEnabled && !ocrIndexQueue.isEmpty {
+            if ocrIndexingPolicy.isEnabled && !ocrFrameQueue.isEmpty {
                 startBackgroundOCRIndexingIfNeeded()
             }
         }
@@ -772,7 +733,8 @@ class FrameBuffer {
         while !Task.isCancelled {
             guard ocrIndexingPolicy.isEnabled else { return }
             let policy = ocrIndexingPolicy
-            let frames = dequeueFramesForOCR(limit: policy.concurrentJobs)
+            let frames = ocrFrameQueue.dequeue(limit: policy.concurrentJobs)
+            recordQueueDepthTelemetry()
             guard !frames.isEmpty else { return }
 
             await withTaskGroup(of: OCRIndexingWorkResult.self) { group in
@@ -840,7 +802,7 @@ class FrameBuffer {
     }
 
     private func recordQueueDepthTelemetry() {
-        let depth = ocrIndexQueue.count
+        let depth = ocrFrameQueue.count
         let capacity = ocrIndexingPolicy.maxQueueDepth
 
         Task(priority: .utility) {
