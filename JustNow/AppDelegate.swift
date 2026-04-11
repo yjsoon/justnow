@@ -221,17 +221,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         }
     )
 
-    @AppStorage("captureInterval") private var captureInterval: Double = 0.5
-    @AppStorage("rewindHistorySeconds") private var rewindHistorySeconds: Double = RewindHistoryOption.defaultValue.rawValue
-    @AppStorage("recentTimelineWindowSeconds")
-    private var recentTimelineWindowSeconds: Double = RecentTimelineWindow.defaultValue.rawValue
-    @AppStorage("reduceCaptureOnBattery") private var reduceCaptureOnBattery: Bool = true
-    @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 38  // J key
-    @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
-    @AppStorage("capturePauseShortcutKeyCode") private var capturePauseShortcutKeyCode: Int = 38  // J key
-    @AppStorage("capturePauseShortcutModifiers") private var capturePauseShortcutModifiers: Int = 1_703_936  // ⌘⌥⇧
-    @AppStorage("overlayDismissKeyCode") private var overlayDismissKeyCode: Int = 53
-    @AppStorage("overlayDismissModifiers") private var overlayDismissModifiers: Int = 0
+    @AppStorage(AppStorageKey.captureInterval) private var captureInterval: Double = AppStorageDefault.captureInterval
+    @AppStorage(AppStorageKey.rewindHistorySeconds) private var rewindHistorySeconds: Double = AppStorageDefault.rewindHistorySeconds
+    @AppStorage(AppStorageKey.recentTimelineWindowSeconds)
+    private var recentTimelineWindowSeconds: Double = AppStorageDefault.recentTimelineWindowSeconds
+    @AppStorage(AppStorageKey.reduceCaptureOnBattery) private var reduceCaptureOnBattery: Bool = AppStorageDefault.reduceCaptureOnBattery
+    @AppStorage(AppStorageKey.shortcutKeyCode) private var shortcutKeyCode: Int = AppStorageDefault.shortcutKeyCode
+    @AppStorage(AppStorageKey.shortcutModifiers) private var shortcutModifiers: Int = AppStorageDefault.shortcutModifiers
+    @AppStorage(AppStorageKey.capturePauseShortcutKeyCode) private var capturePauseShortcutKeyCode: Int = AppStorageDefault.capturePauseShortcutKeyCode
+    @AppStorage(AppStorageKey.capturePauseShortcutModifiers) private var capturePauseShortcutModifiers: Int = AppStorageDefault.capturePauseShortcutModifiers
+    @AppStorage(AppStorageKey.overlayDismissKeyCode) private var overlayDismissKeyCode: Int = AppStorageDefault.overlayDismissKeyCode
+    @AppStorage(AppStorageKey.overlayDismissModifiers) private var overlayDismissModifiers: Int = AppStorageDefault.overlayDismissModifiers
     private var capturePolicyTimer: Timer?
     private var userDefaultsObserver: NSObjectProtocol?
     private var thermalObserver: NSObjectProtocol?
@@ -804,21 +804,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         }
     }
 
-    private func resumeCapture(reason: String) {
-        if setupCaptureTask != nil {
-            cancelPendingCaptureStart()
-            if isUserPaused {
-                updateCaptureStatus("Paused (User)")
-            } else if isPausedForOverlay || overlayController?.isVisible == true {
-                updateCaptureStatus("Paused (Overlay)")
-            } else if isPausedForSession {
-                updateCaptureStatus("Session Inactive")
-            } else {
-                updateCaptureStatus("Resuming...")
-            }
-            return
-        }
+    private struct CaptureStartRetry {
+        let delay: Duration
+        let successMessage: String
+        let failurePrefix: String
+        let failureStatus: String
+    }
 
+    private func blockedCaptureStatus(includeOverlay: Bool = true) -> String? {
+        if isUserPaused {
+            return "Paused (User)"
+        }
+        if includeOverlay, isPausedForOverlay || overlayController?.isVisible == true {
+            return "Paused (Overlay)"
+        }
+        if isPausedForSession {
+            return "Session Inactive"
+        }
+        return nil
+    }
+
+    private func scheduleCaptureStart(
+        status: String,
+        includeOverlayInBlockedStatus: Bool = true,
+        initialDelay: Duration? = nil,
+        successMessage: String,
+        failurePrefix: String,
+        failureStatus: String,
+        retry: CaptureStartRetry? = nil
+    ) {
         cancelPendingCaptureStart()
         let generation = pendingCaptureStartGeneration
         pendingCaptureStartTask = Task { @MainActor [weak self] in
@@ -830,20 +844,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             }
 
             guard self.canStartCaptureNow() else {
-                if self.isUserPaused {
-                    self.updateCaptureStatus("Paused (User)")
-                } else if self.isPausedForOverlay || self.overlayController?.isVisible == true {
-                    self.updateCaptureStatus("Paused (Overlay)")
-                } else if self.isPausedForSession {
-                    self.updateCaptureStatus("Session Inactive")
+                if let blockedStatus = self.blockedCaptureStatus(includeOverlay: includeOverlayInBlockedStatus) {
+                    self.updateCaptureStatus(blockedStatus)
                 }
                 return
             }
 
-            self.updateCaptureStatus("Resuming...")
+            self.updateCaptureStatus(status)
 
-            // Delay to let system stabilise
-            try? await Task.sleep(for: .seconds(2))
+            if let initialDelay {
+                try? await Task.sleep(for: initialDelay)
+            }
 
             guard !Task.isCancelled,
                   generation == self.pendingCaptureStartGeneration,
@@ -852,14 +863,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             }
 
             let didStart = await self.startCaptureIfAllowed(
-                successMessage: "Capture resumed after \(reason)",
-                failurePrefix: "Failed to resume capture after \(reason)",
-                failureStatus: "Error"
+                successMessage: successMessage,
+                failurePrefix: failurePrefix,
+                failureStatus: failureStatus
             )
-            guard !didStart else { return }
+            guard !didStart, let retry else { return }
 
-            // Retry once more after another delay.
-            try? await Task.sleep(for: .seconds(3))
+            try? await Task.sleep(for: retry.delay)
 
             guard !Task.isCancelled,
                   generation == self.pendingCaptureStartGeneration,
@@ -868,11 +878,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             }
 
             _ = await self.startCaptureIfAllowed(
+                successMessage: retry.successMessage,
+                failurePrefix: retry.failurePrefix,
+                failureStatus: retry.failureStatus
+            )
+        }
+    }
+
+    private func resumeCapture(reason: String) {
+        if setupCaptureTask != nil {
+            cancelPendingCaptureStart()
+            updateCaptureStatus(blockedCaptureStatus() ?? "Resuming...")
+            return
+        }
+
+        scheduleCaptureStart(
+            status: "Resuming...",
+            initialDelay: .seconds(2),
+            successMessage: "Capture resumed after \(reason)",
+            failurePrefix: "Failed to resume capture after \(reason)",
+            failureStatus: "Error",
+            retry: CaptureStartRetry(
+                delay: .seconds(3),
                 successMessage: "Capture resumed on retry",
                 failurePrefix: "Retry also failed",
                 failureStatus: "Failed"
             )
-        }
+        )
     }
 
     // MARK: - Capture Delegate
@@ -885,32 +917,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         guard overlayController?.isVisible != true, !isPausedForOverlay, !isPausedForSession, !isUserPaused else { return }
         print("Capture stopped unexpectedly, attempting restart...")
         appNapPreventer.stopActivity()
-        cancelPendingCaptureStart()
-        let generation = pendingCaptureStartGeneration
-        pendingCaptureStartTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            defer {
-                if generation == self.pendingCaptureStartGeneration {
-                    self.pendingCaptureStartTask = nil
-                }
-            }
-
-            guard self.canStartCaptureNow() else { return }
-            self.updateCaptureStatus("Restarting...")
-            try? await Task.sleep(for: .seconds(2))
-
-            guard !Task.isCancelled,
-                  generation == self.pendingCaptureStartGeneration,
-                  self.canStartCaptureNow() else {
-                return
-            }
-
-            _ = await self.startCaptureIfAllowed(
-                successMessage: "Capture restarted successfully",
-                failurePrefix: "Failed to restart capture",
-                failureStatus: "Stopped"
-            )
-        }
+        scheduleCaptureStart(
+            status: "Restarting...",
+            initialDelay: .seconds(2),
+            successMessage: "Capture restarted successfully",
+            failurePrefix: "Failed to restart capture",
+            failureStatus: "Stopped"
+        )
     }
 
     @objc private func toggleCapturePause() {
@@ -1021,42 +1034,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
         if setupCaptureTask != nil {
             cancelPendingCaptureStart()
-            if isUserPaused {
-                updateCaptureStatus("Paused (User)")
-            } else if isPausedForSession {
-                updateCaptureStatus("Session Inactive")
-            } else {
-                updateCaptureStatus("Resuming...")
-            }
+            updateCaptureStatus(blockedCaptureStatus(includeOverlay: false) ?? "Resuming...")
             return
         }
 
-        cancelPendingCaptureStart()
-        let generation = pendingCaptureStartGeneration
-        pendingCaptureStartTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            defer {
-                if generation == self.pendingCaptureStartGeneration {
-                    self.pendingCaptureStartTask = nil
-                }
-            }
-
-            guard self.canStartCaptureNow() else {
-                if self.isUserPaused {
-                    self.updateCaptureStatus("Paused (User)")
-                } else if self.isPausedForSession {
-                    self.updateCaptureStatus("Session Inactive")
-                }
-                return
-            }
-
-            self.updateCaptureStatus("Resuming...")
-            _ = await self.startCaptureIfAllowed(
-                successMessage: "Capture resumed after overlay",
-                failurePrefix: "Failed to resume capture after overlay",
-                failureStatus: "Error"
-            )
-        }
+        scheduleCaptureStart(
+            status: "Resuming...",
+            includeOverlayInBlockedStatus: false,
+            successMessage: "Capture resumed after overlay",
+            failurePrefix: "Failed to resume capture after overlay",
+            failureStatus: "Error"
+        )
     }
 
     @objc private func showSettings() {

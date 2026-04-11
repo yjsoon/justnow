@@ -930,8 +930,8 @@ struct FramePreviewView: View {
     let frameBuffer: FrameBuffer
     @Binding var textGrabBannerState: TextGrabBannerState
 
-    @AppStorage("textGrabSoundEnabled") private var textGrabSoundEnabled: Bool = true
-    @AppStorage("textGrabDebugPreviewEnabled") private var textGrabDebugPreviewEnabled: Bool = false
+    @AppStorage(AppStorageKey.textGrabSoundEnabled) private var textGrabSoundEnabled: Bool = AppStorageDefault.textGrabSoundEnabled
+    @AppStorage(AppStorageKey.textGrabDebugPreviewEnabled) private var textGrabDebugPreviewEnabled: Bool = AppStorageDefault.textGrabDebugPreviewEnabled
     @State private var image: CGImage?
     @State private var loadedFrameID: UUID?
     @State private var isLoading = false
