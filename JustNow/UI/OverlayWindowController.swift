@@ -94,64 +94,49 @@ class OverlayWindowController: NSObject {
 
             print("[JustNow] Key pressed: keyCode=\(event.keyCode), chars='\(event.characters ?? "")'")
 
-            let pressedModifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            let dismissModifiers = NSEvent.ModifierFlags(rawValue: UInt(self.dismissShortcutModifiers))
-                .intersection(.deviceIndependentFlagsMask)
-            let matchesDismissShortcut = Int(event.keyCode) == self.dismissShortcutKeyCode && pressedModifiers == dismissModifiers
+            let action = resolveOverlayKeyboardAction(
+                keyCode: event.keyCode,
+                modifiers: event.modifierFlags,
+                dismissShortcutKeyCode: self.dismissShortcutKeyCode,
+                dismissShortcutModifiers: self.dismissShortcutModifiers,
+                state: OverlayKeyboardState(
+                    isSearchAvailable: vm.isSearchAvailable,
+                    isSearching: vm.isSearching,
+                    hasSearchQuery: vm.hasSearchQuery,
+                    isTextGrabActive: vm.isTextGrabActive
+                )
+            )
 
-            if matchesDismissShortcut && event.keyCode != UInt16(kVK_Escape) {
+            switch action {
+            case .passthrough:
+                return event
+            case .consume:
+                return nil
+            case .dismissOverlay:
                 self.hideOverlay()
-                return nil
+            case .cancelTextGrab:
+                _ = vm.cancelTextGrabIfNeeded()
+            case .clearSearch:
+                vm.clearSearch()
+            case .toggleSearch:
+                vm.toggleSearch()
+            case .submitSearch:
+                vm.performSearch(immediately: true)
+            case .moveLeft:
+                vm.moveLeft()
+            case .jumpLeft:
+                vm.jumpLeft()
+            case .goToStart:
+                vm.goToStart()
+            case .moveRight:
+                vm.moveRight()
+            case .jumpRight:
+                vm.jumpRight()
+            case .goToEnd:
+                vm.goToEnd()
             }
 
-            switch event.keyCode {
-            case 53: // ESC
-                if vm.cancelTextGrabIfNeeded() {
-                    return nil
-                } else if vm.isSearchAvailable && vm.isSearching {
-                    vm.clearSearch()
-                } else {
-                    self.hideOverlay()
-                }
-                return nil
-            case 44: // "/" key - toggle search
-                guard vm.isSearchAvailable else { return nil }
-                if !vm.isSearching {
-                    vm.toggleSearch()
-                    return nil
-                }
-                return event // Pass through if already searching (for typing)
-            case 36: // Return key - trigger search
-                if vm.isSearchAvailable && vm.isSearching && vm.hasSearchQuery {
-                    vm.performSearch(immediately: true)
-                    return nil
-                }
-                return event
-            case 123: // Left arrow — navigate to older match (or older frame)
-                if event.modifierFlags.contains(.command) {
-                    vm.goToStart()
-                } else if event.modifierFlags.contains(.option) {
-                    vm.jumpLeft()
-                } else {
-                    vm.moveLeft()
-                }
-                return nil
-            case 124: // Right arrow — navigate to newer match (or newer frame)
-                if event.modifierFlags.contains(.command) {
-                    vm.goToEnd()
-                } else if event.modifierFlags.contains(.option) {
-                    vm.jumpRight()
-                } else {
-                    vm.moveRight()
-                }
-                return nil
-            default:
-                if matchesDismissShortcut {
-                    self.hideOverlay()
-                    return nil
-                }
-                return event
-            }
+            return nil
         }
 
         // Monitor scroll events
