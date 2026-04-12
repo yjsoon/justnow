@@ -6,8 +6,6 @@
 import AppKit
 import CoreGraphics
 import SwiftUI
-import HotKey
-import Carbon.HIToolbox
 import Sparkle
 
 enum FeatureFlags {
@@ -51,12 +49,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     private var captureManager: ScreenCaptureManager!
     private var frameBuffer: FrameBuffer?
     private var overlayController: OverlayWindowController?
-    private var overlayHotKey: HotKey?
-    private var capturePauseHotKey: HotKey?
     private lazy var updaterController = SPUStandardUpdaterController(
         startingUpdater: false,
         updaterDelegate: nil,
         userDriverDelegate: nil
+    )
+    private lazy var hotKeyController = HotKeyController(
+        overlayHandler: { [weak self] in
+            self?.toggleOverlay()
+        },
+        capturePauseHandler: { [weak self] in
+            self?.toggleCapturePause()
+        }
     )
     private var appNapPreventer = AppNapPreventer()
     private let launchAtLoginManager = LaunchAtLoginManager()
@@ -225,59 +229,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     }
 
     private func setupHotKey() {
-        registerHotKey()
+        registerHotKeys()
     }
 
     private func keyboardShortcutsDidChange() {
-        registerHotKey()
+        registerHotKeys()
         overlayController?.updateDismissShortcut(
             keyCode: overlayDismissKeyCode,
             modifiers: overlayDismissModifiers
         )
     }
 
-    func registerHotKey() {
-        overlayHotKey = nil
-        capturePauseHotKey = nil
-
-        // Global Carbon hotkeys: at most one registration per key+modifier pair. Open rewind wins over pause
-        // when they match. Pause is also skipped if it matches the close rewind shortcut, which is handled
-        // locally while the overlay is open—otherwise both handlers could fire for one key press.
-        overlayHotKey = makeHotKey(
-            keyCode: shortcutKeyCode,
-            modifiers: shortcutModifiers
-        ) { [weak self] in
-            self?.toggleOverlay()
-        }
-
-        guard capturePauseShortcutKeyCode != -1 else { return }
-
-        if shortcutsConflict(
-            capturePauseShortcutKeyCode,
-            capturePauseShortcutModifiers,
-            shortcutKeyCode,
-            shortcutModifiers
-        ) {
-            print("Skipping pause hotkey registration because it matches the open rewind shortcut")
-            return
-        }
-
-        if shortcutsConflict(
-            capturePauseShortcutKeyCode,
-            capturePauseShortcutModifiers,
-            overlayDismissKeyCode,
-            overlayDismissModifiers
-        ) {
-            print("Skipping pause hotkey registration because it matches the close rewind shortcut")
-            return
-        }
-
-        capturePauseHotKey = makeHotKey(
-            keyCode: capturePauseShortcutKeyCode,
-            modifiers: capturePauseShortcutModifiers
-        ) { [weak self] in
-            self?.toggleCapturePause()
-        }
+    private func registerHotKeys() {
+        hotKeyController.register(configuration: currentHotKeyConfiguration())
     }
 
     func makeSettingsView() -> SettingsView {
@@ -1024,30 +988,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
         statusItemController?.setPaused(captureLifecycle.isUserPaused)
     }
 
-    private func makeHotKey(
-        keyCode: Int,
-        modifiers: Int,
-        handler: @escaping () -> Void
-    ) -> HotKey? {
-        guard keyCode != -1 else { return nil }
-
-        let flags = NSEvent.ModifierFlags(rawValue: UInt(modifiers))
-        var carbonMods: UInt32 = 0
-        if flags.contains(.command) { carbonMods |= UInt32(cmdKey) }
-        if flags.contains(.option) { carbonMods |= UInt32(optionKey) }
-        if flags.contains(.control) { carbonMods |= UInt32(controlKey) }
-        if flags.contains(.shift) { carbonMods |= UInt32(shiftKey) }
-
-        let hotKey = HotKey(carbonKeyCode: UInt32(keyCode), carbonModifiers: carbonMods)
-        hotKey.keyDownHandler = handler
-        return hotKey
-    }
-
-    private func shortcutsConflict(_ lhsKeyCode: Int, _ lhsModifiers: Int, _ rhsKeyCode: Int, _ rhsModifiers: Int) -> Bool {
-        lhsKeyCode != -1
-            && rhsKeyCode != -1
-            && lhsKeyCode == rhsKeyCode
-            && lhsModifiers == rhsModifiers
+    private func currentHotKeyConfiguration() -> HotKeyConfiguration {
+        HotKeyConfiguration(
+            overlayKeyCode: shortcutKeyCode,
+            overlayModifiers: shortcutModifiers,
+            capturePauseKeyCode: capturePauseShortcutKeyCode,
+            capturePauseModifiers: capturePauseShortcutModifiers,
+            overlayDismissKeyCode: overlayDismissKeyCode,
+            overlayDismissModifiers: overlayDismissModifiers
+        )
     }
 
     private func resolveLaunchPermissionState() -> ScreenRecordingPermissionLaunchState {
