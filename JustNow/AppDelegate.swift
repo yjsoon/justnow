@@ -108,6 +108,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     private var screenRecordingPermission = ScreenRecordingPermissionState()
     private let capturePolicyController = CapturePolicyController()
     private let captureStartController = CaptureStartController()
+    private lazy var captureStopController = CaptureStopController(
+        updateStatus: { [weak self] in self?.updateCaptureStatus($0) },
+        stopCapture: { [weak self] in
+            await self?.captureManager.stopCapture()
+        },
+        endForegroundActivity: { [weak self] in
+            self?.appNapPreventer.stopActivity()
+        }
+    )
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
@@ -394,12 +403,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
 
     @objc private func handleSleep() {
         captureStartController.cancelPendingStart()
-        Task { @MainActor in
-            updateCaptureStatus("Sleeping...")
-            await captureManager.stopCapture()
-            appNapPreventer.stopActivity()
-            print("Capture paused for system sleep")
-        }
+        captureStopController.scheduleStop(
+            CaptureStopRequest(
+                status: "Sleeping...",
+                logMessage: "Capture paused for system sleep"
+            )
+        )
     }
 
     @objc private func handleWake() {
@@ -409,12 +418,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
 
     @objc private func handleScreenSleep() {
         captureStartController.cancelPendingStart()
-        Task { @MainActor in
-            updateCaptureStatus("Screen Off")
-            await captureManager.stopCapture()
-            appNapPreventer.stopActivity()
-            print("Capture paused for screen sleep")
-        }
+        captureStopController.scheduleStop(
+            CaptureStopRequest(
+                status: "Screen Off",
+                logMessage: "Capture paused for screen sleep"
+            )
+        )
     }
 
     @objc private func handleScreenWake() {
@@ -444,11 +453,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
         captureStartController.cancelPendingStart()
 
         guard shouldStopCapture else { return }
-        Task { @MainActor in
-            updateCaptureStatus("Session Inactive")
-            await captureManager.stopCapture()
-            appNapPreventer.stopActivity()
-        }
+        captureStopController.scheduleStop(
+            CaptureStopRequest(status: "Session Inactive")
+        )
     }
 
     private func resumeCaptureAfterSession() {
@@ -576,11 +583,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
 
         if isUserPaused {
             captureStartController.cancelPendingStart()
-            Task { @MainActor in
-                updateCaptureStatus("Paused (User)")
-                await captureManager.stopCapture()
-                appNapPreventer.stopActivity()
-            }
+            captureStopController.scheduleStop(
+                CaptureStopRequest(status: "Paused (User)")
+            )
             return
         }
 
@@ -663,11 +668,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
         captureStartController.cancelPendingStart()
 
         guard shouldStopCapture else { return }
-        Task { @MainActor in
-            updateCaptureStatus("Paused (Overlay)")
-            await captureManager.stopCapture()
-            appNapPreventer.stopActivity()
-        }
+        captureStopController.scheduleStop(
+            CaptureStopRequest(status: "Paused (Overlay)")
+        )
     }
 
     private func resumeCaptureAfterOverlay() {
