@@ -71,7 +71,13 @@ final class CaptureStartControllerTests: XCTestCase {
             }
         )
 
-        await settleScheduledTasks()
+        await waitUntil {
+            let recordedRetryDurations = await sleeper.recordedDurations()
+            return statuses == ["Restarting..."]
+                && startAttempts.map(\.successMessage) == ["first"]
+                && recordedRetryDurations == [.seconds(3)]
+                && controller.hasPendingStart
+        }
 
         XCTAssertEqual(statuses, ["Restarting..."])
         XCTAssertEqual(startAttempts.map(\.successMessage), ["first"])
@@ -80,7 +86,10 @@ final class CaptureStartControllerTests: XCTestCase {
         XCTAssertTrue(controller.hasPendingStart)
 
         await sleeper.resumeAll()
-        await settleScheduledTasks()
+        await waitUntil {
+            startAttempts.map(\.successMessage) == ["first", "second"]
+                && !controller.hasPendingStart
+        }
 
         XCTAssertEqual(startAttempts.map(\.successMessage), ["first", "second"])
         XCTAssertFalse(controller.hasPendingStart)
@@ -131,6 +140,26 @@ final class CaptureStartControllerTests: XCTestCase {
         await Task.yield()
         await Task.yield()
         await Task.yield()
+    }
+
+    private func waitUntil(
+        timeout: Duration = .seconds(1),
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        condition: @escaping @MainActor () async -> Bool
+    ) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+
+        while clock.now < deadline {
+            if await condition() {
+                return
+            }
+            await settleScheduledTasks()
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTFail("Timed out waiting for condition", file: file, line: line)
     }
 }
 
