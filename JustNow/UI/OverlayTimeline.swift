@@ -82,8 +82,6 @@ struct TimelineSlider: View {
             )
             .frame(height: timelineMarkers.isEmpty ? 32 : 54)
             .padding(.horizontal, 8)
-            .padding(.vertical, 12)
-            .darkBarBackground(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
 
             ZStack {
                 footerMetadata

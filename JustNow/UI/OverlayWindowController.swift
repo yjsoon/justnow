@@ -71,7 +71,7 @@ class OverlayWindowController: NSObject {
         window.level = .statusBar + 1
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.isOpaque = false
-        window.backgroundColor = NSColor.black.withAlphaComponent(0.92)
+        window.backgroundColor = .clear
         window.hasShadow = false
         window.ignoresMouseEvents = false
         window.acceptsMouseMovedEvents = true
