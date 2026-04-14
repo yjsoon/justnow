@@ -53,8 +53,8 @@ private struct OverlayBackdropView: View {
     let viewModel: OverlayViewModel
     @State private var backdropImage: NSImage?
 
-    private var selectedFrame: StoredFrame? {
-        viewModel.displayedFrames[safe: viewModel.selectedIndex]
+    private var presentedFrame: StoredFrame? {
+        viewModel.presentedFrame
     }
 
     var body: some View {
@@ -65,18 +65,20 @@ private struct OverlayBackdropView: View {
                     .scaledToFill()
                     .saturation(0.6)
                     .blur(radius: 28)
-                    .opacity(0.12)
+                    .opacity(0.15)
                     .transition(.opacity)
             }
         }
-        .animation(.easeInOut(duration: 0.18), value: selectedFrame?.id)
-        .task(id: selectedFrame?.id) {
-            guard let selectedFrame else {
+        .animation(.easeInOut(duration: 0.18), value: presentedFrame?.id)
+        .task(id: presentedFrame?.id) {
+            guard let presentedFrame else {
                 backdropImage = nil
                 return
             }
 
-            backdropImage = await viewModel.frameBuffer.getThumbnail(for: selectedFrame)
+            let thumbnail = await viewModel.frameBuffer.getThumbnail(for: presentedFrame)
+            guard !Task.isCancelled else { return }
+            backdropImage = thumbnail
         }
     }
 }
@@ -195,6 +197,7 @@ struct ContentAreaView: View {
         .onChange(of: displayedFrames.count) { _, frameCount in
             if frameCount == 0 {
                 textGrabBannerState = .hint
+                viewModel.setPresentedFrame(nil)
             }
         }
     }

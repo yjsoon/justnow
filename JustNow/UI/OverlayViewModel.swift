@@ -94,6 +94,7 @@ class OverlayViewModel {
     private static let fullImagePrefetchRadius = 3
 
     var selectedIndex: Int = 0
+    var presentedFrame: StoredFrame?
     let timelineFrames: [StoredFrame]
     let frameBuffer: FrameBuffer
     let recentTimelineWindow: TimeInterval
@@ -329,6 +330,11 @@ class OverlayViewModel {
         let step = delta > 0 ? -1 : 1
         let newIndex = selectedIndex + step
         selectedIndex = max(0, min(displayedFrameCount - 1, newIndex))
+    }
+
+    func setPresentedFrame(_ frame: StoredFrame?) {
+        guard presentedFrame?.id != frame?.id else { return }
+        presentedFrame = frame
     }
 
     private var normalisedSearchQuery: String {
