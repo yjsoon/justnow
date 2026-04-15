@@ -55,44 +55,38 @@ actor TextCache {
 
     /// Get cached text for a frame, returns nil if not cached
     func getText(for frameID: UUID) -> String? {
-        guard let statement = try? prepare("SELECT text FROM frame_text WHERE frame_id = ? LIMIT 1;") else {
-            return nil
-        }
-        defer { sqlite3_finalize(statement) }
+        try? withPreparedStatement("SELECT text FROM frame_text WHERE frame_id = ? LIMIT 1;") { statement in
+            guard bindFrameID(frameID, to: statement),
+                  sqlite3_step(statement) == SQLITE_ROW,
+                  let cText = sqlite3_column_text(statement, 0) else {
+                return nil
+            }
 
-        guard bindText(frameID.uuidString, to: statement, index: 1),
-              sqlite3_step(statement) == SQLITE_ROW,
-              let cText = sqlite3_column_text(statement, 0) else {
-            return nil
+            return String(cString: cText)
         }
-
-        return String(cString: cText)
     }
 
     func getSearchLayout(for frameID: UUID) -> SearchTextLayout? {
-        guard let statement = try? prepare(
+        try? withPreparedStatement(
             "SELECT layout_json FROM frame_search_layout WHERE frame_id = ? LIMIT 1;"
-        ) else {
-            return nil
-        }
-        defer { sqlite3_finalize(statement) }
+        ) { statement in
+            guard bindFrameID(frameID, to: statement),
+                  sqlite3_step(statement) == SQLITE_ROW,
+                  let cText = sqlite3_column_text(statement, 0) else {
+                return nil
+            }
 
-        guard bindText(frameID.uuidString, to: statement, index: 1),
-              sqlite3_step(statement) == SQLITE_ROW,
-              let cText = sqlite3_column_text(statement, 0) else {
-            return nil
+            let json = String(cString: cText)
+            guard let data = json.data(using: .utf8) else { return nil }
+            return try? JSONDecoder().decode(SearchTextLayout.self, from: data)
         }
-
-        let json = String(cString: cText)
-        guard let data = json.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(SearchTextLayout.self, from: data)
     }
 
     /// Cache extracted text for a frame
     func setText(_ text: String, for frameID: UUID, timestamp: Date = Date()) {
         do {
             try withTransaction {
-                guard let upsert = try? prepare(
+                try withPreparedStatement(
                     """
                     INSERT INTO frame_text (frame_id, timestamp, text)
                     VALUES (?, ?, ?)
@@ -100,37 +94,28 @@ actor TextCache {
                         timestamp = excluded.timestamp,
                         text = excluded.text;
                     """
-                ) else {
-                    throw sqliteError(message: "Failed to prepare upsert statement")
-                }
-                defer { sqlite3_finalize(upsert) }
-
-                guard bindText(frameID.uuidString, to: upsert, index: 1),
-                      bindDouble(timestamp.timeIntervalSince1970, to: upsert, index: 2),
-                      bindText(text, to: upsert, index: 3),
-                      sqlite3_step(upsert) == SQLITE_DONE else {
-                    throw sqliteError(message: "Failed to upsert OCR text")
+                ) { upsert in
+                    guard bindFrameID(frameID, to: upsert, index: 1),
+                          bindDouble(timestamp.timeIntervalSince1970, to: upsert, index: 2),
+                          bindText(text, to: upsert, index: 3),
+                          sqlite3_step(upsert) == SQLITE_DONE else {
+                        throw sqliteError(message: "Failed to upsert OCR text")
+                    }
                 }
 
-                guard let deleteFTS = try? prepare("DELETE FROM frame_text_fts WHERE frame_id = ?;") else {
-                    throw sqliteError(message: "Failed to prepare FTS delete statement")
-                }
-                defer { sqlite3_finalize(deleteFTS) }
-
-                guard bindText(frameID.uuidString, to: deleteFTS, index: 1),
-                      sqlite3_step(deleteFTS) == SQLITE_DONE else {
-                    throw sqliteError(message: "Failed to delete prior FTS entry")
+                try withPreparedStatement("DELETE FROM frame_text_fts WHERE frame_id = ?;") { deleteFTS in
+                    guard bindFrameID(frameID, to: deleteFTS),
+                          sqlite3_step(deleteFTS) == SQLITE_DONE else {
+                        throw sqliteError(message: "Failed to delete prior FTS entry")
+                    }
                 }
 
-                guard let insertFTS = try? prepare("INSERT INTO frame_text_fts(frame_id, text) VALUES (?, ?);") else {
-                    throw sqliteError(message: "Failed to prepare FTS insert statement")
-                }
-                defer { sqlite3_finalize(insertFTS) }
-
-                guard bindText(frameID.uuidString, to: insertFTS, index: 1),
-                      bindText(text, to: insertFTS, index: 2),
-                      sqlite3_step(insertFTS) == SQLITE_DONE else {
-                    throw sqliteError(message: "Failed to insert FTS row")
+                try withPreparedStatement("INSERT INTO frame_text_fts(frame_id, text) VALUES (?, ?);") { insertFTS in
+                    guard bindFrameID(frameID, to: insertFTS, index: 1),
+                          bindText(text, to: insertFTS, index: 2),
+                          sqlite3_step(insertFTS) == SQLITE_DONE else {
+                        throw sqliteError(message: "Failed to insert FTS row")
+                    }
                 }
             }
         } catch {
@@ -146,7 +131,7 @@ actor TextCache {
             }
 
             try withTransaction {
-                guard let upsert = try? prepare(
+                try withPreparedStatement(
                     """
                     INSERT INTO frame_search_layout (frame_id, updated_at, layout_json)
                     VALUES (?, ?, ?)
@@ -154,16 +139,13 @@ actor TextCache {
                         updated_at = excluded.updated_at,
                         layout_json = excluded.layout_json;
                     """
-                ) else {
-                    throw sqliteError(message: "Failed to prepare search layout upsert statement")
-                }
-                defer { sqlite3_finalize(upsert) }
-
-                guard bindText(frameID.uuidString, to: upsert, index: 1),
-                      bindDouble(timestamp.timeIntervalSince1970, to: upsert, index: 2),
-                      bindText(json, to: upsert, index: 3),
-                      sqlite3_step(upsert) == SQLITE_DONE else {
-                    throw sqliteError(message: "Failed to upsert search layout")
+                ) { upsert in
+                    guard bindFrameID(frameID, to: upsert, index: 1),
+                          bindDouble(timestamp.timeIntervalSince1970, to: upsert, index: 2),
+                          bindText(json, to: upsert, index: 3),
+                          sqlite3_step(upsert) == SQLITE_DONE else {
+                        throw sqliteError(message: "Failed to upsert search layout")
+                    }
                 }
             }
         } catch {
@@ -181,16 +163,13 @@ actor TextCache {
 
     /// Check if a frame has cached text
     func hasCachedText(for frameID: UUID) -> Bool {
-        guard let statement = try? prepare("SELECT 1 FROM frame_text WHERE frame_id = ? LIMIT 1;") else {
-            return false
-        }
-        defer { sqlite3_finalize(statement) }
+        (try? withPreparedStatement("SELECT 1 FROM frame_text WHERE frame_id = ? LIMIT 1;") { statement in
+            guard bindFrameID(frameID, to: statement) else {
+                return false
+            }
 
-        guard bindText(frameID.uuidString, to: statement, index: 1) else {
-            return false
-        }
-
-        return sqlite3_step(statement) == SQLITE_ROW
+            return sqlite3_step(statement) == SQLITE_ROW
+        }) ?? false
     }
 
     /// Return IDs that already have indexed text
@@ -201,22 +180,15 @@ actor TextCache {
         for chunk in chunked(frameIDs, size: Self.inClauseChunkSize) {
             let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
             let sql = "SELECT frame_id FROM frame_text WHERE frame_id IN (\(placeholders));"
-            guard let statement = try? prepare(sql) else { continue }
-            defer { sqlite3_finalize(statement) }
+            try? withPreparedStatement(sql) { statement in
+                guard bindFrameIDs(chunk, to: statement) else { return }
 
-            var bindIndex: Int32 = 1
-            for frameID in chunk {
-                guard bindText(frameID.uuidString, to: statement, index: bindIndex) else {
-                    break
-                }
-                bindIndex += 1
-            }
-
-            while sqlite3_step(statement) == SQLITE_ROW {
-                guard let cText = sqlite3_column_text(statement, 0) else { continue }
-                let raw = String(cString: cText)
-                if let id = UUID(uuidString: raw) {
-                    cached.insert(id)
+                while sqlite3_step(statement) == SQLITE_ROW {
+                    guard let cText = sqlite3_column_text(statement, 0) else { continue }
+                    let raw = String(cString: cText)
+                    if let id = UUID(uuidString: raw) {
+                        cached.insert(id)
+                    }
                 }
             }
         }
@@ -235,11 +207,11 @@ actor TextCache {
 
         var ids: [UUID] = []
 
-        if let matchQuery = ftsQuery(from: query),
-           let statement = try? prepare(
-               sinceEpoch == nil
-                   ?
-                   """
+        if let matchQuery = ftsQuery(from: query) {
+            try? withPreparedStatement(
+                sinceEpoch == nil
+                    ?
+                    """
                    SELECT frame_text.frame_id
                    FROM frame_text_fts
                    JOIN frame_text ON frame_text.frame_id = frame_text_fts.frame_id
@@ -257,25 +229,24 @@ actor TextCache {
                    ORDER BY frame_text.timestamp DESC
                    LIMIT ?;
                    """
-           ) {
-            defer { sqlite3_finalize(statement) }
-
-            var bindIndex: Int32 = 1
-            var canQuery = bindText(matchQuery, to: statement, index: bindIndex)
-            bindIndex += 1
-
-            if canQuery, let sinceEpoch {
-                canQuery = bindDouble(sinceEpoch, to: statement, index: bindIndex)
+            ) { statement in
+                var bindIndex: Int32 = 1
+                var canQuery = bindText(matchQuery, to: statement, index: bindIndex)
                 bindIndex += 1
-            }
 
-            if canQuery,
-               bindInt32(safeLimit, to: statement, index: bindIndex) {
-                while sqlite3_step(statement) == SQLITE_ROW {
-                    guard let cText = sqlite3_column_text(statement, 0) else { continue }
-                    let raw = String(cString: cText)
-                    if let id = UUID(uuidString: raw) {
-                        ids.append(id)
+                if canQuery, let sinceEpoch {
+                    canQuery = bindDouble(sinceEpoch, to: statement, index: bindIndex)
+                    bindIndex += 1
+                }
+
+                if canQuery,
+                   bindInt32(safeLimit, to: statement, index: bindIndex) {
+                    while sqlite3_step(statement) == SQLITE_ROW {
+                        guard let cText = sqlite3_column_text(statement, 0) else { continue }
+                        let raw = String(cString: cText)
+                        if let id = UUID(uuidString: raw) {
+                            ids.append(id)
+                        }
                     }
                 }
             }
@@ -285,56 +256,59 @@ actor TextCache {
             return ids
         }
 
-        guard let fallback = try? prepare(
+        let fallbackSQL =
             sinceEpoch == nil
-                ?
-                """
-                SELECT frame_id
-                FROM frame_text
-                WHERE instr(lower(text), lower(?)) > 0
-                ORDER BY timestamp DESC
-                LIMIT ?;
-                """
-                :
-                """
-                SELECT frame_id
-                FROM frame_text
-                WHERE instr(lower(text), lower(?)) > 0
-                  AND timestamp >= ?
-                ORDER BY timestamp DESC
-                LIMIT ?;
-                """
-        ) else {
-            return []
-        }
-        defer { sqlite3_finalize(fallback) }
+            ?
+            """
+            SELECT frame_id
+            FROM frame_text
+            WHERE instr(lower(text), lower(?)) > 0
+            ORDER BY timestamp DESC
+            LIMIT ?;
+            """
+            :
+            """
+            SELECT frame_id
+            FROM frame_text
+            WHERE instr(lower(text), lower(?)) > 0
+              AND timestamp >= ?
+            ORDER BY timestamp DESC
+            LIMIT ?;
+            """
 
-        var bindIndex: Int32 = 1
-        guard bindText(query, to: fallback, index: bindIndex) else {
-            return []
-        }
-        bindIndex += 1
-
-        if let sinceEpoch {
-            guard bindDouble(sinceEpoch, to: fallback, index: bindIndex) else {
-                return []
+        guard let fallbackIDs = try? withPreparedStatement(fallbackSQL, { fallback in
+            var fallbackIDs: [UUID] = []
+            var bindIndex: Int32 = 1
+            guard bindText(query, to: fallback, index: bindIndex) else {
+                return fallbackIDs
             }
             bindIndex += 1
-        }
 
-        guard bindInt32(safeLimit, to: fallback, index: bindIndex) else {
+            if let sinceEpoch {
+                guard bindDouble(sinceEpoch, to: fallback, index: bindIndex) else {
+                    return fallbackIDs
+                }
+                bindIndex += 1
+            }
+
+            guard bindInt32(safeLimit, to: fallback, index: bindIndex) else {
+                return fallbackIDs
+            }
+
+            while sqlite3_step(fallback) == SQLITE_ROW {
+                guard let cText = sqlite3_column_text(fallback, 0) else { continue }
+                let raw = String(cString: cText)
+                if let id = UUID(uuidString: raw) {
+                    fallbackIDs.append(id)
+                }
+            }
+
+            return fallbackIDs
+        }) else {
             return []
         }
 
-        while sqlite3_step(fallback) == SQLITE_ROW {
-            guard let cText = sqlite3_column_text(fallback, 0) else { continue }
-            let raw = String(cString: cText)
-            if let id = UUID(uuidString: raw) {
-                ids.append(id)
-            }
-        }
-
-        return ids
+        return fallbackIDs
     }
 
     /// Save cache to disk (call periodically or on app termination)
@@ -370,13 +344,10 @@ actor TextCache {
     }
 
     var count: Int {
-        guard let statement = try? prepare("SELECT COUNT(*) FROM frame_text;") else {
-            return 0
-        }
-        defer { sqlite3_finalize(statement) }
-
-        guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
-        return Int(sqlite3_column_int64(statement, 0))
+        (try? withPreparedStatement("SELECT COUNT(*) FROM frame_text;") { statement in
+            guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
+            return Int(sqlite3_column_int64(statement, 0))
+        }) ?? 0
     }
 
     // MARK: - SQLite Helpers
@@ -439,18 +410,13 @@ actor TextCache {
     }
 
     private static func countRows(in db: OpaquePointer) -> Int {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM frame_text;", -1, &statement, nil) == SQLITE_OK,
-              let statement else {
-            return 0
-        }
-        defer { sqlite3_finalize(statement) }
+        (try? withPreparedStatement("SELECT COUNT(*) FROM frame_text;", on: db) { statement in
+            guard sqlite3_step(statement) == SQLITE_ROW else {
+                return 0
+            }
 
-        guard sqlite3_step(statement) == SQLITE_ROW else {
-            return 0
-        }
-
-        return Int(sqlite3_column_int64(statement, 0))
+            return Int(sqlite3_column_int64(statement, 0))
+        }) ?? 0
     }
 
     private func migrateLegacyCacheIfNeeded() {
@@ -472,7 +438,7 @@ actor TextCache {
 
         let migrationTimestamp = Date.distantPast.timeIntervalSince1970
         try withTransaction {
-            guard let upsert = try? prepare(
+            try withPreparedStatement(
                 """
                 INSERT INTO frame_text (frame_id, timestamp, text)
                 VALUES (?, ?, ?)
@@ -480,32 +446,24 @@ actor TextCache {
                     timestamp = excluded.timestamp,
                     text = excluded.text;
                 """
-            ) else {
-                throw sqliteError(message: "Failed to prepare legacy upsert statement")
-            }
-            defer { sqlite3_finalize(upsert) }
+            ) { upsert in
+                try withPreparedStatement("INSERT INTO frame_text_fts(frame_id, text) VALUES (?, ?);") { insertFTS in
+                    for (id, text) in legacy {
+                        reset(upsert)
+                        guard bindFrameID(id, to: upsert, index: 1),
+                              bindDouble(migrationTimestamp, to: upsert, index: 2),
+                              bindText(text, to: upsert, index: 3),
+                              sqlite3_step(upsert) == SQLITE_DONE else {
+                            throw sqliteError(message: "Failed to migrate legacy cache row")
+                        }
 
-            guard let insertFTS = try? prepare("INSERT INTO frame_text_fts(frame_id, text) VALUES (?, ?);") else {
-                throw sqliteError(message: "Failed to prepare legacy FTS insert statement")
-            }
-            defer { sqlite3_finalize(insertFTS) }
-
-            for (id, text) in legacy {
-                sqlite3_reset(upsert)
-                sqlite3_clear_bindings(upsert)
-                guard bindText(id.uuidString, to: upsert, index: 1),
-                      bindDouble(migrationTimestamp, to: upsert, index: 2),
-                      bindText(text, to: upsert, index: 3),
-                      sqlite3_step(upsert) == SQLITE_DONE else {
-                    throw sqliteError(message: "Failed to migrate legacy cache row")
-                }
-
-                sqlite3_reset(insertFTS)
-                sqlite3_clear_bindings(insertFTS)
-                guard bindText(id.uuidString, to: insertFTS, index: 1),
-                      bindText(text, to: insertFTS, index: 2),
-                      sqlite3_step(insertFTS) == SQLITE_DONE else {
-                    throw sqliteError(message: "Failed to migrate legacy FTS row")
+                        reset(insertFTS)
+                        guard bindFrameID(id, to: insertFTS, index: 1),
+                              bindText(text, to: insertFTS, index: 2),
+                              sqlite3_step(insertFTS) == SQLITE_DONE else {
+                            throw sqliteError(message: "Failed to migrate legacy FTS row")
+                        }
+                    }
                 }
             }
         }
@@ -520,74 +478,48 @@ actor TextCache {
             let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
             try withTransaction {
                 let deletePrimarySQL = "DELETE FROM frame_text WHERE frame_id IN (\(placeholders));"
-                guard let deletePrimary = try? prepare(deletePrimarySQL) else {
-                    throw sqliteError(message: "Failed to prepare primary delete statement")
-                }
-                defer { sqlite3_finalize(deletePrimary) }
-
                 let deleteFTSSQL = "DELETE FROM frame_text_fts WHERE frame_id IN (\(placeholders));"
-                guard let deleteFTS = try? prepare(deleteFTSSQL) else {
-                    throw sqliteError(message: "Failed to prepare FTS delete statement")
-                }
-                defer { sqlite3_finalize(deleteFTS) }
-
                 let deleteLayoutSQL = "DELETE FROM frame_search_layout WHERE frame_id IN (\(placeholders));"
-                guard let deleteLayout = try? prepare(deleteLayoutSQL) else {
-                    throw sqliteError(message: "Failed to prepare search layout delete statement")
-                }
-                defer { sqlite3_finalize(deleteLayout) }
-
-                var bindIndex: Int32 = 1
-                for frameID in chunk {
-                    guard bindText(frameID.uuidString, to: deletePrimary, index: bindIndex) else {
+                try withPreparedStatement(deletePrimarySQL) { deletePrimary in
+                    guard bindFrameIDs(chunk, to: deletePrimary) else {
                         throw sqliteError(message: "Failed binding primary delete frame ID")
                     }
-                    bindIndex += 1
+                    guard sqlite3_step(deletePrimary) == SQLITE_DONE else {
+                        throw sqliteError(message: "Failed deleting primary rows")
+                    }
                 }
-                guard sqlite3_step(deletePrimary) == SQLITE_DONE else {
-                    throw sqliteError(message: "Failed deleting primary rows")
-                }
-
-                bindIndex = 1
-                for frameID in chunk {
-                    guard bindText(frameID.uuidString, to: deleteFTS, index: bindIndex) else {
+                try withPreparedStatement(deleteFTSSQL) { deleteFTS in
+                    guard bindFrameIDs(chunk, to: deleteFTS) else {
                         throw sqliteError(message: "Failed binding FTS delete frame ID")
                     }
-                    bindIndex += 1
+                    guard sqlite3_step(deleteFTS) == SQLITE_DONE else {
+                        throw sqliteError(message: "Failed deleting FTS rows")
+                    }
                 }
-                guard sqlite3_step(deleteFTS) == SQLITE_DONE else {
-                    throw sqliteError(message: "Failed deleting FTS rows")
-                }
-
-                bindIndex = 1
-                for frameID in chunk {
-                    guard bindText(frameID.uuidString, to: deleteLayout, index: bindIndex) else {
+                try withPreparedStatement(deleteLayoutSQL) { deleteLayout in
+                    guard bindFrameIDs(chunk, to: deleteLayout) else {
                         throw sqliteError(message: "Failed binding search layout delete frame ID")
                     }
-                    bindIndex += 1
-                }
-                guard sqlite3_step(deleteLayout) == SQLITE_DONE else {
-                    throw sqliteError(message: "Failed deleting search layout rows")
+                    guard sqlite3_step(deleteLayout) == SQLITE_DONE else {
+                        throw sqliteError(message: "Failed deleting search layout rows")
+                    }
                 }
             }
         }
     }
 
     private func allCachedFrameIDs() throws -> [UUID] {
-        guard let statement = try? prepare("SELECT frame_id FROM frame_text;") else {
-            throw sqliteError(message: "Failed to prepare all IDs query")
-        }
-        defer { sqlite3_finalize(statement) }
-
-        var ids: [UUID] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            guard let cText = sqlite3_column_text(statement, 0) else { continue }
-            let raw = String(cString: cText)
-            if let id = UUID(uuidString: raw) {
-                ids.append(id)
+        try withPreparedStatement("SELECT frame_id FROM frame_text;") { statement in
+            var ids: [UUID] = []
+            while sqlite3_step(statement) == SQLITE_ROW {
+                guard let cText = sqlite3_column_text(statement, 0) else { continue }
+                let raw = String(cString: cText)
+                if let id = UUID(uuidString: raw) {
+                    ids.append(id)
+                }
             }
+            return ids
         }
-        return ids
     }
 
     private func withTransaction(_ body: () throws -> Void) throws {
@@ -614,15 +546,56 @@ actor TextCache {
         }
     }
 
-    private func prepare(_ sql: String) throws -> OpaquePointer {
-        guard let db else { throw sqliteError(message: "Database is not open") }
+    private static func withPreparedStatement<T>(
+        _ sql: String,
+        on db: OpaquePointer,
+        _ body: (OpaquePointer) throws -> T
+    ) throws -> T {
+        let statement = try prepare(sql, on: db)
+        defer { sqlite3_finalize(statement) }
+        return try body(statement)
+    }
 
+    private func withPreparedStatement<T>(
+        _ sql: String,
+        _ body: (OpaquePointer) throws -> T
+    ) throws -> T {
+        guard let db else { throw sqliteError(message: "Database is not open") }
+        return try Self.withPreparedStatement(sql, on: db, body)
+    }
+
+    private static func prepare(_ sql: String, on db: OpaquePointer) throws -> OpaquePointer {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK,
               let statement else {
-            throw sqliteError(message: "Failed to prepare SQL: \(sql)")
+            throw sqliteError(message: "Failed to prepare SQL: \(sql)", on: db)
         }
         return statement
+    }
+
+    private func prepare(_ sql: String) throws -> OpaquePointer {
+        guard let db else { throw sqliteError(message: "Database is not open") }
+        return try Self.prepare(sql, on: db)
+    }
+
+    private func reset(_ statement: OpaquePointer) {
+        sqlite3_reset(statement)
+        sqlite3_clear_bindings(statement)
+    }
+
+    private func bindFrameID(_ frameID: UUID, to statement: OpaquePointer, index: Int32 = 1) -> Bool {
+        bindText(frameID.uuidString, to: statement, index: index)
+    }
+
+    private func bindFrameIDs(_ frameIDs: [UUID], to statement: OpaquePointer, startingAt index: Int32 = 1) -> Bool {
+        var bindIndex = index
+        for frameID in frameIDs {
+            guard bindFrameID(frameID, to: statement, index: bindIndex) else {
+                return false
+            }
+            bindIndex += 1
+        }
+        return true
     }
 
     private func bindText(_ value: String, to statement: OpaquePointer, index: Int32) -> Bool {

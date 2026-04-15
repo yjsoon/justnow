@@ -6,150 +6,7 @@
 import AppKit
 import CoreGraphics
 import SwiftUI
-import HotKey
-import Carbon.HIToolbox
 import Sparkle
-
-private final class StatusMenuActionItemView: NSView {
-    private let titleField = NSTextField(labelWithString: "")
-    private let accessoryImageView = NSImageView()
-    private var trackingArea: NSTrackingArea?
-    private var isHovered = false {
-        didSet {
-            needsDisplay = true
-            updateAppearance()
-        }
-    }
-
-    weak var menuItem: NSMenuItem?
-
-    override var isFlipped: Bool { true }
-
-    init(width: CGFloat = 220) {
-        super.init(frame: NSRect(x: 0, y: 0, width: width, height: 28))
-        setup()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    func configure(title: String, accessorySystemImageName: String) {
-        titleField.stringValue = title
-        accessoryImageView.image = NSImage(
-            systemSymbolName: accessorySystemImageName,
-            accessibilityDescription: title
-        )
-        accessoryImageView.image?.isTemplate = true
-        updateAppearance()
-    }
-
-    override func viewWillDraw() {
-        super.viewWillDraw()
-        // Menu keyboard navigation updates `enclosingMenuItem.isHighlighted` without toggling hover;
-        // refresh label and symbol colours whenever AppKit is about to draw this row.
-        updateAppearance()
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-
-        if isHovered || enclosingMenuItem?.isHighlighted == true {
-            NSColor.selectedContentBackgroundColor.setFill()
-            dirtyRect.fill()
-        }
-    }
-
-    override func viewWillMove(toWindow newWindow: NSWindow?) {
-        super.viewWillMove(toWindow: newWindow)
-        // If the menu dismisses while the pointer is still over this row, AppKit may not send mouseExited.
-        if newWindow == nil {
-            isHovered = false
-        }
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-
-        if let trackingArea {
-            removeTrackingArea(trackingArea)
-        }
-
-        let trackingArea = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(trackingArea)
-        self.trackingArea = trackingArea
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        isHovered = true
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        isHovered = false
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        let location = convert(event.locationInWindow, from: nil)
-        guard bounds.contains(location),
-              let menuItem,
-              let action = menuItem.action else {
-            return
-        }
-
-        isHovered = false
-        let target = menuItem.target ?? NSApp.target(forAction: action, to: nil, from: menuItem)
-        menuItem.menu?.cancelTracking()
-        NSApp.sendAction(action, to: target, from: menuItem)
-    }
-
-    private func setup() {
-        titleField.lineBreakMode = .byTruncatingTail
-        titleField.font = .menuFont(ofSize: 0)
-
-        accessoryImageView.symbolConfiguration = .init(pointSize: 12, weight: .semibold)
-        accessoryImageView.imageScaling = .scaleProportionallyDown
-
-        let spacer = NSView()
-        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        let stackView = NSStackView(views: [titleField, spacer, accessoryImageView])
-        stackView.orientation = .horizontal
-        stackView.alignment = .centerY
-        stackView.distribution = .fill
-        stackView.spacing = 8
-        stackView.edgeInsets = NSEdgeInsets(top: 5, left: 12, bottom: 5, right: 12)
-
-        addSubview(stackView)
-        stackView.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            stackView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stackView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stackView.topAnchor.constraint(equalTo: topAnchor),
-            stackView.bottomAnchor.constraint(equalTo: bottomAnchor),
-            accessoryImageView.widthAnchor.constraint(equalToConstant: 14)
-        ])
-
-        titleField.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-        titleField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        accessoryImageView.setContentHuggingPriority(.required, for: .horizontal)
-        accessoryImageView.setContentCompressionResistancePriority(.required, for: .horizontal)
-
-        updateAppearance()
-    }
-
-    private func updateAppearance() {
-        let isHighlighted = isHovered || enclosingMenuItem?.isHighlighted == true
-        titleField.textColor = isHighlighted ? .selectedMenuItemTextColor : .labelColor
-        accessoryImageView.contentTintColor = isHighlighted ? .selectedMenuItemTextColor : .secondaryLabelColor
-    }
-}
 
 enum FeatureFlags {
     /// Temporary kill switch while in-app search is hidden from release builds.
@@ -187,17 +44,27 @@ enum RecentTimelineWindow: Double, CaseIterable, Identifiable {
 }
 
 @MainActor
-class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMenuDelegate {
-    private var statusItem: NSStatusItem!
+class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
+    private var isRunningUnderXCTest: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
+
+    private var statusItemController: StatusItemController!
     private var captureManager: ScreenCaptureManager!
     private var frameBuffer: FrameBuffer?
     private var overlayController: OverlayWindowController?
-    private var overlayHotKey: HotKey?
-    private var capturePauseHotKey: HotKey?
     private lazy var updaterController = SPUStandardUpdaterController(
         startingUpdater: false,
         updaterDelegate: nil,
         userDriverDelegate: nil
+    )
+    private lazy var hotKeyController = HotKeyController(
+        overlayHandler: { [weak self] in
+            self?.toggleOverlay()
+        },
+        capturePauseHandler: { [weak self] in
+            self?.toggleCapturePause()
+        }
     )
     private var appNapPreventer = AppNapPreventer()
     private let launchAtLoginManager = LaunchAtLoginManager()
@@ -221,96 +88,70 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         }
     )
 
-    @AppStorage("captureInterval") private var captureInterval: Double = 0.5
-    @AppStorage("rewindHistorySeconds") private var rewindHistorySeconds: Double = RewindHistoryOption.defaultValue.rawValue
-    @AppStorage("recentTimelineWindowSeconds")
-    private var recentTimelineWindowSeconds: Double = RecentTimelineWindow.defaultValue.rawValue
-    @AppStorage("reduceCaptureOnBattery") private var reduceCaptureOnBattery: Bool = true
-    @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 38  // J key
-    @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
-    @AppStorage("capturePauseShortcutKeyCode") private var capturePauseShortcutKeyCode: Int = 38  // J key
-    @AppStorage("capturePauseShortcutModifiers") private var capturePauseShortcutModifiers: Int = 1_703_936  // ⌘⌥⇧
-    @AppStorage("overlayDismissKeyCode") private var overlayDismissKeyCode: Int = 53
-    @AppStorage("overlayDismissModifiers") private var overlayDismissModifiers: Int = 0
+    @AppStorage(AppStorageKey.captureInterval) private var captureInterval: Double = AppStorageDefault.captureInterval
+    @AppStorage(AppStorageKey.rewindHistorySeconds) private var rewindHistorySeconds: Double = AppStorageDefault.rewindHistorySeconds
+    @AppStorage(AppStorageKey.recentTimelineWindowSeconds)
+    private var recentTimelineWindowSeconds: Double = AppStorageDefault.recentTimelineWindowSeconds
+    @AppStorage(AppStorageKey.reduceCaptureOnBattery) private var reduceCaptureOnBattery: Bool = AppStorageDefault.reduceCaptureOnBattery
+    @AppStorage(AppStorageKey.shortcutKeyCode) private var shortcutKeyCode: Int = AppStorageDefault.shortcutKeyCode
+    @AppStorage(AppStorageKey.shortcutModifiers) private var shortcutModifiers: Int = AppStorageDefault.shortcutModifiers
+    @AppStorage(AppStorageKey.capturePauseShortcutKeyCode) private var capturePauseShortcutKeyCode: Int = AppStorageDefault.capturePauseShortcutKeyCode
+    @AppStorage(AppStorageKey.capturePauseShortcutModifiers) private var capturePauseShortcutModifiers: Int = AppStorageDefault.capturePauseShortcutModifiers
+    @AppStorage(AppStorageKey.overlayDismissKeyCode) private var overlayDismissKeyCode: Int = AppStorageDefault.overlayDismissKeyCode
+    @AppStorage(AppStorageKey.overlayDismissModifiers) private var overlayDismissModifiers: Int = AppStorageDefault.overlayDismissModifiers
     private var capturePolicyTimer: Timer?
     private var userDefaultsObserver: NSObjectProtocol?
     private var thermalObserver: NSObjectProtocol?
     private var inputEventMonitor: Any?
-    private var lastAppliedPolicy: CapturePolicy?
     private var lastAppliedRetentionPolicy: RetentionPolicy?
-    private var lastUserActivityUpdate: Date = .distantPast
-    private var isUserPaused = false
-    private var wasCapturingBeforeOverlay = false
-    private var isPausedForOverlay = false
-    private var wasCapturingBeforeSession = false
-    private var isPausedForSession = false
     private var overlayPresentationTask: Task<Void, Never>?
     private var setupCaptureTask: Task<Void, Never>?
-    private var pendingCaptureStartTask: Task<Void, Never>?
-    private var pendingCaptureStartGeneration = 0
     private var isTerminationFlushInProgress = false
     private var idleTransitionTimer: Timer?
-    private var didRequestScreenRecordingPermissionThisLaunch = false
-    private var didShowPermissionAlertThisLaunch = false
-    private var didShowPermissionRestartAlertThisLaunch = false
-    private var isAwaitingPermissionPromptResolution = false
-    private var didDeactivateForPermissionPromptThisLaunch = false
+    private var screenRecordingPermission = ScreenRecordingPermissionState()
+    private let capturePolicyController = CapturePolicyController()
+    private let captureStartController = CaptureStartController()
+    private lazy var captureStopController = CaptureStopController(
+        updateStatus: { [weak self] in self?.updateCaptureStatus($0) },
+        stopCapture: { [weak self] in
+            await self?.captureManager.stopCapture()
+        },
+        endForegroundActivity: { [weak self] in
+            self?.appNapPreventer.stopActivity()
+        }
+    )
+    private lazy var captureEventController = CaptureEventController(
+        context: { [weak self] in
+            guard let self else {
+                return CaptureEventContext(
+                    hasCaptureManager: false,
+                    isCapturing: false,
+                    isSetupCaptureInProgress: false,
+                    hasPendingStart: false,
+                    isOverlayVisible: false
+                )
+            }
 
-    private let idleThreshold: TimeInterval = 60
-    private let inputPolicyUpdateInterval: TimeInterval = 1
-    private let idleMultiplier: Double = 4
-    private let batteryMultiplier: Double = 3
-    private let batteryLowThreshold: Double = 0.3
-    private let batteryCriticalThreshold: Double = 0.15
-    private let batteryLowMultiplier: Double = 1.5
-    private let batteryCriticalMultiplier: Double = 2
-    private let thermalSeriousMultiplier: Double = 2
-    private let thermalCriticalMultiplier: Double = 4
-    private let maxCaptureInterval: Double = 30
-    private let ocrIndexBaseInterval: TimeInterval = 2.5
-    private let ocrIndexBatteryInterval: TimeInterval = 10
-    private let ocrIndexIdleInterval: TimeInterval = 15
-    private let ocrIndexThermalSeriousInterval: TimeInterval = 20
-    private let ocrIndexMaxFrameAge: TimeInterval = 5 * 60
-    private let ocrIndexBatteryMaxFrameAge: TimeInterval = 3 * 60
-    private let ocrIndexBaseQueueDepth: Int = 120
-    private let ocrIndexBatteryQueueDepth: Int = 60
-    private let ocrIndexIdleQueueDepth: Int = 40
-    private let ocrIndexThermalQueueDepth: Int = 24
-    private let ocrIndexBaseConcurrentJobs: Int = 3
-    private let ocrIndexBatteryConcurrentJobs: Int = 2
-    private let ocrIndexIdleConcurrentJobs: Int = 2
-    private let ocrIndexThermalConcurrentJobs: Int = 1
-    private let ocrIndexBaseImageMaxPixelSize: Int = 1_200
-    private let ocrIndexBatteryImageMaxPixelSize: Int = 1_000
-    private let ocrIndexIdleImageMaxPixelSize: Int = 900
-    private let ocrIndexThermalImageMaxPixelSize: Int = 800
-
-    private struct CapturePolicy: Equatable {
-        let interval: TimeInterval
-        let scale: Int
-        let saveOptions: FrameSaveOptions
-        let duplicatePolicy: DuplicateFramePolicy
-        let ocrIndexingPolicy: OCRIndexingPolicy
-        let shouldPreventAppNap: Bool
-        let isIdle: Bool
-    }
-
-    private enum LaunchPermissionState {
-        case granted
-        case requestedThisLaunch
-        case deniedPreviously
-    }
-
-    private enum MenuItemTag {
-        static let frameCount = 100
-        static let captureStatus = 101
-        static let pauseToggle = 102
-        static let permissionHelp = 103
-        static let showTimeline = 104
-    }
+            return CaptureEventContext(
+                hasCaptureManager: self.captureManager != nil,
+                isCapturing: self.captureManager?.isCapturing == true,
+                isSetupCaptureInProgress: self.setupCaptureTask != nil,
+                hasPendingStart: self.captureStartController.hasPendingStart,
+                isOverlayVisible: self.isOverlayVisible
+            )
+        },
+        scheduleStart: { [weak self] in self?.scheduleCaptureStart($0) },
+        cancelPendingStart: { [weak self] in self?.captureStartController.cancelPendingStart() },
+        scheduleStop: { [weak self] in self?.captureStopController.scheduleStop($0) },
+        updateStatus: { [weak self] in self?.updateCaptureStatus($0) },
+        enableBlackFrameFilter: { [weak self] in self?.frameBuffer?.enableBlackFrameFilter(for: $0) },
+        endForegroundActivity: { [weak self] in self?.appNapPreventer.stopActivity() },
+        updatePauseMenu: { [weak self] isPaused in self?.statusItemController?.setPaused(isPaused) }
+    )
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard !isRunningUnderXCTest else { return }
+
         setupStatusItem()
         updaterController.startUpdater()
         setupHotKey()
@@ -342,7 +183,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         isTerminationFlushInProgress = true
         overlayPresentationTask?.cancel()
         setupCaptureTask?.cancel()
-        cancelPendingCaptureStart()
+        captureStartController.cancelPendingStart()
 
         Task { @MainActor [weak self] in
             guard let self else {
@@ -364,8 +205,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     }
 
     func applicationDidResignActive(_ notification: Notification) {
-        guard isAwaitingPermissionPromptResolution else { return }
-        didDeactivateForPermissionPromptThisLaunch = true
+        screenRecordingPermission.noteApplicationDidResignActive()
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -375,126 +215,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     // MARK: - Setup
 
     private func setupStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        updateStatusItemButtonAppearance()
-
-        let menu = NSMenu()
-
-        let showItem = NSMenuItem(title: "Show Timeline", action: #selector(showOverlay), keyEquivalent: "")
-        showItem.target = self
-        showItem.tag = MenuItemTag.showTimeline
-        showItem.keyEquivalentModifierMask = [.command, .option]
-        showItem.view = makeMenuActionView(for: showItem)
-        menu.addItem(showItem)
-
-        let pauseItem = NSMenuItem(title: "Pause Recording", action: #selector(toggleCapturePause), keyEquivalent: "")
-        pauseItem.target = self
-        pauseItem.tag = MenuItemTag.pauseToggle
-        pauseItem.view = makeMenuActionView(for: pauseItem)
-        menu.addItem(pauseItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        let frameCountItem = NSMenuItem(title: "Frames: 0", action: nil, keyEquivalent: "")
-        frameCountItem.tag = MenuItemTag.frameCount
-        frameCountItem.isEnabled = false
-        menu.addItem(frameCountItem)
-
-        let captureStatusItem = NSMenuItem(title: "Capture: Starting...", action: nil, keyEquivalent: "")
-        captureStatusItem.tag = MenuItemTag.captureStatus
-        captureStatusItem.isEnabled = false
-        menu.addItem(captureStatusItem)
-
-        let permissionHelpItem = NSMenuItem(
-            title: "Screen Recording Help…",
-            action: #selector(showScreenRecordingHelp),
-            keyEquivalent: ""
+        statusItemController = StatusItemController(
+            actions: StatusItemControllerActions(
+                showTimeline: { [weak self] in self?.showOverlay() },
+                toggleCapturePause: { [weak self] in self?.toggleCapturePause() },
+                showSettings: { [weak self] in self?.showSettings() },
+                checkForUpdates: { [weak self] in self?.checkForUpdates(nil) },
+                quitApp: { [weak self] in self?.quitApp() },
+                showScreenRecordingHelp: { [weak self] in self?.showScreenRecordingHelp() },
+                menuWillOpen: { [weak self] in self?.handleStatusMenuWillOpen() }
+            )
         )
-        permissionHelpItem.tag = MenuItemTag.permissionHelp
-        permissionHelpItem.target = self
-        permissionHelpItem.isHidden = true
-        menu.addItem(permissionHelpItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(showSettings), keyEquivalent: ",")
-        settingsItem.target = self
-        menu.addItem(settingsItem)
-
-        let updatesItem = NSMenuItem(
-            title: "Check for Updates…",
-            action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
-            keyEquivalent: ""
-        )
-        updatesItem.target = updaterController
-        menu.addItem(updatesItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        let quitItem = NSMenuItem(title: "Quit JustNow", action: #selector(quitApp), keyEquivalent: "q")
-        quitItem.target = self
-        menu.addItem(quitItem)
-
-        menu.delegate = self
-        statusItem.menu = menu
-        updateShowTimelineMenuItem()
-        updatePauseMenuItem()
     }
 
     private func setupHotKey() {
-        registerHotKey()
+        registerHotKeys()
     }
 
     private func keyboardShortcutsDidChange() {
-        registerHotKey()
+        registerHotKeys()
         overlayController?.updateDismissShortcut(
             keyCode: overlayDismissKeyCode,
             modifiers: overlayDismissModifiers
         )
     }
 
-    func registerHotKey() {
-        overlayHotKey = nil
-        capturePauseHotKey = nil
-
-        // Global Carbon hotkeys: at most one registration per key+modifier pair. Open rewind wins over pause
-        // when they match. Pause is also skipped if it matches the close rewind shortcut, which is handled
-        // locally while the overlay is open—otherwise both handlers could fire for one key press.
-        overlayHotKey = makeHotKey(
-            keyCode: shortcutKeyCode,
-            modifiers: shortcutModifiers
-        ) { [weak self] in
-            self?.toggleOverlay()
-        }
-
-        guard capturePauseShortcutKeyCode != -1 else { return }
-
-        if shortcutsConflict(
-            capturePauseShortcutKeyCode,
-            capturePauseShortcutModifiers,
-            shortcutKeyCode,
-            shortcutModifiers
-        ) {
-            print("Skipping pause hotkey registration because it matches the open rewind shortcut")
-            return
-        }
-
-        if shortcutsConflict(
-            capturePauseShortcutKeyCode,
-            capturePauseShortcutModifiers,
-            overlayDismissKeyCode,
-            overlayDismissModifiers
-        ) {
-            print("Skipping pause hotkey registration because it matches the close rewind shortcut")
-            return
-        }
-
-        capturePauseHotKey = makeHotKey(
-            keyCode: capturePauseShortcutKeyCode,
-            modifiers: capturePauseShortcutModifiers
-        ) { [weak self] in
-            self?.toggleCapturePause()
-        }
+    private func registerHotKeys() {
+        hotKeyController.register(configuration: currentHotKeyConfiguration())
     }
 
     func makeSettingsView() -> SettingsView {
@@ -536,7 +283,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             guard !Task.isCancelled else { return }
 
             self.captureManager.delegate = self
-            let preflightPolicy = self.computeCapturePolicy()
+            let preflightPolicy = self.currentCapturePolicy()
             self.captureManager.updateCaptureInterval(preflightPolicy.interval)
             self.captureManager.updateCaptureScale(preflightPolicy.scale)
             self.frameBuffer?.updateSaveOptions(
@@ -545,17 +292,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             )
             self.frameBuffer?.updateOCRIndexingPolicy(preflightPolicy.ocrIndexingPolicy)
 
-            guard self.canStartCaptureNow() || self.isUserPaused else {
-                if self.isPausedForOverlay || self.overlayController?.isVisible == true {
-                    self.updateCaptureStatus("Paused (Overlay)")
-                } else if self.isPausedForSession {
-                    self.updateCaptureStatus("Session Inactive")
+            guard self.captureEventController.canStartCapture() else {
+                if let blockedStatus = self.captureEventController.blockedStatus() {
+                    self.updateCaptureStatus(blockedStatus)
                 }
-                return
-            }
-
-            guard !self.isUserPaused else {
-                self.updateCaptureStatus("Paused (User)")
                 return
             }
 
@@ -564,17 +304,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
                 do {
                     try await self.captureManager.startCapture()
                     guard !Task.isCancelled else { return }
-                    guard self.canStartCaptureNow() else {
+                    guard self.captureEventController.canStartCapture() else {
                         await self.captureManager.stopCapture()
-                        if self.isPausedForOverlay || self.overlayController?.isVisible == true {
-                            self.updateCaptureStatus("Paused (Overlay)")
-                        } else if self.isPausedForSession {
-                            self.updateCaptureStatus("Session Inactive")
+                        if let blockedStatus = self.captureEventController.blockedStatus() {
+                            self.updateCaptureStatus(blockedStatus)
                         }
                         return
                     }
                     self.updateCaptureStatus("Active")
-                    self.lastAppliedPolicy = nil
+                    self.capturePolicyController.resetAppliedPolicy()
                     self.updateCapturePolicy()
                 } catch is CancellationError {
                     return
@@ -693,101 +431,41 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     }
 
     @objc private func handleSleep() {
-        cancelPendingCaptureStart()
-        Task { @MainActor in
-            updateCaptureStatus("Sleeping...")
-            await captureManager.stopCapture()
-            appNapPreventer.stopActivity()
-            print("Capture paused for system sleep")
-        }
+        captureEventController.handleSleep()
     }
 
     @objc private func handleWake() {
-        frameBuffer?.enableBlackFrameFilter(for: 5)
-        resumeCapture(reason: "system wake")
+        captureEventController.handleWake()
     }
 
     @objc private func handleScreenSleep() {
-        cancelPendingCaptureStart()
-        Task { @MainActor in
-            updateCaptureStatus("Screen Off")
-            await captureManager.stopCapture()
-            appNapPreventer.stopActivity()
-            print("Capture paused for screen sleep")
-        }
+        captureEventController.handleScreenSleep()
     }
 
     @objc private func handleScreenWake() {
-        frameBuffer?.enableBlackFrameFilter(for: 5)
-        resumeCapture(reason: "screen wake")
+        captureEventController.handleScreenWake()
     }
 
     @objc private func handleSessionResignActive() {
-        pauseCaptureForSession()
+        captureEventController.handleSessionResignActive()
     }
 
     @objc private func handleSessionBecomeActive() {
-        resumeCaptureAfterSession()
-    }
-
-    private func pauseCaptureForSession() {
-        guard !isPausedForSession else { return }
-        let wasActivelyCapturing = captureManager.isCapturing
-        let shouldResumeCaptureAfterSession =
-            captureManager.isCapturing
-            || setupCaptureTask != nil
-            || pendingCaptureStartTask != nil
-            || (isPausedForOverlay && wasCapturingBeforeOverlay)
-        isPausedForSession = true
-        wasCapturingBeforeSession = shouldResumeCaptureAfterSession
-        cancelPendingCaptureStart()
-
-        guard wasActivelyCapturing else { return }
-        Task { @MainActor in
-            updateCaptureStatus("Session Inactive")
-            await captureManager.stopCapture()
-            appNapPreventer.stopActivity()
-        }
-    }
-
-    private func resumeCaptureAfterSession() {
-        guard isPausedForSession else { return }
-        isPausedForSession = false
-        guard wasCapturingBeforeSession else { return }
-        wasCapturingBeforeSession = false
-
-        frameBuffer?.enableBlackFrameFilter(for: 5)
-        resumeCapture(reason: "session active")
-    }
-
-    private func cancelPendingCaptureStart() {
-        pendingCaptureStartGeneration += 1
-        pendingCaptureStartTask?.cancel()
-        pendingCaptureStartTask = nil
-    }
-
-    private func canStartCaptureNow() -> Bool {
-        !isUserPaused && !isPausedForOverlay && !isPausedForSession && overlayController?.isVisible != true
-    }
-
-    private func captureWasActiveOrPendingBeforeOverlayPause() -> Bool {
-        captureManager.isCapturing
-            || setupCaptureTask != nil
-            || pendingCaptureStartTask != nil
-            || (isPausedForSession && wasCapturingBeforeSession)
+        captureEventController.handleSessionBecomeActive()
     }
 
     private func startCaptureIfAllowed(successMessage: String, failurePrefix: String, failureStatus: String) async -> Bool {
-        guard !Task.isCancelled, canStartCaptureNow() else { return false }
+        guard !Task.isCancelled, captureEventController.canStartCapture() else { return false }
 
         do {
             try await captureManager.startCapture()
-            guard !Task.isCancelled, canStartCaptureNow() else {
+            guard !Task.isCancelled,
+                  captureEventController.canStartCapture() else {
                 await captureManager.stopCapture()
                 return false
             }
             updateCaptureStatus("Active")
-            lastAppliedPolicy = nil
+            capturePolicyController.resetAppliedPolicy()
             updateCapturePolicy()
             print(successMessage)
             return true
@@ -804,75 +482,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         }
     }
 
-    private func resumeCapture(reason: String) {
-        if setupCaptureTask != nil {
-            cancelPendingCaptureStart()
-            if isUserPaused {
-                updateCaptureStatus("Paused (User)")
-            } else if isPausedForOverlay || overlayController?.isVisible == true {
-                updateCaptureStatus("Paused (Overlay)")
-            } else if isPausedForSession {
-                updateCaptureStatus("Session Inactive")
-            } else {
-                updateCaptureStatus("Resuming...")
+    private func scheduleCaptureStart(_ request: CaptureStartRequest) {
+        captureStartController.scheduleStart(
+            request: request,
+            canStartCapture: { [weak self] in
+                guard let self else { return false }
+                return self.captureEventController.canStartCapture()
+            },
+            blockedStatus: { [weak self] includeOverlay in
+                guard let self else { return nil }
+                return self.captureEventController.blockedStatus(includeOverlay: includeOverlay)
+            },
+            updateStatus: { [weak self] status in
+                self?.updateCaptureStatus(status)
+            },
+            startCapture: { [weak self] attempt in
+                guard let self else { return false }
+                return await self.startCaptureIfAllowed(
+                    successMessage: attempt.successMessage,
+                    failurePrefix: attempt.failurePrefix,
+                    failureStatus: attempt.failureStatus
+                )
             }
-            return
-        }
-
-        cancelPendingCaptureStart()
-        let generation = pendingCaptureStartGeneration
-        pendingCaptureStartTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            defer {
-                if generation == self.pendingCaptureStartGeneration {
-                    self.pendingCaptureStartTask = nil
-                }
-            }
-
-            guard self.canStartCaptureNow() else {
-                if self.isUserPaused {
-                    self.updateCaptureStatus("Paused (User)")
-                } else if self.isPausedForOverlay || self.overlayController?.isVisible == true {
-                    self.updateCaptureStatus("Paused (Overlay)")
-                } else if self.isPausedForSession {
-                    self.updateCaptureStatus("Session Inactive")
-                }
-                return
-            }
-
-            self.updateCaptureStatus("Resuming...")
-
-            // Delay to let system stabilise
-            try? await Task.sleep(for: .seconds(2))
-
-            guard !Task.isCancelled,
-                  generation == self.pendingCaptureStartGeneration,
-                  self.canStartCaptureNow() else {
-                return
-            }
-
-            let didStart = await self.startCaptureIfAllowed(
-                successMessage: "Capture resumed after \(reason)",
-                failurePrefix: "Failed to resume capture after \(reason)",
-                failureStatus: "Error"
-            )
-            guard !didStart else { return }
-
-            // Retry once more after another delay.
-            try? await Task.sleep(for: .seconds(3))
-
-            guard !Task.isCancelled,
-                  generation == self.pendingCaptureStartGeneration,
-                  self.canStartCaptureNow() else {
-                return
-            }
-
-            _ = await self.startCaptureIfAllowed(
-                successMessage: "Capture resumed on retry",
-                failurePrefix: "Retry also failed",
-                failureStatus: "Failed"
-            )
-        }
+        )
     }
 
     // MARK: - Capture Delegate
@@ -882,59 +514,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     }
 
     func captureManagerDidStop(_ manager: ScreenCaptureManager) {
-        guard overlayController?.isVisible != true, !isPausedForOverlay, !isPausedForSession, !isUserPaused else { return }
-        print("Capture stopped unexpectedly, attempting restart...")
-        appNapPreventer.stopActivity()
-        cancelPendingCaptureStart()
-        let generation = pendingCaptureStartGeneration
-        pendingCaptureStartTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            defer {
-                if generation == self.pendingCaptureStartGeneration {
-                    self.pendingCaptureStartTask = nil
-                }
-            }
-
-            guard self.canStartCaptureNow() else { return }
-            self.updateCaptureStatus("Restarting...")
-            try? await Task.sleep(for: .seconds(2))
-
-            guard !Task.isCancelled,
-                  generation == self.pendingCaptureStartGeneration,
-                  self.canStartCaptureNow() else {
-                return
-            }
-
-            _ = await self.startCaptureIfAllowed(
-                successMessage: "Capture restarted successfully",
-                failurePrefix: "Failed to restart capture",
-                failureStatus: "Stopped"
-            )
-        }
+        captureEventController.handleUnexpectedStop()
     }
 
     @objc private func toggleCapturePause() {
-        isUserPaused.toggle()
-        updatePauseMenuItem()
-        updateStatusItemButtonAppearance()
-
-        guard captureManager != nil else {
-            updateCaptureStatus(isUserPaused ? "Paused (User)" : "Starting...")
-            return
-        }
-
-        if isUserPaused {
-            cancelPendingCaptureStart()
-            Task { @MainActor in
-                updateCaptureStatus("Paused (User)")
-                await captureManager.stopCapture()
-                appNapPreventer.stopActivity()
-            }
-            return
-        }
-
-        frameBuffer?.enableBlackFrameFilter(for: 2)
-        resumeCapture(reason: "manual resume")
+        captureEventController.toggleCapturePause()
     }
 
     // MARK: - Actions
@@ -972,7 +556,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
                     dismissShortcutKeyCode: self.overlayDismissKeyCode,
                     dismissShortcutModifiers: self.overlayDismissModifiers,
                     onVisibilityChanged: { [weak self] isVisible in
-                        self?.handleOverlayVisibilityChanged(isVisible: isVisible)
+                        guard let self else { return }
+                        self.captureEventController.handleOverlayVisibilityChanged(isVisible: isVisible)
                     }
                 )
             } else {
@@ -986,75 +571,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
             self.overlayController?.showOverlay(
                 recentTimelineWindow: recentTimelineWindow.timeInterval,
                 rewindHistoryOption: rewindHistoryOption
-            )
-        }
-    }
-
-    private func handleOverlayVisibilityChanged(isVisible: Bool) {
-        if isVisible {
-            pauseCaptureForOverlay()
-        } else {
-            resumeCaptureAfterOverlay()
-        }
-    }
-
-    private func pauseCaptureForOverlay() {
-        guard !isPausedForOverlay else { return }
-        let wasActivelyCapturing = captureManager.isCapturing
-        wasCapturingBeforeOverlay = captureWasActiveOrPendingBeforeOverlayPause()
-        isPausedForOverlay = true
-        cancelPendingCaptureStart()
-
-        guard wasActivelyCapturing else { return }
-        Task { @MainActor in
-            updateCaptureStatus("Paused (Overlay)")
-            await captureManager.stopCapture()
-            appNapPreventer.stopActivity()
-        }
-    }
-
-    private func resumeCaptureAfterOverlay() {
-        guard isPausedForOverlay else { return }
-        isPausedForOverlay = false
-        guard wasCapturingBeforeOverlay else { return }
-        wasCapturingBeforeOverlay = false
-
-        if setupCaptureTask != nil {
-            cancelPendingCaptureStart()
-            if isUserPaused {
-                updateCaptureStatus("Paused (User)")
-            } else if isPausedForSession {
-                updateCaptureStatus("Session Inactive")
-            } else {
-                updateCaptureStatus("Resuming...")
-            }
-            return
-        }
-
-        cancelPendingCaptureStart()
-        let generation = pendingCaptureStartGeneration
-        pendingCaptureStartTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            defer {
-                if generation == self.pendingCaptureStartGeneration {
-                    self.pendingCaptureStartTask = nil
-                }
-            }
-
-            guard self.canStartCaptureNow() else {
-                if self.isUserPaused {
-                    self.updateCaptureStatus("Paused (User)")
-                } else if self.isPausedForSession {
-                    self.updateCaptureStatus("Session Inactive")
-                }
-                return
-            }
-
-            self.updateCaptureStatus("Resuming...")
-            _ = await self.startCaptureIfAllowed(
-                successMessage: "Capture resumed after overlay",
-                failurePrefix: "Failed to resume capture after overlay",
-                failureStatus: "Error"
             )
         }
     }
@@ -1075,9 +591,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         showPermissionAlert(force: true)
     }
 
-    // MARK: - NSMenuDelegate
-
-    func menuWillOpen(_ menu: NSMenu) {
+    private func handleStatusMenuWillOpen() {
         updateFrameCountMenuItem()
         updatePauseMenuItem()
         updatePermissionHelpMenuItem()
@@ -1085,24 +599,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
 
     // MARK: - Helpers
 
+    private var isOverlayVisible: Bool {
+        overlayController?.isVisible == true
+    }
+
     private func updateCapturePolicy() {
         guard captureManager != nil else { return }
-        let policy = computeCapturePolicy()
-        guard policy != lastAppliedPolicy else { return }
-        lastAppliedPolicy = policy
-
-        captureManager.updateCaptureInterval(policy.interval)
-        captureManager.updateCaptureScale(policy.scale)
-        frameBuffer?.updateSaveOptions(policy.saveOptions, duplicatePolicy: policy.duplicatePolicy)
-        frameBuffer?.updateOCRIndexingPolicy(policy.ocrIndexingPolicy)
-
-        if captureManager.isCapturing {
-            if policy.shouldPreventAppNap {
-                appNapPreventer.startActivity()
-            } else {
-                appNapPreventer.stopActivity()
-            }
-        }
+        capturePolicyController.applyIfNeeded(
+            settings: currentCapturePolicySettings(),
+            environment: currentCapturePolicyEnvironment(),
+            isCapturing: captureManager.isCapturing,
+            applier: CapturePolicyApplier(
+                updateCaptureInterval: { [weak self] in self?.captureManager.updateCaptureInterval($0) },
+                updateCaptureScale: { [weak self] in self?.captureManager.updateCaptureScale($0) },
+                updateFramePersistence: { [weak self] saveOptions, duplicatePolicy in
+                    self?.frameBuffer?.updateSaveOptions(saveOptions, duplicatePolicy: duplicatePolicy)
+                },
+                updateOCRIndexingPolicy: { [weak self] in self?.frameBuffer?.updateOCRIndexingPolicy($0) },
+                beginForegroundActivity: { [weak self] in self?.appNapPreventer.startActivity() },
+                endForegroundActivity: { [weak self] in self?.appNapPreventer.stopActivity() }
+            )
+        )
     }
 
     private func updateRetentionPolicyIfNeeded() async {
@@ -1117,114 +634,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
         RewindHistoryOption.resolved(from: rewindHistorySeconds).retentionPolicy
     }
 
-    private func computeCapturePolicy() -> CapturePolicy {
-        let adaptiveEnabled = reduceCaptureOnBattery
-        let onBattery = adaptiveEnabled && PowerManager.isOnBattery()
-        let lowPowerMode = adaptiveEnabled && ProcessInfo.processInfo.isLowPowerModeEnabled
-        let batteryCharge = onBattery ? PowerManager.batteryChargeFraction() : nil
-        let idleDuration = secondsSinceLastUserEvent()
-        let isIdle = adaptiveEnabled && idleDuration >= idleThreshold
-        let thermalState = ProcessInfo.processInfo.thermalState
-        let isThermalConstrained = adaptiveEnabled && (thermalState == .serious || thermalState == .critical)
-
-        var interval = captureInterval
-        var scale = 2
-        var saveOptions = FrameSaveOptions.standard
-        var duplicatePolicy = DuplicateFramePolicy.exact(atMostEvery: captureInterval)
-        var ocrIndexEnabled = true
-        var ocrIndexInterval = ocrIndexBaseInterval
-        var ocrIndexQueueDepth = ocrIndexBaseQueueDepth
-        var ocrIndexMaxAge = ocrIndexMaxFrameAge
-        var ocrIndexConcurrentJobs = ocrIndexBaseConcurrentJobs
-        var ocrIndexImageMaxPixelSize = ocrIndexBaseImageMaxPixelSize
-
-        if onBattery || lowPowerMode {
-            scale = 1
-            saveOptions = .lowPower
-            interval *= batteryMultiplier
-            duplicatePolicy = .lowPower
-
-            ocrIndexInterval = ocrIndexBatteryInterval
-            ocrIndexQueueDepth = ocrIndexBatteryQueueDepth
-            ocrIndexMaxAge = ocrIndexBatteryMaxFrameAge
-            ocrIndexConcurrentJobs = ocrIndexBatteryConcurrentJobs
-            ocrIndexImageMaxPixelSize = ocrIndexBatteryImageMaxPixelSize
-        }
-
-        if let batteryCharge {
-            if batteryCharge <= batteryCriticalThreshold {
-                scale = 1
-                saveOptions = .lowPower
-                interval *= batteryCriticalMultiplier
-                duplicatePolicy = .lowPower
-                ocrIndexEnabled = false
-            } else if batteryCharge <= batteryLowThreshold {
-                scale = 1
-                saveOptions = .lowPower
-                interval *= batteryLowMultiplier
-                duplicatePolicy = .lowPower
-
-                ocrIndexInterval = max(ocrIndexInterval, ocrIndexBatteryInterval)
-                ocrIndexQueueDepth = min(ocrIndexQueueDepth, ocrIndexBatteryQueueDepth)
-                ocrIndexMaxAge = min(ocrIndexMaxAge, ocrIndexBatteryMaxFrameAge)
-                ocrIndexConcurrentJobs = min(ocrIndexConcurrentJobs, ocrIndexBatteryConcurrentJobs)
-                ocrIndexImageMaxPixelSize = min(ocrIndexImageMaxPixelSize, ocrIndexBatteryImageMaxPixelSize)
-            }
-        }
-
-        if isIdle {
-            interval *= idleMultiplier
-            scale = 1
-            saveOptions = .lowPower
-            duplicatePolicy = .lowPower
-
-            ocrIndexInterval = max(ocrIndexInterval, ocrIndexIdleInterval)
-            ocrIndexQueueDepth = min(ocrIndexQueueDepth, ocrIndexIdleQueueDepth)
-            ocrIndexConcurrentJobs = min(ocrIndexConcurrentJobs, ocrIndexIdleConcurrentJobs)
-            ocrIndexImageMaxPixelSize = min(ocrIndexImageMaxPixelSize, ocrIndexIdleImageMaxPixelSize)
-        }
-
-        if isThermalConstrained {
-            let multiplier = (thermalState == .critical) ? thermalCriticalMultiplier : thermalSeriousMultiplier
-            interval *= multiplier
-            scale = 1
-            saveOptions = .lowPower
-            duplicatePolicy = .lowPower
-
-            if thermalState == .critical {
-                ocrIndexEnabled = false
-            } else {
-                ocrIndexInterval = max(ocrIndexInterval, ocrIndexThermalSeriousInterval)
-                ocrIndexQueueDepth = min(ocrIndexQueueDepth, ocrIndexThermalQueueDepth)
-                ocrIndexMaxAge = min(ocrIndexMaxAge, ocrIndexBatteryMaxFrameAge)
-                ocrIndexConcurrentJobs = min(ocrIndexConcurrentJobs, ocrIndexThermalConcurrentJobs)
-                ocrIndexImageMaxPixelSize = min(ocrIndexImageMaxPixelSize, ocrIndexThermalImageMaxPixelSize)
-            }
-        }
-
-        interval = min(interval, maxCaptureInterval)
-
-        let ocrPolicy = OCRIndexingPolicy(
-            isEnabled: ocrIndexEnabled,
-            minimumInterval: ocrIndexInterval,
-            maxQueueDepth: ocrIndexQueueDepth,
-            maxFrameAge: ocrIndexMaxAge,
-            concurrentJobs: ocrIndexConcurrentJobs,
-            searchImageMaxPixelSize: ocrIndexImageMaxPixelSize
-        )
-
-        let batteryCanRelaxCadence = onBattery || lowPowerMode
-        let allowAppNap = batteryCanRelaxCadence || isIdle || isThermalConstrained || interval >= 5
-        let shouldPreventAppNap = !allowAppNap
-
-        return CapturePolicy(
-            interval: interval,
-            scale: scale,
-            saveOptions: saveOptions,
-            duplicatePolicy: duplicatePolicy,
-            ocrIndexingPolicy: ocrPolicy,
-            shouldPreventAppNap: shouldPreventAppNap,
-            isIdle: isIdle
+    private func currentCapturePolicy() -> CapturePolicy {
+        capturePolicyController.currentPolicy(
+            settings: currentCapturePolicySettings(),
+            environment: currentCapturePolicyEnvironment()
         )
     }
 
@@ -1234,21 +647,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     }
 
     private func handleUserActivity() {
-        let now = Date()
-        guard now.timeIntervalSince(lastUserActivityUpdate) >= inputPolicyUpdateInterval else { return }
-        lastUserActivityUpdate = now
+        guard capturePolicyController.noteUserActivity() else {
+            scheduleIdleTransitionCheck()
+            return
+        }
         scheduleIdleTransitionCheck()
-
-        guard lastAppliedPolicy?.isIdle == true else { return }
         updateCapturePolicy()
     }
 
     private func scheduleIdleTransitionCheck() {
         idleTransitionTimer?.invalidate()
 
-        let idleDuration = secondsSinceLastUserEvent()
-        let remaining = max(idleThreshold - idleDuration, 0)
-        guard remaining > 0 else { return }
+        guard let remaining = capturePolicyController.idleTransitionDelay(
+            for: secondsSinceLastUserEvent()
+        ) else { return }
 
         idleTransitionTimer = Timer.scheduledTimer(withTimeInterval: remaining, repeats: false) { [weak self] _ in
             guard let self else { return }
@@ -1260,143 +672,74 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     }
 
     private func updateFrameCountMenuItem() {
-        guard let menu = statusItem.menu else { return }
-
-        if let item = menu.item(withTag: MenuItemTag.frameCount) {
-            let count = frameBuffer?.frameCount ?? 0
-            item.title = "Frames: \(count)"
-        }
+        statusItemController?.setFrameCount(frameBuffer?.frameCount ?? 0)
     }
 
     private func updateCaptureStatus(_ status: String) {
-        guard let menu = statusItem.menu,
-              let item = menu.item(withTag: MenuItemTag.captureStatus) else { return }
-        item.title = "Capture: \(status)"
+        statusItemController?.setCaptureStatus(status)
     }
 
     private func updatePauseMenuItem() {
-        guard let menu = statusItem.menu,
-              let item = menu.item(withTag: MenuItemTag.pauseToggle) else { return }
-        item.title = isUserPaused ? "Resume Recording" : "Pause Recording"
-        item.state = .off
-        item.image = nil
-        (item.view as? StatusMenuActionItemView)?.configure(
-            title: item.title,
-            accessorySystemImageName: isUserPaused ? "play.fill" : "pause.fill"
+        statusItemController?.setPaused(captureEventController.isUserPaused)
+    }
+
+    private func currentHotKeyConfiguration() -> HotKeyConfiguration {
+        HotKeyConfiguration(
+            overlayKeyCode: shortcutKeyCode,
+            overlayModifiers: shortcutModifiers,
+            capturePauseKeyCode: capturePauseShortcutKeyCode,
+            capturePauseModifiers: capturePauseShortcutModifiers,
+            overlayDismissKeyCode: overlayDismissKeyCode,
+            overlayDismissModifiers: overlayDismissModifiers
         )
     }
 
-    private func updateShowTimelineMenuItem() {
-        guard let menu = statusItem.menu,
-              let item = menu.item(withTag: MenuItemTag.showTimeline) else { return }
-        item.image = nil
-        (item.view as? StatusMenuActionItemView)?.configure(
-            title: item.title,
-            accessorySystemImageName: "backward.fill"
+    private func currentCapturePolicySettings() -> CapturePolicySettings {
+        CapturePolicySettings(
+            captureInterval: captureInterval,
+            reduceCaptureOnBattery: reduceCaptureOnBattery
         )
     }
 
-    private func makeHotKey(
-        keyCode: Int,
-        modifiers: Int,
-        handler: @escaping () -> Void
-    ) -> HotKey? {
-        guard keyCode != -1 else { return nil }
-
-        let flags = NSEvent.ModifierFlags(rawValue: UInt(modifiers))
-        var carbonMods: UInt32 = 0
-        if flags.contains(.command) { carbonMods |= UInt32(cmdKey) }
-        if flags.contains(.option) { carbonMods |= UInt32(optionKey) }
-        if flags.contains(.control) { carbonMods |= UInt32(controlKey) }
-        if flags.contains(.shift) { carbonMods |= UInt32(shiftKey) }
-
-        let hotKey = HotKey(carbonKeyCode: UInt32(keyCode), carbonModifiers: carbonMods)
-        hotKey.keyDownHandler = handler
-        return hotKey
+    private func currentCapturePolicyEnvironment() -> CapturePolicyEnvironment {
+        CapturePolicyEnvironment(
+            isOnBattery: PowerManager.isOnBattery(),
+            isLowPowerModeEnabled: ProcessInfo.processInfo.isLowPowerModeEnabled,
+            batteryChargeFraction: PowerManager.batteryChargeFraction(),
+            idleDuration: secondsSinceLastUserEvent(),
+            thermalState: ProcessInfo.processInfo.thermalState
+        )
     }
 
-    private func shortcutsConflict(_ lhsKeyCode: Int, _ lhsModifiers: Int, _ rhsKeyCode: Int, _ rhsModifiers: Int) -> Bool {
-        lhsKeyCode != -1
-            && rhsKeyCode != -1
-            && lhsKeyCode == rhsKeyCode
-            && lhsModifiers == rhsModifiers
-    }
-
-    private func makeMenuActionView(for item: NSMenuItem) -> StatusMenuActionItemView {
-        let view = StatusMenuActionItemView()
-        view.menuItem = item
-        return view
-    }
-
-    private func updateStatusItemButtonAppearance() {
-        guard let button = statusItem.button else { return }
-        let accessibilityDescription = isUserPaused ? "JustNow (Paused)" : "JustNow"
-        let assetName = isUserPaused ? "StatusBarIdle" : "StatusBarRecording"
-
-        if let image = NSImage(named: assetName)?.copy() as? NSImage {
-            image.isTemplate = true
-            image.accessibilityDescription = accessibilityDescription
-            button.image = image
-        } else {
-            button.image = NSImage(
-                systemSymbolName: "clock.arrow.circlepath",
-                accessibilityDescription: accessibilityDescription
-            )
-            button.image?.isTemplate = true
-        }
-
-        button.imagePosition = .imageOnly
-        button.title = ""
-    }
-
-    private func resolveLaunchPermissionState() -> LaunchPermissionState {
-        if ScreenCaptureManager.hasScreenRecordingPermission() {
-            return .granted
-        }
-
-        guard !didRequestScreenRecordingPermissionThisLaunch else {
-            return .deniedPreviously
-        }
-
-        didRequestScreenRecordingPermissionThisLaunch = true
-        if ScreenCaptureManager.requestScreenRecordingPermission() {
-            return .granted
-        }
-
-        isAwaitingPermissionPromptResolution = true
-        didDeactivateForPermissionPromptThisLaunch = false
-        return .requestedThisLaunch
+    private func resolveLaunchPermissionState() -> ScreenRecordingPermissionLaunchState {
+        screenRecordingPermission.resolveLaunchState(
+            hasPermission: ScreenCaptureManager.hasScreenRecordingPermission(),
+            requestPermission: ScreenCaptureManager.requestScreenRecordingPermission
+        )
     }
 
     private func handlePendingPermissionPromptResolutionIfNeeded() {
-        guard isAwaitingPermissionPromptResolution else { return }
-
-        if ScreenCaptureManager.hasScreenRecordingPermission() {
-            isAwaitingPermissionPromptResolution = false
+        switch screenRecordingPermission.resolvePendingPrompt(
+            hasPermission: ScreenCaptureManager.hasScreenRecordingPermission()
+        ) {
+        case .none:
+            return
+        case .showRestartAlert:
             updateCaptureStatus("Restart Required")
             showPermissionRestartAlert()
-            return
+        case .showPermissionAlert:
+            updateCaptureStatus("No Permission")
+            showPermissionAlert()
         }
-
-        guard didDeactivateForPermissionPromptThisLaunch else { return }
-
-        isAwaitingPermissionPromptResolution = false
-        updateCaptureStatus("No Permission")
-        showPermissionAlert()
     }
 
     private func updatePermissionHelpMenuItem() {
-        guard let menu = statusItem.menu,
-              let item = menu.item(withTag: MenuItemTag.permissionHelp) else { return }
-
         let needsPermissionHelp = !ScreenCaptureManager.hasScreenRecordingPermission()
-        item.isHidden = !needsPermissionHelp
-        item.isEnabled = needsPermissionHelp
+        statusItemController?.setPermissionHelpVisible(needsPermissionHelp)
     }
 
     private func showPermissionAlert(force: Bool = false) {
-        guard force || !didShowPermissionAlertThisLaunch else { return }
-        didShowPermissionAlertThisLaunch = true
+        guard screenRecordingPermission.consumePermissionAlertPresentation(force: force) else { return }
 
         let alert = NSAlert()
         alert.messageText = "Screen Recording Permission Required"
@@ -1426,8 +769,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate, NSMen
     }
 
     private func showPermissionRestartAlert() {
-        guard !didShowPermissionRestartAlertThisLaunch else { return }
-        didShowPermissionRestartAlertThisLaunch = true
+        guard screenRecordingPermission.consumeRestartAlertPresentation() else { return }
 
         let alert = NSAlert()
         alert.messageText = "Restart JustNow to Start Capture"

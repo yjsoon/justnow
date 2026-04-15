@@ -66,11 +66,6 @@ private enum ClearWaitResult {
     case cancelled
 }
 
-private enum OCRIndexingWorkResult: Sendable {
-    case skipped
-    case completed(frame: StoredFrame, text: String, duration: TimeInterval, indexLag: TimeInterval)
-}
-
 private struct PendingIngest {
     let cgImage: CGImage
     let timestamp: Date
@@ -91,17 +86,19 @@ class FrameBuffer {
     private var frames: [StoredFrame] = []
     private let frameStore: FrameStore
     private let retentionManager: RetentionManager
+    private let blackFrameDetector = BlackFrameDetector.screenOff
+    private lazy var ocrIndexingWorker = OCRIndexingWorker(
+        dependencies: .live(frameStore: frameStore, textCache: textCache)
+    )
     private var blackFrameFilterUntil: Date?
     private var saveOptions: FrameSaveOptions = .standard
     private var duplicatePolicy: DuplicateFramePolicy = .standard
     private var lastPruneCheck: Date = .distantPast
     private let pruneInterval: TimeInterval = 30
     private var ocrIndexingPolicy: OCRIndexingPolicy = .disabled
-    private var ocrIndexQueue: [StoredFrame] = []
-    private var queuedOCRFrameIDs: Set<UUID> = []
+    private var ocrFrameQueue = OCRFrameQueue()
     private var ocrPruningFrameIDs: Set<UUID> = []
     private var ocrIndexingTask: Task<Void, Never>?
-    private var shouldDequeueNewestOCRFrame = true
     /// Bounded backlog of captures waiting to hash and persist. Sync captures discard older async backlog rather than reordering processing, so dedupe stays chronological.
     private var ingestQueue: [PendingIngest] = []
     private var ingestProcessorTask: Task<Void, Never>?
@@ -148,7 +145,7 @@ class FrameBuffer {
 
     func addFrame(_ cgImage: CGImage, timestamp: Date) {
         // Skip black frames only during sleep/wake transitions.
-        if shouldCheckBlackFrame(at: timestamp) && isBlackFrame(cgImage) {
+        if shouldCheckBlackFrame(at: timestamp) && blackFrameDetector.isBlackFrame(cgImage) {
             print("Skipping black frame")
             return
         }
@@ -158,7 +155,7 @@ class FrameBuffer {
 
     /// Add a frame synchronously (awaits save completion). Used when opening overlay.
     func addFrameSync(_ cgImage: CGImage, timestamp: Date) async {
-        if shouldCheckBlackFrame(at: timestamp) && isBlackFrame(cgImage) {
+        if shouldCheckBlackFrame(at: timestamp) && blackFrameDetector.isBlackFrame(cgImage) {
             return
         }
 
@@ -281,7 +278,7 @@ class FrameBuffer {
         return SearchIndexStatus(
             totalFrames: frames.count,
             indexedFrames: indexedFrames,
-            queuedFrames: ocrIndexQueue.count
+            queuedFrames: ocrFrameQueue.count
         )
     }
 
@@ -675,21 +672,14 @@ class FrameBuffer {
 
     private func enqueueFrameForBackgroundOCR(_ frame: StoredFrame) {
         guard ocrIndexingPolicy.isEnabled else { return }
-        guard !queuedOCRFrameIDs.contains(frame.id) else { return }
+        guard ocrFrameQueue.enqueue(frame) else { return }
 
-        ocrIndexQueue.append(frame)
-        queuedOCRFrameIDs.insert(frame.id)
         updateOCRIndexQueueState()
         startBackgroundOCRIndexingIfNeeded()
     }
 
     private func enqueueStoredFramesForBackgroundOCR() {
-        for frame in frames {
-            guard !queuedOCRFrameIDs.contains(frame.id) else { continue }
-            ocrIndexQueue.append(frame)
-            queuedOCRFrameIDs.insert(frame.id)
-        }
-
+        ocrFrameQueue.enqueue(contentsOf: frames)
         updateOCRIndexQueueState()
     }
 
@@ -712,46 +702,16 @@ class FrameBuffer {
         ocrIndexingTask = nil
 
         guard clearQueue else { return }
-        ocrIndexQueue.removeAll()
-        queuedOCRFrameIDs.removeAll()
-        shouldDequeueNewestOCRFrame = true
+        ocrFrameQueue.clear()
         recordQueueDepthTelemetry()
     }
 
     private func removeQueuedOCRFrames(ids: Set<UUID>) {
         guard !ids.isEmpty else { return }
-        guard !ocrIndexQueue.isEmpty else { return }
+        guard !ocrFrameQueue.isEmpty else { return }
 
-        ocrIndexQueue.removeAll { ids.contains($0.id) }
-        queuedOCRFrameIDs.subtract(ids)
+        ocrFrameQueue.remove(ids: ids)
         recordQueueDepthTelemetry()
-    }
-
-    private func dequeueNextFrameForOCR() -> StoredFrame? {
-        guard !ocrIndexQueue.isEmpty else { return nil }
-
-        let frame: StoredFrame
-        if shouldDequeueNewestOCRFrame {
-            frame = ocrIndexQueue.removeLast()
-        } else {
-            frame = ocrIndexQueue.removeFirst()
-        }
-        shouldDequeueNewestOCRFrame.toggle()
-        queuedOCRFrameIDs.remove(frame.id)
-        recordQueueDepthTelemetry()
-        return frame
-    }
-
-    private func dequeueFramesForOCR(limit: Int) -> [StoredFrame] {
-        let safeLimit = max(limit, 1)
-        var batch: [StoredFrame] = []
-        batch.reserveCapacity(safeLimit)
-
-        while batch.count < safeLimit, let frame = dequeueNextFrameForOCR() {
-            batch.append(frame)
-        }
-
-        return batch
     }
 
     private func shouldContinueOCR(for frame: StoredFrame) -> Bool {
@@ -764,7 +724,7 @@ class FrameBuffer {
     private func runBackgroundOCRIndexingLoop() async {
         defer {
             ocrIndexingTask = nil
-            if ocrIndexingPolicy.isEnabled && !ocrIndexQueue.isEmpty {
+            if ocrIndexingPolicy.isEnabled && !ocrFrameQueue.isEmpty {
                 startBackgroundOCRIndexingIfNeeded()
             }
         }
@@ -772,64 +732,23 @@ class FrameBuffer {
         while !Task.isCancelled {
             guard ocrIndexingPolicy.isEnabled else { return }
             let policy = ocrIndexingPolicy
-            let frames = dequeueFramesForOCR(limit: policy.concurrentJobs)
-            guard !frames.isEmpty else { return }
+            let dequeuedFrames = ocrFrameQueue.dequeue(limit: policy.concurrentJobs)
+            recordQueueDepthTelemetry()
+            guard !dequeuedFrames.isEmpty else { return }
 
-            await withTaskGroup(of: OCRIndexingWorkResult.self) { group in
-                for frame in frames {
-                    guard shouldContinueOCR(for: frame) else { continue }
+            let framesToIndex = dequeuedFrames.filter(shouldContinueOCR(for:))
+            let indexedFrames = await ocrIndexingWorker.index(frames: framesToIndex, policy: policy)
 
-                    let frameStore = self.frameStore
-                    let textCache = self.textCache
-                    let imageMaxPixelSize = policy.searchImageMaxPixelSize
-
-                    group.addTask {
-                        if await textCache.hasCachedText(for: frame.id) {
-                            return .skipped
-                        }
-
-                        let startedAt = Date()
-
-                        do {
-                            let image: CGImage
-                            if imageMaxPixelSize > 0 {
-                                image = try await frameStore.loadSearchIndexImage(
-                                    id: frame.id,
-                                    maxPixelSize: imageMaxPixelSize
-                                )
-                            } else {
-                                image = try await frameStore.loadFullImage(id: frame.id)
-                            }
-
-                            let text = await TextRecognitionManager.extractText(from: image)
-                            guard !Task.isCancelled else { return .skipped }
-
-                            return .completed(
-                                frame: frame,
-                                text: text,
-                                duration: Date().timeIntervalSince(startedAt),
-                                indexLag: Date().timeIntervalSince(frame.timestamp)
-                            )
-                        } catch {
-                            return .skipped
-                        }
-                    }
+            for indexedFrame in indexedFrames {
+                guard !Task.isCancelled else { return }
+                guard await cacheOCRTextIfCurrent(indexedFrame.text, for: indexedFrame.frame) else {
+                    continue
                 }
 
-                for await result in group {
-                    guard !Task.isCancelled else { return }
-
-                    switch result {
-                    case .skipped:
-                        continue
-                    case let .completed(frame, text, duration, indexLag):
-                        guard await cacheOCRTextIfCurrent(text, for: frame) else {
-                            continue
-                        }
-
-                        await searchTelemetry.recordBackgroundOCR(duration: duration, indexLag: indexLag)
-                    }
-                }
+                await searchTelemetry.recordBackgroundOCR(
+                    duration: indexedFrame.duration,
+                    indexLag: indexedFrame.indexLag
+                )
             }
 
             let sleepDuration = policy.minimumInterval
@@ -840,69 +759,12 @@ class FrameBuffer {
     }
 
     private func recordQueueDepthTelemetry() {
-        let depth = ocrIndexQueue.count
+        let depth = ocrFrameQueue.count
         let capacity = ocrIndexingPolicy.maxQueueDepth
 
         Task(priority: .utility) {
             await SearchTelemetry.shared.recordQueueDepth(depth: depth, capacity: capacity)
         }
-    }
-
-    /// Detect true "screen off" frames vs dark content.
-    /// Screen-off frames are uniformly black (all ~0), dark content has variation.
-    private func isBlackFrame(_ image: CGImage) -> Bool {
-        let width = image.width
-        let height = image.height
-
-        guard width > 0 && height > 0,
-              let dataProvider = image.dataProvider,
-              let data = dataProvider.data,
-              let bytes = CFDataGetBytePtr(data) else {
-            return false
-        }
-
-        let bytesPerPixel = image.bitsPerPixel / 8
-        let bytesPerRow = image.bytesPerRow
-
-        guard bytesPerPixel >= 3 else { return false }
-        let gridSize = 8
-        var maxY: UInt8 = 0
-        var minY: UInt8 = 255
-        var darkCount = 0
-        var sampleCount = 0
-
-        for gy in 0..<gridSize {
-            let y = (height * (2 * gy + 1)) / (2 * gridSize)
-            for gx in 0..<gridSize {
-                let x = (width * (2 * gx + 1)) / (2 * gridSize)
-                let offset = y * bytesPerRow + x * bytesPerPixel
-                let r = bytes[offset]
-                let g = bytes[offset + 1]
-                let b = bytes[offset + 2]
-
-                // Integer luma approximation: 0.2126r + 0.7152g + 0.0722b
-                let luma = UInt8((UInt16(r) * 54 + UInt16(g) * 183 + UInt16(b) * 19) >> 8)
-
-                maxY = max(maxY, luma)
-                minY = min(minY, luma)
-                if luma < 5 { darkCount += 1 }
-                sampleCount += 1
-            }
-        }
-
-        guard sampleCount > 0 else { return false }
-
-        let darkRatio = Double(darkCount) / Double(sampleCount)
-
-        // True black frame: mostly dark and uniform
-        // - Max luma < 6 (true black, not just dark)
-        // - Luma range < 3 (uniform, no structure)
-        // - At least 95% of samples are dark
-        let isVeryDark = maxY < 6
-        let isUniform = (maxY - minY) < 3
-        let isMostlyDark = darkRatio >= 0.95
-
-        return isVeryDark && isUniform && isMostlyDark
     }
 
     private func shouldCheckBlackFrame(at timestamp: Date) -> Bool {

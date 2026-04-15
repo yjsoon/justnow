@@ -8,20 +8,20 @@ import Sparkle
 import Foundation
 
 struct SettingsView: View {
-    @AppStorage("captureInterval") private var captureInterval: Double = 0.5
-    @AppStorage("rewindHistorySeconds")
-    private var rewindHistorySeconds: Double = RewindHistoryOption.defaultValue.rawValue
-    @AppStorage("recentTimelineWindowSeconds")
-    private var recentTimelineWindowSeconds: Double = RecentTimelineWindow.defaultValue.rawValue
-    @AppStorage("reduceCaptureOnBattery") private var reduceCaptureOnBattery: Bool = true
-    @AppStorage("shortcutKeyCode") private var shortcutKeyCode: Int = 38  // J key
-    @AppStorage("shortcutModifiers") private var shortcutModifiers: Int = 1_572_864  // ⌘⌥
-    @AppStorage("capturePauseShortcutKeyCode") private var capturePauseShortcutKeyCode: Int = 38  // J key
-    @AppStorage("capturePauseShortcutModifiers") private var capturePauseShortcutModifiers: Int = 1_703_936  // ⌘⌥⇧
-    @AppStorage("overlayDismissKeyCode") private var overlayDismissKeyCode: Int = 53
-    @AppStorage("overlayDismissModifiers") private var overlayDismissModifiers: Int = 0
-    @AppStorage("textGrabSoundEnabled") private var textGrabSoundEnabled: Bool = true
-    @AppStorage("textGrabDebugPreviewEnabled") private var textGrabDebugPreviewEnabled: Bool = false
+    @AppStorage(AppStorageKey.captureInterval) private var captureInterval: Double = AppStorageDefault.captureInterval
+    @AppStorage(AppStorageKey.rewindHistorySeconds)
+    private var rewindHistorySeconds: Double = AppStorageDefault.rewindHistorySeconds
+    @AppStorage(AppStorageKey.recentTimelineWindowSeconds)
+    private var recentTimelineWindowSeconds: Double = AppStorageDefault.recentTimelineWindowSeconds
+    @AppStorage(AppStorageKey.reduceCaptureOnBattery) private var reduceCaptureOnBattery: Bool = AppStorageDefault.reduceCaptureOnBattery
+    @AppStorage(AppStorageKey.shortcutKeyCode) private var shortcutKeyCode: Int = AppStorageDefault.shortcutKeyCode
+    @AppStorage(AppStorageKey.shortcutModifiers) private var shortcutModifiers: Int = AppStorageDefault.shortcutModifiers
+    @AppStorage(AppStorageKey.capturePauseShortcutKeyCode) private var capturePauseShortcutKeyCode: Int = AppStorageDefault.capturePauseShortcutKeyCode
+    @AppStorage(AppStorageKey.capturePauseShortcutModifiers) private var capturePauseShortcutModifiers: Int = AppStorageDefault.capturePauseShortcutModifiers
+    @AppStorage(AppStorageKey.overlayDismissKeyCode) private var overlayDismissKeyCode: Int = AppStorageDefault.overlayDismissKeyCode
+    @AppStorage(AppStorageKey.overlayDismissModifiers) private var overlayDismissModifiers: Int = AppStorageDefault.overlayDismissModifiers
+    @AppStorage(AppStorageKey.textGrabSoundEnabled) private var textGrabSoundEnabled: Bool = AppStorageDefault.textGrabSoundEnabled
+    @AppStorage(AppStorageKey.textGrabDebugPreviewEnabled) private var textGrabDebugPreviewEnabled: Bool = AppStorageDefault.textGrabDebugPreviewEnabled
 
     var context: SettingsContext = SettingsContext()
 
