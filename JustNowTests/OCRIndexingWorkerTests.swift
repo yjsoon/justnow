@@ -28,14 +28,7 @@ final class OCRIndexingWorkerTests: XCTestCase {
 
         let indexedFrames = await worker.index(
             frames: [cachedFrame, uncachedFrame],
-            policy: OCRIndexingPolicy(
-                isEnabled: true,
-                minimumInterval: 0,
-                maxQueueDepth: 8,
-                maxFrameAge: 300,
-                concurrentJobs: 2,
-                searchImageMaxPixelSize: 1440
-            )
+            searchImageMaxPixelSize: 1440
         )
 
         XCTAssertEqual(indexedFrames.map(\.frame.id), [uncachedFrame.id])
@@ -68,14 +61,7 @@ final class OCRIndexingWorkerTests: XCTestCase {
 
         let indexedFrames = await worker.index(
             frames: [frame],
-            policy: OCRIndexingPolicy(
-                isEnabled: true,
-                minimumInterval: 0,
-                maxQueueDepth: 4,
-                maxFrameAge: 300,
-                concurrentJobs: 1,
-                searchImageMaxPixelSize: 960
-            )
+            searchImageMaxPixelSize: 960
         )
 
         XCTAssertEqual(indexedFrames.count, 1)
@@ -109,14 +95,7 @@ final class OCRIndexingWorkerTests: XCTestCase {
 
         let indexedFrames = await worker.index(
             frames: [failedFrame, successfulFrame],
-            policy: OCRIndexingPolicy(
-                isEnabled: true,
-                minimumInterval: 0,
-                maxQueueDepth: 4,
-                maxFrameAge: 300,
-                concurrentJobs: 2,
-                searchImageMaxPixelSize: 0
-            )
+            searchImageMaxPixelSize: 0
         )
 
         XCTAssertEqual(indexedFrames.map(\.frame.id), [successfulFrame.id])
