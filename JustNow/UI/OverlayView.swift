@@ -3,8 +3,8 @@
 //  JustNow
 //
 
-import SwiftUI
 import CoreGraphics
+import SwiftUI
 
 private enum OverlayChromeMetrics {
     static let controlSize: CGFloat = 40
@@ -20,7 +20,10 @@ struct OverlayView: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.85)
+            Color.black
+                .ignoresSafeArea()
+
+            OverlayBackdropView(viewModel: viewModel)
                 .ignoresSafeArea()
 
             Button(action: viewModel.onDismiss) {
@@ -42,6 +45,40 @@ struct OverlayView: View {
                     OverlayTopBar(viewModel: viewModel)
                 }
             }
+        }
+    }
+}
+
+private struct OverlayBackdropView: View {
+    let viewModel: OverlayViewModel
+    @State private var backdropImage: NSImage?
+
+    private var presentedFrame: StoredFrame? {
+        viewModel.presentedFrame
+    }
+
+    var body: some View {
+        ZStack {
+            if let backdropImage {
+                Image(nsImage: backdropImage)
+                    .resizable()
+                    .scaledToFill()
+                    .saturation(0.6)
+                    .blur(radius: 28)
+                    .opacity(0.15)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.18), value: presentedFrame?.id)
+        .task(id: presentedFrame?.id) {
+            guard let presentedFrame else {
+                backdropImage = nil
+                return
+            }
+
+            let thumbnail = await viewModel.frameBuffer.getThumbnail(for: presentedFrame)
+            guard !Task.isCancelled else { return }
+            backdropImage = thumbnail
         }
     }
 }
@@ -160,6 +197,7 @@ struct ContentAreaView: View {
         .onChange(of: displayedFrames.count) { _, frameCount in
             if frameCount == 0 {
                 textGrabBannerState = .hint
+                viewModel.setPresentedFrame(nil)
             }
         }
     }
@@ -234,8 +272,9 @@ private struct OverlayChromeButton: View {
                 .background(backgroundFill, in: Circle())
                 .overlay {
                     Circle()
-                        .stroke(borderColor, lineWidth: 1)
+                        .stroke(borderColor, lineWidth: 1.25)
                 }
+                .shadow(color: .black.opacity(isSelected ? 0.2 : 0.32), radius: 14, y: 6)
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
@@ -246,18 +285,18 @@ private struct OverlayChromeButton: View {
     }
 
     private var foregroundStyle: Color {
-        isSelected ? .black.opacity(0.88) : .white.opacity(isEnabled ? 0.86 : 0.46)
+        isSelected ? .black.opacity(0.9) : .white.opacity(isEnabled ? 0.96 : 0.5)
     }
 
     private var backgroundFill: Color {
         if isSelected {
-            return Color.white.opacity(0.95)
+            return Color.white.opacity(0.96)
         }
-        return Color.black.opacity(0.72)
+        return Color.white.opacity(0.16)
     }
 
     private var borderColor: Color {
-        isSelected ? .white.opacity(0.42) : .white.opacity(0.1)
+        isSelected ? .white.opacity(0.52) : .white.opacity(0.28)
     }
 }
 

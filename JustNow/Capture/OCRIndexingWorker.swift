@@ -55,14 +55,12 @@ struct OCRIndexingWorker {
         self.dependencies = dependencies
     }
 
-    func index(frames: [StoredFrame], policy: OCRIndexingPolicy) async -> [OCRIndexedFrame] {
-        let imageMaxPixelSize = policy.searchImageMaxPixelSize
-
+    func index(frames: [StoredFrame], searchImageMaxPixelSize: Int) async -> [OCRIndexedFrame] {
         return await withTaskGroup(of: OCRIndexedFrame?.self, returning: [OCRIndexedFrame].self) { group in
             for frame in frames {
                 group.addTask {
                     guard !(await dependencies.hasCachedText(frame.id)) else { return nil }
-                    return await dependencies.indexFrame(frame, imageMaxPixelSize)
+                    return await dependencies.indexFrame(frame, searchImageMaxPixelSize)
                 }
             }
 

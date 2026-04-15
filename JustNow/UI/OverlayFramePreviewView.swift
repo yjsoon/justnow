@@ -129,6 +129,7 @@ struct FramePreviewView: View {
                 loadOverlayTask = nil
                 image = loadedImage
                 loadedFrameID = frame.id
+                viewModel.setPresentedFrame(frame)
             } catch is CancellationError {
                 loadOverlayTask?.cancel()
                 loadOverlayTask = nil
@@ -140,6 +141,7 @@ struct FramePreviewView: View {
                 image = nil
                 loadedFrameID = nil
                 loadFailed = true
+                viewModel.setPresentedFrame(nil)
             }
 
             guard !Task.isCancelled else { return }

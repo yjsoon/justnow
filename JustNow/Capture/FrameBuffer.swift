@@ -672,14 +672,30 @@ class FrameBuffer {
 
     private func enqueueFrameForBackgroundOCR(_ frame: StoredFrame) {
         guard ocrIndexingPolicy.isEnabled else { return }
+        let policy = ocrIndexingPolicy
+        if let minimumTimestamp = minimumQueuedOCRFrameTimestamp(for: policy),
+           frame.timestamp < minimumTimestamp {
+            return
+        }
         guard ocrFrameQueue.enqueue(frame) else { return }
 
+        applyOCRQueuePolicy(policy)
         updateOCRIndexQueueState()
         startBackgroundOCRIndexingIfNeeded()
     }
 
     private func enqueueStoredFramesForBackgroundOCR() {
-        ocrFrameQueue.enqueue(contentsOf: frames)
+        let policy = ocrIndexingPolicy
+        let minimumTimestamp = minimumQueuedOCRFrameTimestamp(for: policy)
+        let eligibleFrames: [StoredFrame]
+        if let minimumTimestamp {
+            eligibleFrames = frames.filter { $0.timestamp >= minimumTimestamp }
+        } else {
+            eligibleFrames = frames
+        }
+
+        ocrFrameQueue.enqueue(contentsOf: eligibleFrames)
+        applyOCRQueuePolicy(policy)
         updateOCRIndexQueueState()
     }
 
@@ -732,12 +748,17 @@ class FrameBuffer {
         while !Task.isCancelled {
             guard ocrIndexingPolicy.isEnabled else { return }
             let policy = ocrIndexingPolicy
+            applyOCRQueuePolicy(policy)
+            recordQueueDepthTelemetry()
             let dequeuedFrames = ocrFrameQueue.dequeue(limit: policy.concurrentJobs)
             recordQueueDepthTelemetry()
             guard !dequeuedFrames.isEmpty else { return }
 
             let framesToIndex = dequeuedFrames.filter(shouldContinueOCR(for:))
-            let indexedFrames = await ocrIndexingWorker.index(frames: framesToIndex, policy: policy)
+            let indexedFrames = await ocrIndexingWorker.index(
+                frames: framesToIndex,
+                searchImageMaxPixelSize: policy.searchImageMaxPixelSize
+            )
 
             for indexedFrame in indexedFrames {
                 guard !Task.isCancelled else { return }
@@ -765,6 +786,18 @@ class FrameBuffer {
         Task(priority: .utility) {
             await SearchTelemetry.shared.recordQueueDepth(depth: depth, capacity: capacity)
         }
+    }
+
+    private func applyOCRQueuePolicy(_ policy: OCRIndexingPolicy) {
+        if let minimumTimestamp = minimumQueuedOCRFrameTimestamp(for: policy) {
+            ocrFrameQueue.discardOlderThan(minimumTimestamp)
+        }
+        ocrFrameQueue.trimToNewest(maxDepth: policy.maxQueueDepth)
+    }
+
+    private func minimumQueuedOCRFrameTimestamp(for policy: OCRIndexingPolicy, now: Date = Date()) -> Date? {
+        guard policy.maxFrameAge > 0 else { return nil }
+        return now.addingTimeInterval(-policy.maxFrameAge)
     }
 
     private func shouldCheckBlackFrame(at timestamp: Date) -> Bool {

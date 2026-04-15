@@ -26,6 +26,27 @@ struct OCRFrameQueue {
         }
     }
 
+    mutating func discardOlderThan(_ minimumTimestamp: Date) {
+        guard !frames.isEmpty else { return }
+
+        frames.removeAll { $0.timestamp < minimumTimestamp }
+        queuedFrameIDs = Set(frames.map(\.id))
+    }
+
+    mutating func trimToNewest(maxDepth: Int) {
+        let safeDepth = max(maxDepth, 0)
+        guard safeDepth < frames.count else { return }
+
+        if safeDepth == 0 {
+            clear()
+            return
+        }
+
+        let droppedFrames = frames.prefix(frames.count - safeDepth)
+        queuedFrameIDs.subtract(droppedFrames.map(\.id))
+        frames.removeFirst(frames.count - safeDepth)
+    }
+
     mutating func clear() {
         frames.removeAll()
         queuedFrameIDs.removeAll()
