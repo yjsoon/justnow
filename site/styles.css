@@ -140,9 +140,9 @@ img {
 }
 
 .header-icon {
-  width: 1.5rem;
-  height: 1.5rem;
-  border-radius: 0.35rem;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
   overflow: hidden;
   flex-shrink: 0;
 }
@@ -190,7 +190,7 @@ img {
 }
 
 .hero-sub {
-  max-width: 60ch;
+  max-width: none;
   margin: var(--space-lg) 0 0;
   font-size: var(--text-md);
   line-height: 1.65;
