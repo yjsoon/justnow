@@ -16,19 +16,26 @@ Usage:
     python3 Scripts/generate-hero-screenshot.py content.png output.jpg --compose
 
 Styling is matched to UI/TextGrabSelectionOverlay.swift and
-UI/CaptureOverlayView.swift.
+UI/OverlayView.swift.
 """
 
 import argparse
-import math
+import functools
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+try:
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont
+except ImportError:
+    raise SystemExit(
+        "This script requires Pillow. Install it with:\n"
+        "  python3 -m pip install Pillow"
+    )
 
 # ── Fonts ──────────────────────────────────────────────────────────────────
 
-def _load_font(size: int, mono: bool = False) -> ImageFont.FreeTypeFont:
+@functools.lru_cache(maxsize=32)
+def _load_font(size: int, mono: bool = False) -> ImageFont.ImageFont:
     """Load a system font, falling back gracefully."""
     candidates = (
         ["/System/Library/Fonts/SFNSMono.ttf"] if mono else
@@ -62,12 +69,12 @@ CURSOR_OUTER_ALPHA = 0.39
 CURSOR_INNER_WIDTH = 1.7
 CURSOR_INNER_ALPHA = 0.96
 
-# ── Chrome styling (from CaptureOverlayView.swift) ────────────────────────
+# ── Chrome styling (from OverlayView.swift — OverlayChromeButton) ─────────
 
 CHROME_BUTTON_SIZE_PT = 40
-CHROME_BUTTON_BG = (0, 0, 0, int(255 * 0.72))
-CHROME_BUTTON_BORDER = (255, 255, 255, int(255 * 0.10))
-CHROME_BUTTON_ICON = (255, 255, 255, int(255 * 0.86))
+CHROME_BUTTON_BG = (255, 255, 255, int(255 * 0.16))
+CHROME_BUTTON_BORDER = (255, 255, 255, int(255 * 0.28))
+CHROME_BUTTON_ICON = (255, 255, 255, int(255 * 0.96))
 CHROME_TOP_PAD_PT = 24
 CHROME_SIDE_PAD_PT = 28
 
@@ -77,7 +84,7 @@ PILL_TEXT_COLOUR = (255, 255, 255, int(255 * 0.70))
 
 TIMELINE_BG = (0, 0, 0, int(255 * 0.85))
 TIMELINE_BORDER = (255, 255, 255, int(255 * 0.08))
-TIMELINE_CORNER_PT = 20
+TIMELINE_CORNER_PT = 20  # compositing-only; the real overlay doesn't wrap the timeline in a rounded rect
 TIMELINE_TRACK_H_PT = 10
 TIMELINE_TRACK_BG = (48, 48, 54, 255)
 TIMELINE_SCRUBBER_SIZE_PT = 24
@@ -229,7 +236,6 @@ def compose_overlay(
 
     # ── Fonts at various sizes ──
     font_icon = _load_font(px(16, scale))
-    font_icon_sm = _load_font(px(14, scale))
     font_pill = _load_font(px(11, scale))
     font_label = _load_font(px(10, scale))
     font_marker = _load_font(px(10, scale))
@@ -341,15 +347,22 @@ def compose_overlay(
         (track_x1, track_y, track_x2, track_y + track_h),
         radius=track_h // 2, fill=TIMELINE_TRACK_BG)
 
-    # Coloured zones on track (older → newer gradient)
+    # Coloured zones on track (from OverlayTimeline.swift timelineColourSegments)
     zone_border = track_x1 + int((track_x2 - track_x1) * 0.75)
     older_colour = (77, 71, 79, int(255 * 0.88))
     newer_colour = (140, 133, 143, int(255 * 0.88))
-    # Green progress bar (indicating captured range)
+    draw.rounded_rectangle(
+        (track_x1, track_y, zone_border, track_y + track_h),
+        radius=track_h // 2, fill=older_colour)
+    draw.rounded_rectangle(
+        (zone_border, track_y, track_x2, track_y + track_h),
+        radius=track_h // 2, fill=newer_colour)
+
+    # White progress fill (matches Color.white.opacity(0.55) in Swift)
     progress_end = track_x1 + int((track_x2 - track_x1) * 0.92)
     draw.rounded_rectangle(
         (track_x1, track_y, progress_end, track_y + track_h),
-        radius=track_h // 2, fill=(80, 140, 90, int(255 * 0.6)))
+        radius=track_h // 2, fill=(255, 255, 255, int(255 * 0.55)))
 
     # Scrubber handle
     scrubber_r = px(TIMELINE_SCRUBBER_SIZE_PT, scale) // 2
@@ -394,7 +407,10 @@ def compose_overlay(
     toast_content_h = title_th + (px(4, scale) + sub_th if has_sub else 0)
     toast_h = toast_content_h + toast_pad_y * 2
     toast_x1 = (w - toast_w) // 2
-    toast_y1 = h - px(12, scale) - toast_h
+    # Position inside the timeline footer (between track bottom and timeline bar bottom)
+    tl_bottom = h - tl_pad_bottom
+    toast_area_top = track_y + track_h + px(24, scale)
+    toast_y1 = toast_area_top + (tl_bottom - toast_area_top - toast_h) // 2
 
     draw_capsule(draw,
         (toast_x1, toast_y1, toast_x1 + toast_w, toast_y1 + toast_h),
@@ -443,14 +459,16 @@ def auto_selection_rect(w: int, h: int) -> tuple[int, int, int, int]:
 # ── Main ──────────────────────────────────────────────────────────────────
 
 def main():
+    repo_root = Path(__file__).resolve().parent.parent
+
     parser = argparse.ArgumentParser(
         description="Generate the JustNow hero screenshot.")
     parser.add_argument(
-        "base", nargs="?", default="site/assets/hero-base.png",
-        help="Base or content screenshot path")
+        "base", nargs="?", default=str(repo_root / "site/assets/hero-base.png"),
+        help="Base or content screenshot path (default: site/assets/hero-base.png)")
     parser.add_argument(
-        "output", nargs="?", default="site/assets/justnow-overlay-hero.jpg",
-        help="Output path")
+        "output", nargs="?", default=str(repo_root / "site/assets/justnow-overlay-hero.jpg"),
+        help="Output path (default: site/assets/justnow-overlay-hero.jpg)")
     parser.add_argument(
         "--compose", action="store_true",
         help="Compose mode: treat base as content-only and draw overlay chrome")
@@ -508,8 +526,16 @@ def main():
     # Selection rectangle
     if not args.no_selection:
         if args.rect:
-            parts = [int(v) for v in args.rect.split(",")]
-            rect = tuple(parts)
+            raw = args.rect.split(",")
+            if len(raw) != 4:
+                raise SystemExit(
+                    f"error: --rect expects 4 comma-separated integers "
+                    f"(x1,y1,x2,y2), got {len(raw)} value(s)")
+            try:
+                rect = tuple(int(v) for v in raw)
+            except ValueError:
+                raise SystemExit(
+                    "error: --rect expects 4 comma-separated integers (x1,y1,x2,y2)")
         else:
             rect = auto_selection_rect(w, h)
         print(f"Selection: {rect}")
@@ -518,7 +544,16 @@ def main():
         # Crosshair cursor
         if args.cursor != "none":
             if args.cursor:
-                cpos = tuple(int(v) for v in args.cursor.split(","))
+                cursor_parts = args.cursor.split(",")
+                if len(cursor_parts) != 2:
+                    raise SystemExit(
+                        f"error: --cursor expects 2 comma-separated integers "
+                        f"(x,y), got {len(cursor_parts)} value(s)")
+                try:
+                    cpos = tuple(int(v) for v in cursor_parts)
+                except ValueError:
+                    raise SystemExit(
+                        "error: --cursor expects 2 comma-separated integers (x,y)")
             else:
                 cpos = (
                     rect[0] + round((rect[2] - rect[0]) * 0.75),
