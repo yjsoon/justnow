@@ -27,6 +27,8 @@ enum OverlayKeyboardAction: Equatable {
     case moveRight
     case jumpRight
     case goToEnd
+    case cycleDisplayForward
+    case cycleDisplayBackward
 }
 
 func resolveOverlayKeyboardAction(
@@ -82,6 +84,12 @@ func resolveOverlayKeyboardAction(
             return .jumpRight
         }
         return .moveRight
+
+    case UInt16(kVK_Tab):
+        if state.isSearchAvailable && state.isSearching {
+            return .passthrough
+        }
+        return pressedModifiers.contains(.shift) ? .cycleDisplayBackward : .cycleDisplayForward
 
     default:
         return matchesDismissShortcut ? .dismissOverlay : .passthrough

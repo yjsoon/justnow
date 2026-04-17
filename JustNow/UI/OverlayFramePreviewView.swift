@@ -1,6 +1,21 @@
 import CoreGraphics
 import SwiftUI
 
+/// Draws a CGImage scaled into its frame. Uses a SwiftUI Canvas so no
+/// NSViewRepresentable-driven intrinsic size can leak up the layout tree —
+/// that feedback path grew the overlay unboundedly on macOS 26 when different
+/// displays produced frames with different pixel dimensions.
+private struct ScaledFrameImageView: View {
+    let image: CGImage
+
+    var body: some View {
+        Canvas { context, size in
+            let swiftUIImage = Image(decorative: image, scale: 1, orientation: .up)
+            context.draw(swiftUIImage, in: CGRect(origin: .zero, size: size))
+        }
+    }
+}
+
 struct FramePreviewView: View {
     let frame: StoredFrame
     let viewModel: OverlayViewModel
@@ -35,32 +50,31 @@ struct FramePreviewView: View {
     var body: some View {
         Group {
             if let image = image {
-                ZStack {
-                    Image(nsImage: imageFromCGImage(image))
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
+                GeometryReader { proxy in
+                    let fitted = fittedSize(for: image, in: proxy.size)
+                    ScaledFrameImageView(image: image)
+                        .frame(width: fitted.width, height: fitted.height)
                         .overlay {
-                            ZStack {
-                                if isShowingCurrentFrame, shouldShowSearchHighlights, let searchTextLayout {
-                                    SearchHighlightOverlay(
-                                        image: image,
-                                        layout: searchTextLayout,
-                                        query: viewModel.searchQuery
-                                    )
-                                    .allowsHitTesting(false)
-                                }
-
-                                if isShowingCurrentFrame {
-                                    TextGrabSelectionOverlay(
-                                        image: image,
-                                        viewModel: viewModel,
-                                        soundEnabled: textGrabSoundEnabled,
-                                        debugCaptureEnabled: textGrabDebugPreviewEnabled,
-                                        bannerState: $textGrabBannerState,
-                                        debugSnapshot: $textGrabDebugSnapshot
-                                    )
-                                    .id(frame.id)
-                                }
+                            if isShowingCurrentFrame, shouldShowSearchHighlights, let searchTextLayout {
+                                SearchHighlightOverlay(
+                                    image: image,
+                                    layout: searchTextLayout,
+                                    query: viewModel.searchQuery
+                                )
+                                .allowsHitTesting(false)
+                            }
+                        }
+                        .overlay {
+                            if isShowingCurrentFrame {
+                                TextGrabSelectionOverlay(
+                                    image: image,
+                                    viewModel: viewModel,
+                                    soundEnabled: textGrabSoundEnabled,
+                                    debugCaptureEnabled: textGrabDebugPreviewEnabled,
+                                    bannerState: $textGrabBannerState,
+                                    debugSnapshot: $textGrabDebugSnapshot
+                                )
+                                .id(frame.id)
                             }
                         }
                         .overlay(alignment: .bottomLeading) {
@@ -76,9 +90,11 @@ struct FramePreviewView: View {
                                     .fill(.black.opacity(0.045))
                             }
                         }
+                        .clipShape(.rect(cornerRadius: 16))
+                        .shadow(color: .black.opacity(0.5), radius: 30)
+                        .frame(width: proxy.size.width, height: proxy.size.height, alignment: .center)
                 }
-                .clipShape(.rect(cornerRadius: 16))
-                .shadow(color: .black.opacity(0.5), radius: 30)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 RoundedRectangle(cornerRadius: 16)
                     .fill(.white.opacity(0.05))
@@ -163,6 +179,23 @@ struct FramePreviewView: View {
             guard !Task.isCancelled else { return }
             searchTextLayout = layout
         }
+    }
+
+    private func aspectRatio(of image: CGImage) -> CGFloat {
+        let width = max(1, CGFloat(image.width))
+        let height = max(1, CGFloat(image.height))
+        return width / height
+    }
+
+    private func fittedSize(for image: CGImage, in available: CGSize) -> CGSize {
+        guard available.width > 0, available.height > 0 else { return .zero }
+        let aspect = aspectRatio(of: image)
+        if available.width / available.height > aspect {
+            let height = available.height
+            return CGSize(width: height * aspect, height: height)
+        }
+        let width = available.width
+        return CGSize(width: width, height: width / aspect)
     }
 }
 

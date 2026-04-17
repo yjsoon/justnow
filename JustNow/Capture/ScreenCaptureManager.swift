@@ -40,6 +40,12 @@ class ScreenCaptureManager: NSObject {
     weak var delegate: ScreenCaptureDelegate?
     private(set) var isCapturing = false
     private(set) var captureInterval: TimeInterval = 1.0
+    let targetDisplayID: CGDirectDisplayID
+
+    init(targetDisplayID: CGDirectDisplayID) {
+        self.targetDisplayID = targetDisplayID
+        super.init()
+    }
 
     /// Serial loop: each capture completes before the next is scheduled.
     private var captureLoopTask: Task<Void, Never>?
@@ -77,7 +83,8 @@ class ScreenCaptureManager: NSObject {
 
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         try Task.checkCancellation()
-        guard let display = content.displays.first else {
+        guard let display = content.displays.first(where: { $0.displayID == targetDisplayID })
+            ?? content.displays.first else {
             throw CaptureError.noDisplay
         }
 

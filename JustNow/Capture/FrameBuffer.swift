@@ -11,6 +11,8 @@ struct StoredFrame: Identifiable, Sendable {
     let id: UUID
     let timestamp: Date
     let hash: UInt64
+    let displayID: UUID?
+    let displayName: String?
 }
 
 struct DuplicateFramePolicy: Sendable, Equatable {
@@ -70,6 +72,8 @@ private struct PendingIngest {
     let cgImage: CGImage
     let timestamp: Date
     let generation: Int
+    let displayID: UUID?
+    let displayName: String?
     let syncContinuation: CheckedContinuation<SyncIngestResult, Never>?
 }
 
@@ -117,7 +121,7 @@ class FrameBuffer {
     var isPruningPaused: Bool = false
 
     // Thumbnail cache for quick access
-    private let thumbnailCache = NSCache<NSUUID, NSImage>()
+    private let thumbnailCache = NSCache<NSUUID, CachedCGImageBox>()
     private let fullImageCache = NSCache<NSUUID, CachedCGImageBox>()
     private var inFlightFullImageLoads: [UUID: Task<CachedCGImageBox, Error>] = [:]
 
@@ -143,18 +147,24 @@ class FrameBuffer {
 
     // MARK: - Capture
 
-    func addFrame(_ cgImage: CGImage, timestamp: Date) {
+    func addFrame(_ cgImage: CGImage, timestamp: Date, display: DisplayInfo?) {
         // Skip black frames only during sleep/wake transitions.
         if shouldCheckBlackFrame(at: timestamp) && blackFrameDetector.isBlackFrame(cgImage) {
             print("Skipping black frame")
             return
         }
 
-        enqueueIngest(cgImage: cgImage, timestamp: timestamp, syncContinuation: nil, prioritiseSync: false)
+        enqueueIngest(
+            cgImage: cgImage,
+            timestamp: timestamp,
+            display: display,
+            syncContinuation: nil,
+            prioritiseSync: false
+        )
     }
 
     /// Add a frame synchronously (awaits save completion). Used when opening overlay.
-    func addFrameSync(_ cgImage: CGImage, timestamp: Date) async {
+    func addFrameSync(_ cgImage: CGImage, timestamp: Date, display: DisplayInfo?) async {
         if shouldCheckBlackFrame(at: timestamp) && blackFrameDetector.isBlackFrame(cgImage) {
             return
         }
@@ -174,6 +184,7 @@ class FrameBuffer {
                 enqueueIngest(
                     cgImage: cgImage,
                     timestamp: timestamp,
+                    display: display,
                     syncContinuation: continuation,
                     prioritiseSync: true
                 )
@@ -214,20 +225,33 @@ class FrameBuffer {
 
     /// Get frames with near-duplicates removed for smoother browsing.
     /// The newest window keeps all stored frames so keyboard navigation tracks recent capture cadence.
+    /// When `displayID` is set, frames are filtered to that display. Pass
+    /// `includeLegacyFrames` for the primary-display slot so pre-multi-display
+    /// captures remain visible.
     func getFilteredFrames(
         hashThreshold: Int = 3,
         recentWindow: TimeInterval = 300,
-        maximumAge: TimeInterval? = nil
+        maximumAge: TimeInterval? = nil,
+        displayID: UUID? = nil,
+        includeLegacyFrames: Bool = false
     ) -> [StoredFrame] {
         guard !frames.isEmpty else { return [] }
 
         let now = Date()
-        let candidateFrames: [StoredFrame]
+        var candidateFrames: [StoredFrame]
         if let maximumAge {
             let cutoff = now.addingTimeInterval(-maximumAge)
             candidateFrames = frames.filter { $0.timestamp >= cutoff }
         } else {
             candidateFrames = frames
+        }
+        if let displayID {
+            candidateFrames = candidateFrames.filter { frame in
+                if let frameDisplayID = frame.displayID {
+                    return frameDisplayID == displayID
+                }
+                return includeLegacyFrames
+            }
         }
 
         var filtered: [StoredFrame] = []
@@ -267,6 +291,25 @@ class FrameBuffer {
     func getRecentFrames(within seconds: TimeInterval) -> [StoredFrame] {
         let cutoff = Date().addingTimeInterval(-seconds)
         return frames.filter { $0.timestamp >= cutoff }
+    }
+
+    /// Displays that have at least one frame in the buffer. Ordered by most
+    /// recent capture first so the overlay can surface active displays before
+    /// ones that have gone quiet.
+    func knownDisplays() -> [(id: UUID, name: String)] {
+        var seen: Set<UUID> = []
+        var ordered: [(id: UUID, name: String)] = []
+        for frame in frames.reversed() {
+            guard let id = frame.displayID else { continue }
+            if seen.insert(id).inserted {
+                ordered.append((id, frame.displayName ?? "Display"))
+            }
+        }
+        return ordered
+    }
+
+    var hasLegacyFrames: Bool {
+        frames.contains { $0.displayID == nil }
     }
 
     var frameCount: Int {
@@ -324,23 +367,19 @@ class FrameBuffer {
     }
 
     /// Get thumbnail, with caching
-    func getThumbnail(for frame: StoredFrame) async -> NSImage? {
+    func getThumbnail(for frame: StoredFrame) async -> CGImage? {
         let key = frame.id as NSUUID
 
         if let cached = thumbnailCache.object(forKey: key) {
-            return cached
+            return cached.image
         }
 
         guard let cgImage = await frameStore.loadThumbnail(id: frame.id) else {
             return nil
         }
 
-        let nsImage = NSImage(
-            cgImage: cgImage,
-            size: NSSize(width: cgImage.width, height: cgImage.height)
-        )
-        thumbnailCache.setObject(nsImage, forKey: key)
-        return nsImage
+        thumbnailCache.setObject(CachedCGImageBox(cgImage), forKey: key)
+        return cgImage
     }
 
     // MARK: - Management
@@ -420,7 +459,15 @@ class FrameBuffer {
 
         frames = metadata
             .sorted { $0.timestamp < $1.timestamp }
-            .map { StoredFrame(id: $0.id, timestamp: $0.timestamp, hash: $0.hash) }
+            .map {
+                StoredFrame(
+                    id: $0.id,
+                    timestamp: $0.timestamp,
+                    hash: $0.hash,
+                    displayID: $0.displayID,
+                    displayName: $0.displayName
+                )
+            }
     }
 
     func enableBlackFrameFilter(for seconds: TimeInterval) {
@@ -486,6 +533,7 @@ class FrameBuffer {
     private func enqueueIngest(
         cgImage: CGImage,
         timestamp: Date,
+        display: DisplayInfo?,
         syncContinuation: CheckedContinuation<SyncIngestResult, Never>?,
         prioritiseSync: Bool
     ) {
@@ -498,6 +546,8 @@ class FrameBuffer {
             cgImage: cgImage,
             timestamp: timestamp,
             generation: ingestGeneration,
+            displayID: display?.id,
+            displayName: display?.name,
             syncContinuation: syncContinuation
         )
 
@@ -555,6 +605,8 @@ class FrameBuffer {
                 cgImage: work.cgImage,
                 timestamp: work.timestamp,
                 hash: hash,
+                displayID: work.displayID,
+                displayName: work.displayName,
                 ingestGeneration: work.generation
             )
         }
@@ -569,15 +621,19 @@ class FrameBuffer {
         cgImage: CGImage,
         timestamp: Date,
         hash: UInt64,
+        displayID: UUID?,
+        displayName: String?,
         ingestGeneration generation: Int
     ) async -> SyncIngestResult {
         guard generation == ingestGeneration else { return .retryAfterClear }
-        guard shouldStoreFrame(hash: hash, timestamp: timestamp) else { return .completed }
+        guard shouldStoreFrame(hash: hash, timestamp: timestamp, displayID: displayID) else { return .completed }
         do {
             let metadata = try await frameStore.saveFrame(
                 cgImage,
                 timestamp: timestamp,
                 hash: hash,
+                displayID: displayID,
+                displayName: displayName,
                 options: saveOptions
             )
             guard generation == ingestGeneration else {
@@ -587,7 +643,9 @@ class FrameBuffer {
             let frame = StoredFrame(
                 id: metadata.id,
                 timestamp: metadata.timestamp,
-                hash: metadata.hash
+                hash: metadata.hash,
+                displayID: metadata.displayID,
+                displayName: metadata.displayName
             )
             recordStoredFrame(frame)
             enqueueFrameForBackgroundOCR(frame)
@@ -634,20 +692,21 @@ class FrameBuffer {
         }
     }
 
-    private func shouldStoreFrame(hash: UInt64, timestamp: Date) -> Bool {
+    private func shouldStoreFrame(hash: UInt64, timestamp: Date, displayID: UUID?) -> Bool {
         let insertionIndex = frameInsertionIndex(for: timestamp)
-        guard insertionIndex > 0 else {
-            return true
+        var index = insertionIndex - 1
+        while index >= 0 {
+            let candidate = frames[index]
+            if candidate.displayID == displayID {
+                guard candidate.hash != 0 else { return true }
+                let timeSinceLast = timestamp.timeIntervalSince(candidate.timestamp)
+                guard timeSinceLast < duplicatePolicy.minimumSpacing else { return true }
+                let distance = PerceptualHash.hammingDistance(hash, candidate.hash)
+                return distance > duplicatePolicy.hashThreshold
+            }
+            index -= 1
         }
-
-        let previousFrame = frames[insertionIndex - 1]
-        guard previousFrame.hash != 0 else { return true }
-
-        let timeSinceLast = timestamp.timeIntervalSince(previousFrame.timestamp)
-        guard timeSinceLast < duplicatePolicy.minimumSpacing else { return true }
-
-        let distance = PerceptualHash.hammingDistance(hash, previousFrame.hash)
-        return distance > duplicatePolicy.hashThreshold
+        return true
     }
 
     private func frameInsertionIndex(for timestamp: Date) -> Int {

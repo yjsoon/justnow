@@ -37,24 +37,22 @@ struct OverlayView: View {
             .accessibilityLabel("Dismiss overlay")
             .accessibilityHint("Closes the timeline overlay.")
 
-            CompatGlassEffectContainer(spacing: 40) {
-                ZStack {
-                    if !viewModel.hasAnyFrames {
-                        EmptyStateView()
-                    } else {
-                        ContentAreaView(viewModel: viewModel)
-                    }
-
-                    OverlayTopBar(viewModel: viewModel)
+            if !viewModel.hasAnyFrames {
+                CompatGlassEffectContainer(spacing: 40) {
+                    EmptyStateView()
                 }
+            } else {
+                ContentAreaView(viewModel: viewModel)
             }
+
+            OverlayTopBar(viewModel: viewModel)
         }
     }
 }
 
 private struct OverlayBackdropView: View {
     let viewModel: OverlayViewModel
-    @State private var backdropImage: NSImage?
+    @State private var backdropImage: CGImage?
 
     private var presentedFrame: StoredFrame? {
         viewModel.presentedFrame
@@ -63,13 +61,38 @@ private struct OverlayBackdropView: View {
     var body: some View {
         ZStack {
             if let backdropImage {
-                Image(nsImage: backdropImage)
-                    .resizable()
-                    .scaledToFill()
-                    .saturation(0.6)
-                    .blur(radius: 28)
-                    .opacity(0.15)
-                    .transition(.opacity)
+                // Canvas gives us explicit, intrinsic-free layout — avoids the
+                // Image.scaledToFill overflow that leaked image pixel dims
+                // up the hierarchy and grew the root layout on macOS 26.
+                Canvas { context, size in
+                    guard size.width > 0, size.height > 0 else { return }
+                    let imageAspect = CGFloat(backdropImage.width) / CGFloat(max(1, backdropImage.height))
+                    let frameAspect = size.width / size.height
+                    let drawRect: CGRect
+                    if imageAspect > frameAspect {
+                        let scaledWidth = size.height * imageAspect
+                        drawRect = CGRect(
+                            x: (size.width - scaledWidth) / 2,
+                            y: 0,
+                            width: scaledWidth,
+                            height: size.height
+                        )
+                    } else {
+                        let scaledHeight = size.width / imageAspect
+                        drawRect = CGRect(
+                            x: 0,
+                            y: (size.height - scaledHeight) / 2,
+                            width: size.width,
+                            height: scaledHeight
+                        )
+                    }
+                    context.draw(Image(decorative: backdropImage, scale: 1, orientation: .up), in: drawRect)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .saturation(0.6)
+                .blur(radius: 28)
+                .opacity(0.15)
+                .transition(.opacity)
             }
         }
         .animation(.easeInOut(duration: 0.18), value: presentedFrame?.id)
@@ -119,72 +142,10 @@ struct ContentAreaView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
 
-            Spacer()
-
-            if let frame = displayedFrames[safe: viewModel.selectedIndex] {
-                HStack(spacing: 20) {
-                    OverlayChromeButton(
-                        systemImage: "chevron.left",
-                        accessibilityLabel: "Previous frame",
-                        accessibilityHint: "Shows the next older captured frame.",
-                        toolTip: "Previous frame (Left Arrow)",
-                        isEnabled: viewModel.canMoveLeft,
-                        action: viewModel.moveLeft
-                    )
-
-                    FramePreviewView(
-                        frame: frame,
-                        viewModel: viewModel,
-                        frameBuffer: viewModel.frameBuffer,
-                        textGrabBannerState: $textGrabBannerState
-                    )
-                    .frame(maxWidth: .infinity)
-
-                    OverlayChromeButton(
-                        systemImage: "chevron.right",
-                        accessibilityLabel: "Next frame",
-                        accessibilityHint: "Shows the next newer captured frame.",
-                        toolTip: "Next frame (Right Arrow)",
-                        isEnabled: viewModel.canMoveRight,
-                        action: viewModel.moveRight
-                    )
-                }
-                .padding(.horizontal, 60)
+            centerContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.top, viewModel.isSearchAvailable && viewModel.isSearching ? 20 : 40)
                 .offset(y: OverlayChromeMetrics.contentVerticalShift)
-            } else if !viewModel.isSearching && viewModel.timelineFrames.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "clock.badge.exclamationmark")
-                        .font(.system(size: 40))
-                        .foregroundStyle(.white.opacity(0.4))
-                    Text("No frames in this rewind window")
-                        .font(.headline)
-                        .foregroundStyle(.white.opacity(0.6))
-                    Text(
-                        viewModel.isSearchAvailable
-                            ? "Search can still look through all indexed history."
-                            : "Increase rewind history in Settings to keep older frames visible here."
-                    )
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.45))
-                }
-            } else if viewModel.shouldShowSearchingState {
-                SearchSearchingStateView()
-            } else if viewModel.shouldShowNoSearchResults {
-                VStack(spacing: 12) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 40))
-                        .foregroundStyle(.white.opacity(0.4))
-                    Text("No matches found")
-                        .font(.headline)
-                        .foregroundStyle(.white.opacity(0.6))
-                    Text("Try a different word or broaden the time range.")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.45))
-                }
-            }
-
-            Spacer()
 
             TimelineSlider(viewModel: viewModel)
                 .padding(.horizontal, 40)
@@ -205,6 +166,76 @@ struct ContentAreaView: View {
             if frameCount == 0 {
                 textGrabBannerState = .hint
                 viewModel.setPresentedFrame(nil)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var centerContent: some View {
+        if let frame = displayedFrames[safe: viewModel.selectedIndex] {
+            GeometryReader { row in
+                let chevronWidth: CGFloat = 40
+                let interitem: CGFloat = 20
+                let previewWidth = max(0, row.size.width - (chevronWidth * 2) - (interitem * 2))
+                HStack(spacing: interitem) {
+                    OverlayChromeButton(
+                        systemImage: "chevron.left",
+                        accessibilityLabel: "Previous frame",
+                        accessibilityHint: "Shows the next older captured frame.",
+                        toolTip: "Previous frame (Left Arrow)",
+                        isEnabled: viewModel.canMoveLeft,
+                        action: viewModel.moveLeft
+                    )
+
+                    FramePreviewView(
+                        frame: frame,
+                        viewModel: viewModel,
+                        frameBuffer: viewModel.frameBuffer,
+                        textGrabBannerState: $textGrabBannerState
+                    )
+                    .frame(width: previewWidth, height: row.size.height)
+
+                    OverlayChromeButton(
+                        systemImage: "chevron.right",
+                        accessibilityLabel: "Next frame",
+                        accessibilityHint: "Shows the next newer captured frame.",
+                        toolTip: "Next frame (Right Arrow)",
+                        isEnabled: viewModel.canMoveRight,
+                        action: viewModel.moveRight
+                    )
+                }
+                .frame(width: row.size.width, height: row.size.height)
+            }
+            .padding(.horizontal, 60)
+        } else if !viewModel.isSearching && viewModel.timelineFrames.isEmpty {
+            VStack(spacing: 12) {
+                Image(systemName: "clock.badge.exclamationmark")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.white.opacity(0.4))
+                Text("No frames in this rewind window")
+                    .font(.headline)
+                    .foregroundStyle(.white.opacity(0.6))
+                Text(
+                    viewModel.isSearchAvailable
+                        ? "Search can still look through all indexed history."
+                        : "Increase rewind history in Settings to keep older frames visible here."
+                )
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.45))
+            }
+        } else if viewModel.shouldShowSearchingState {
+            SearchSearchingStateView()
+        } else if viewModel.shouldShowNoSearchResults {
+            VStack(spacing: 12) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.white.opacity(0.4))
+                Text("No matches found")
+                    .font(.headline)
+                    .foregroundStyle(.white.opacity(0.6))
+                Text("Try a different word or broaden the time range.")
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.45))
             }
         }
     }
@@ -248,8 +279,11 @@ private struct OverlayTopBar: View {
                 )
                 .frame(width: OverlayChromeMetrics.sideSlotWidth, alignment: .leading)
 
-                HStack(spacing: 8) {
+                HStack(spacing: 12) {
                     InstructionsOverlay()
+                    if viewModel.availableDisplays.count > 1 {
+                        DisplayPickerStrip(viewModel: viewModel)
+                    }
                     if shouldShowIsland {
                         MenuBarVisibilityIsland()
                             .overlay(alignment: .leading) {
@@ -288,6 +322,70 @@ private struct OverlayTopBar: View {
                 shouldShowIsland = true
             }
         }
+    }
+}
+
+private struct DisplayPickerStrip: View {
+    var viewModel: OverlayViewModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(viewModel.availableDisplays, id: \.id) { display in
+                DisplayChip(
+                    display: display,
+                    isActive: viewModel.activeDisplay?.id == display.id,
+                    action: { viewModel.switchDisplay(to: display) }
+                )
+            }
+
+            Text("Tab")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.white.opacity(0.45))
+                .padding(.leading, 2)
+                .padding(.top, 2)
+                .accessibilityHidden(true)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .darkBarBackground(in: Capsule())
+    }
+}
+
+private struct DisplayChip: View {
+    let display: DisplayInfo
+    let isActive: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                if !display.isConnected {
+                    Image(systemName: "clock")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(foregroundStyle.opacity(0.7))
+                }
+                Text(display.name)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(foregroundStyle)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(backgroundFill))
+        }
+        .buttonStyle(.plain)
+        .help(display.isConnected ? "Show \(display.name) (Tab)" : "Show \(display.name) — disconnected, historical only (Tab)")
+        .accessibilityLabel(display.isConnected ? "Switch to \(display.name)" : "Switch to \(display.name) (historical)")
+    }
+
+    private var foregroundStyle: Color {
+        if isActive {
+            return Color.black.opacity(0.9)
+        }
+        return display.isConnected ? Color.white.opacity(0.7) : Color.white.opacity(0.45)
+    }
+
+    private var backgroundFill: Color {
+        isActive ? Color.white.opacity(0.95) : Color.clear
     }
 }
 

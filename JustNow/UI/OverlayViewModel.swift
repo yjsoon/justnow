@@ -6,6 +6,7 @@
 import CoreGraphics
 import Foundation
 import Observation
+import SwiftUI
 import os.log
 
 private let overlayViewLogger = Logger(subsystem: "sg.tk.JustNow", category: "OverlayView")
@@ -95,12 +96,15 @@ class OverlayViewModel {
 
     var selectedIndex: Int = 0
     var presentedFrame: StoredFrame?
-    let timelineFrames: [StoredFrame]
+    private(set) var timelineFrames: [StoredFrame]
     let frameBuffer: FrameBuffer
     let recentTimelineWindow: TimeInterval
     let rewindHistoryOption: RewindHistoryOption
     let timelineReferenceDate: Date
     let onDismiss: () -> Void
+    let availableDisplays: [DisplayInfo]
+    private(set) var activeDisplay: DisplayInfo?
+    private let primaryDisplayID: UUID?
 
     var isSearching = false
     var searchQuery = ""
@@ -175,6 +179,9 @@ class OverlayViewModel {
         frameBuffer: FrameBuffer,
         recentTimelineWindow: TimeInterval,
         rewindHistoryOption: RewindHistoryOption,
+        availableDisplays: [DisplayInfo],
+        activeDisplay: DisplayInfo?,
+        primaryDisplayID: UUID?,
         onDismiss: @escaping () -> Void
     ) {
         self.timelineFrames = timelineFrames
@@ -182,6 +189,9 @@ class OverlayViewModel {
         self.recentTimelineWindow = recentTimelineWindow
         self.rewindHistoryOption = rewindHistoryOption
         self.timelineReferenceDate = Date()
+        self.availableDisplays = availableDisplays
+        self.activeDisplay = activeDisplay
+        self.primaryDisplayID = primaryDisplayID
         self.onDismiss = onDismiss
         self.selectedIndex = max(0, timelineFrames.count - 1)
     }
@@ -305,6 +315,35 @@ class OverlayViewModel {
         selectedIndex = max(0, displayedFrameCount - 1)
     }
 
+    func cycleDisplay(forward: Bool) {
+        guard availableDisplays.count > 1 else { return }
+        let activeID = activeDisplay?.id
+        let currentIndex = availableDisplays.firstIndex { $0.id == activeID } ?? 0
+        let step = forward ? 1 : -1
+        let count = availableDisplays.count
+        let nextIndex = ((currentIndex + step) % count + count) % count
+        switchDisplay(to: availableDisplays[nextIndex])
+    }
+
+    func switchDisplay(to display: DisplayInfo) {
+        guard display.id != activeDisplay?.id else { return }
+        let newFrames = frameBuffer.getFilteredFrames(
+            recentWindow: recentTimelineWindow,
+            maximumAge: rewindHistoryOption.duration,
+            displayID: display.id,
+            includeLegacyFrames: display.id == primaryDisplayID
+        )
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            clearSearch()
+            activeDisplay = display
+            timelineFrames = newFrames
+            selectedIndex = max(0, newFrames.count - 1)
+            presentedFrame = nil
+        }
+    }
+
     func prefetchImagesNearSelection() {
         imagePrefetchTask?.cancel()
         imagePrefetchTask = nil
@@ -361,6 +400,8 @@ class OverlayViewModel {
         let searchCutoff = request.scope.cutoff(using: rewindHistoryOption)
         let buffer = frameBuffer
         let cache = frameBuffer.textCache
+        let activeDisplayID = activeDisplay?.id
+        let includeLegacy = activeDisplay?.id == primaryDisplayID
 
         searchTask = Task {
             let matchedIDs = await cache.searchFrameIDs(matching: request.query, limit: 10_000, since: searchCutoff)
@@ -372,9 +413,15 @@ class OverlayViewModel {
             var results: [StoredFrame] = []
             results.reserveCapacity(matchedIDs.count)
             for matchedID in matchedIDs {
-                if let frame = frameByID[matchedID] {
-                    results.append(frame)
+                guard let frame = frameByID[matchedID] else { continue }
+                if let activeDisplayID {
+                    if let frameDisplayID = frame.displayID {
+                        guard frameDisplayID == activeDisplayID else { continue }
+                    } else if !includeLegacy {
+                        continue
+                    }
                 }
+                results.append(frame)
             }
             results.reverse()
 

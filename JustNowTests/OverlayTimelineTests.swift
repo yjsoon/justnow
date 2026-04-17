@@ -51,7 +51,9 @@ final class OverlayTimelineTests: XCTestCase {
             StoredFrame(
                 id: UUID(),
                 timestamp: now.addingTimeInterval(-offset),
-                hash: 0
+                hash: 0,
+                displayID: nil,
+                displayName: nil
             )
         }
     }

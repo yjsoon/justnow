@@ -105,7 +105,9 @@ final class OCRIndexingWorkerTests: XCTestCase {
         StoredFrame(
             id: UUID(),
             timestamp: Date().addingTimeInterval(-secondsAgo),
-            hash: 0
+            hash: 0,
+            displayID: nil,
+            displayName: nil
         )
     }
 }

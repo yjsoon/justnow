@@ -76,6 +76,8 @@ actor FrameStore {
         _ cgImage: CGImage,
         timestamp: Date,
         hash: UInt64,
+        displayID: UUID?,
+        displayName: String?,
         options: FrameSaveOptions = .standard
     ) throws -> FrameMetadata {
         let id = UUID()
@@ -106,7 +108,9 @@ actor FrameStore {
             hash: hash,
             filename: filename,
             thumbnailFilename: thumbnailFilename,
-            fileSize: Int64(fullData.count)
+            fileSize: Int64(fullData.count),
+            displayID: displayID,
+            displayName: displayName
         )
 
         manifest.frames.append(metadata)
