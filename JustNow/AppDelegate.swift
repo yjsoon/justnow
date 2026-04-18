@@ -99,6 +99,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     @AppStorage(AppStorageKey.capturePauseShortcutModifiers) private var capturePauseShortcutModifiers: Int = AppStorageDefault.capturePauseShortcutModifiers
     @AppStorage(AppStorageKey.overlayDismissKeyCode) private var overlayDismissKeyCode: Int = AppStorageDefault.overlayDismissKeyCode
     @AppStorage(AppStorageKey.overlayDismissModifiers) private var overlayDismissModifiers: Int = AppStorageDefault.overlayDismissModifiers
+    @AppStorage(AppStorageKey.showMenuBarIcon) private var showMenuBarIcon: Bool = AppStorageDefault.showMenuBarIcon
     private var capturePolicyTimer: Timer?
     private var userDefaultsObserver: NSObjectProtocol?
     private var thermalObserver: NSObjectProtocol?
@@ -212,6 +213,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
         handlePendingPermissionPromptResolutionIfNeeded()
     }
 
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showSettings()
+        return false
+    }
+
     // MARK: - Setup
 
     private func setupStatusItem() {
@@ -226,6 +232,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
                 menuWillOpen: { [weak self] in self?.handleStatusMenuWillOpen() }
             )
         )
+        statusItemController.setVisible(showMenuBarIcon)
     }
 
     private func setupHotKey() {
@@ -355,6 +362,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
             Task { @MainActor [self] in
                 self.updateCapturePolicy()
                 await self.updateRetentionPolicyIfNeeded()
+                self.statusItemController?.setVisible(self.showMenuBarIcon)
             }
         }
 

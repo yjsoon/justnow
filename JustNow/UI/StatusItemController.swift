@@ -206,6 +206,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         frameCountItem.title = "Frames: \(count)"
     }
 
+    func setVisible(_ isVisible: Bool) {
+        statusItem.isVisible = isVisible
+    }
+
     func setCaptureStatus(_ status: String) {
         captureStatusItem.title = "Capture: \(status)"
     }

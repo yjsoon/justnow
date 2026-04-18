@@ -44,3 +44,29 @@ struct CompactInstructionLabelStyle: LabelStyle {
         }
     }
 }
+
+struct MenuBarVisibilityIsland: View {
+    @AppStorage(AppStorageKey.showMenuBarIcon) private var showMenuBarIcon: Bool = AppStorageDefault.showMenuBarIcon
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "inset.filled.tophalf.bottomhalf.rectangle")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.6))
+            Toggle("", isOn: $showMenuBarIcon)
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .controlSize(.mini)
+                .scaleEffect(0.6)
+                .frame(width: 22, height: 13)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .darkBarBackground(in: Capsule())
+        .help(showMenuBarIcon ? "Hide menu bar icon" : "Show menu bar icon")
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Show menu bar icon")
+        .accessibilityValue(showMenuBarIcon ? "On" : "Off")
+        .accessibilityHint("Toggles whether JustNow's icon appears in the macOS menu bar.")
+    }
+}

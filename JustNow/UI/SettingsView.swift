@@ -22,6 +22,9 @@ struct SettingsView: View {
     @AppStorage(AppStorageKey.overlayDismissModifiers) private var overlayDismissModifiers: Int = AppStorageDefault.overlayDismissModifiers
     @AppStorage(AppStorageKey.textGrabSoundEnabled) private var textGrabSoundEnabled: Bool = AppStorageDefault.textGrabSoundEnabled
     @AppStorage(AppStorageKey.textGrabDebugPreviewEnabled) private var textGrabDebugPreviewEnabled: Bool = AppStorageDefault.textGrabDebugPreviewEnabled
+    @AppStorage(AppStorageKey.showMenuBarIcon) private var showMenuBarIcon: Bool = AppStorageDefault.showMenuBarIcon
+    @AppStorage(AppStorageKey.hasSeenMenuBarHideInfo) private var hasSeenMenuBarHideInfo: Bool = AppStorageDefault.hasSeenMenuBarHideInfo
+    @State private var showHideIconInfoAlert: Bool = false
 
     var context: SettingsContext = SettingsContext()
 
@@ -47,6 +50,19 @@ struct SettingsView: View {
                     .disabled(!context.canConfigureLaunchAtLogin)
 
                 Text("If macOS asks for approval, enable JustNow in System Settings > General > Login Items.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Toggle("Show menu bar icon", isOn: $showMenuBarIcon)
+                    .onChange(of: showMenuBarIcon) { _, newValue in
+                        if !newValue && !hasSeenMenuBarHideInfo {
+                            showHideIconInfoAlert = true
+                            hasSeenMenuBarHideInfo = true
+                        }
+                    }
+
+                Text("Hides the icon in the macOS menu bar. If you lose access, relaunch JustNow from Finder or Spotlight to reopen Settings, or toggle it back from the rewind overlay.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -320,6 +336,11 @@ struct SettingsView: View {
             }
         } message: {
             Text(launchAtLoginAlertMessage ?? "")
+        }
+        .alert("Menu bar icon hidden", isPresented: $showHideIconInfoAlert) {
+            Button("Got it", role: .cancel) { }
+        } message: {
+            Text("To bring it back, relaunch JustNow from Finder or Spotlight to reopen Settings, or switch it back on from the rewind overlay.")
         }
     }
 

@@ -8,11 +8,15 @@ import SwiftUI
 
 private enum OverlayChromeMetrics {
     static let controlSize: CGFloat = 40
-    static let topPadding: CGFloat = 24
+    static let topPadding: CGFloat = 29
     static let horizontalPadding: CGFloat = 28
     static let contentSpacing: CGFloat = 12
     static let sideSlotWidth: CGFloat = controlSize
     static let searchBarTopPadding: CGFloat = topPadding + controlSize + contentSpacing
+    static let contentVerticalShift: CGFloat = 28
+    static let timelineBottomPadding: CGFloat = 50
+    static let sliderTrackVerticalShift: CGFloat = 7
+    static let timelineFooterBottomPadding: CGFloat = 7
 }
 
 struct OverlayView: View {
@@ -148,6 +152,7 @@ struct ContentAreaView: View {
                 }
                 .padding(.horizontal, 60)
                 .padding(.top, viewModel.isSearchAvailable && viewModel.isSearching ? 20 : 40)
+                .offset(y: OverlayChromeMetrics.contentVerticalShift)
             } else if !viewModel.isSearching && viewModel.timelineFrames.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "clock.badge.exclamationmark")
@@ -183,9 +188,12 @@ struct ContentAreaView: View {
             Spacer()
 
             TimelineSlider(viewModel: viewModel, textGrabBannerState: textGrabBannerState)
-                .frame(height: 100)
                 .padding(.horizontal, 40)
-                .padding(.bottom, 50)
+                .padding(.bottom, OverlayChromeMetrics.timelineBottomPadding)
+        }
+        .overlay(alignment: .bottom) {
+            TimelineFooter(viewModel: viewModel, textGrabBannerState: textGrabBannerState)
+                .padding(.bottom, OverlayChromeMetrics.timelineFooterBottomPadding)
         }
         .animation(.easeInOut(duration: 0.2), value: viewModel.isSearchAvailable && viewModel.isSearching)
         .task(id: viewModel.selectedFramePrefetchKey) {
@@ -205,6 +213,8 @@ struct ContentAreaView: View {
 
 private struct OverlayTopBar: View {
     var viewModel: OverlayViewModel
+    @AppStorage(AppStorageKey.showMenuBarIcon) private var showMenuBarIcon: Bool = AppStorageDefault.showMenuBarIcon
+    @State private var shouldShowIsland: Bool = false
 
     @ViewBuilder
     private var searchControl: some View {
@@ -239,9 +249,27 @@ private struct OverlayTopBar: View {
                 )
                 .frame(width: OverlayChromeMetrics.sideSlotWidth, alignment: .leading)
 
-                InstructionsOverlay()
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .layoutPriority(1)
+                HStack(spacing: 8) {
+                    InstructionsOverlay()
+                    if shouldShowIsland {
+                        MenuBarVisibilityIsland()
+                            .overlay(alignment: .leading) {
+                                GeometryReader { proxy in
+                                    Text("menu restored; re-hide in settings")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(.white.opacity(0.55))
+                                        .fixedSize()
+                                        .frame(height: proxy.size.height, alignment: .center)
+                                        .offset(x: proxy.size.width + 10)
+                                        .opacity(showMenuBarIcon ? 1 : 0)
+                                        .animation(.easeInOut(duration: 0.25), value: showMenuBarIcon)
+                                }
+                                .allowsHitTesting(false)
+                            }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+                .layoutPriority(1)
 
                 searchControl
                     .frame(width: OverlayChromeMetrics.sideSlotWidth, alignment: .trailing)
@@ -250,6 +278,16 @@ private struct OverlayTopBar: View {
             .padding(.top, OverlayChromeMetrics.topPadding)
 
             Spacer()
+        }
+        .onAppear {
+            if !showMenuBarIcon {
+                shouldShowIsland = true
+            }
+        }
+        .onChange(of: showMenuBarIcon) { _, newValue in
+            if !newValue {
+                shouldShowIsland = true
+            }
         }
     }
 }
