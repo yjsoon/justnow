@@ -34,7 +34,6 @@ extension View {
 
 struct TimelineSlider: View {
     var viewModel: OverlayViewModel
-    let textGrabBannerState: TextGrabBannerState
 
     private var displayedFrames: [StoredFrame] { viewModel.displayedFrames }
     private var frameCount: Int { displayedFrames.count }

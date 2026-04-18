@@ -15,7 +15,6 @@ private enum OverlayChromeMetrics {
     static let searchBarTopPadding: CGFloat = topPadding + controlSize + contentSpacing
     static let contentVerticalShift: CGFloat = 28
     static let timelineBottomPadding: CGFloat = 50
-    static let sliderTrackVerticalShift: CGFloat = 7
     static let timelineFooterBottomPadding: CGFloat = 7
 }
 
@@ -187,7 +186,7 @@ struct ContentAreaView: View {
 
             Spacer()
 
-            TimelineSlider(viewModel: viewModel, textGrabBannerState: textGrabBannerState)
+            TimelineSlider(viewModel: viewModel)
                 .padding(.horizontal, 40)
                 .padding(.bottom, OverlayChromeMetrics.timelineBottomPadding)
         }
