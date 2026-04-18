@@ -34,7 +34,6 @@ extension View {
 
 struct TimelineSlider: View {
     var viewModel: OverlayViewModel
-    let textGrabBannerState: TextGrabBannerState
 
     private var displayedFrames: [StoredFrame] { viewModel.displayedFrames }
     private var frameCount: Int { displayedFrames.count }
@@ -72,6 +71,7 @@ struct TimelineSlider: View {
     var body: some View {
         VStack(spacing: 12) {
             TimeLabels(frames: displayedFrames)
+                .offset(y: 19)
 
             SliderTrack(
                 frameCount: frameCount,
@@ -82,19 +82,31 @@ struct TimelineSlider: View {
             )
             .frame(height: timelineMarkers.isEmpty ? 32 : 54)
             .padding(.horizontal, 8)
-
-            ZStack {
-                footerMetadata
-                    .opacity(textGrabBannerState == .hint ? 1 : 0)
-
-                if textGrabBannerState != .hint {
-                    TextGrabToast(state: textGrabBannerState)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-            }
-            .frame(minHeight: 44)
-            .animation(.spring(response: 0.28, dampingFraction: 0.86), value: textGrabBannerState)
+            .offset(y: 12)
         }
+    }
+}
+
+struct TimelineFooter: View {
+    var viewModel: OverlayViewModel
+    let textGrabBannerState: TextGrabBannerState
+
+    private var displayedFrames: [StoredFrame] { viewModel.displayedFrames }
+    private var frameCount: Int { displayedFrames.count }
+    private var currentFrame: StoredFrame? { displayedFrames[safe: viewModel.selectedIndex] }
+
+    var body: some View {
+        ZStack {
+            footerMetadata
+                .opacity(textGrabBannerState == .hint ? 1 : 0)
+
+            if textGrabBannerState != .hint {
+                TextGrabToast(state: textGrabBannerState)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .frame(minHeight: 44)
+        .animation(.spring(response: 0.28, dampingFraction: 0.86), value: textGrabBannerState)
     }
 
     @ViewBuilder
@@ -268,6 +280,7 @@ private struct SliderTrack: View {
                         }
                     }
                     .frame(height: 12)
+                    .offset(y: -4)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
