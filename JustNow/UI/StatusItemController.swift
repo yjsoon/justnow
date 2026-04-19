@@ -36,6 +36,9 @@ private final class StatusMenuActionItemView: NSView {
 
     init(width: CGFloat = 220) {
         super.init(frame: NSRect(x: 0, y: 0, width: width, height: 28))
+        // NSMenu sizes its rows to the widest item; without width autoresizing this
+        // custom view stays at 220pt and leaves empty background past the accessory.
+        autoresizingMask = [.width]
         setup()
     }
 

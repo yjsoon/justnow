@@ -332,6 +332,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
                 }
             case .requestedThisLaunch:
                 self.updateCaptureStatus("Awaiting Permission")
+                // Intro alert first — clicking "Open System Settings" fires the Permiso
+                // coach, so users who dismiss the alert aren't surprised by a floating
+                // panel appearing over System Settings out of nowhere.
+                self.showPermissionAlert()
             case .deniedPreviously:
                 self.updateCaptureStatus("No Permission")
                 self.showPermissionAlert()
@@ -720,24 +724,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     }
 
     private func resolveLaunchPermissionState() -> ScreenRecordingPermissionLaunchState {
+        // Skip the native TCC prompt; Permiso will guide the user to drag the app into
+        // the Screen Recording list instead. Returning false here keeps the permission
+        // state machine's "awaiting resolution" bookkeeping intact.
         screenRecordingPermission.resolveLaunchState(
             hasPermission: ScreenCaptureManager.hasScreenRecordingPermission(),
-            requestPermission: ScreenCaptureManager.requestScreenRecordingPermission
+            requestPermission: { false }
         )
     }
 
     private func handlePendingPermissionPromptResolutionIfNeeded() {
-        switch screenRecordingPermission.resolvePendingPrompt(
+        let resolution = screenRecordingPermission.resolvePendingPrompt(
             hasPermission: ScreenCaptureManager.hasScreenRecordingPermission()
-        ) {
+        )
+        switch resolution {
         case .none:
             return
         case .showRestartAlert:
+            PermisoAssistant.shared.dismiss()
             updateCaptureStatus("Restart Required")
             showPermissionRestartAlert()
         case .showPermissionAlert:
+            // This branch is one-shot per launch: by the time it fires the user has
+            // already returned to JustNow without granting. Tear down the coach and
+            // force the alert even if it already ran from the launch path, so the
+            // user is never stuck without visible guidance.
+            PermisoAssistant.shared.dismiss()
             updateCaptureStatus("No Permission")
-            showPermissionAlert()
+            showPermissionAlert(force: true)
         }
     }
 
@@ -767,9 +781,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
         NSApp.activate(ignoringOtherApps: true)
 
         if alert.runModal() == .alertFirstButtonReturn {
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
-                NSWorkspace.shared.open(url)
-            }
+            let sourceFrame = alert.window.frame
+            PermisoAssistant.shared.present(
+                panel: .screenRecording,
+                sourceFrameInScreen: sourceFrame.isEmpty ? nil : sourceFrame
+            )
             return
         }
 
