@@ -332,6 +332,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
                 }
             case .requestedThisLaunch:
                 self.updateCaptureStatus("Awaiting Permission")
+                PermisoAssistant.shared.present(panel: .screenRecording)
             case .deniedPreviously:
                 self.updateCaptureStatus("No Permission")
                 self.showPermissionAlert()
@@ -720,9 +721,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     }
 
     private func resolveLaunchPermissionState() -> ScreenRecordingPermissionLaunchState {
+        // Skip the native TCC prompt; Permiso will guide the user to drag the app into
+        // the Screen Recording list instead. Returning false here keeps the permission
+        // state machine's "awaiting resolution" bookkeeping intact.
         screenRecordingPermission.resolveLaunchState(
             hasPermission: ScreenCaptureManager.hasScreenRecordingPermission(),
-            requestPermission: ScreenCaptureManager.requestScreenRecordingPermission
+            requestPermission: { false }
         )
     }
 
@@ -738,9 +742,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
             updateCaptureStatus("Restart Required")
             showPermissionRestartAlert()
         case .showPermissionAlert:
-            PermisoAssistant.shared.dismiss()
             updateCaptureStatus("No Permission")
-            showPermissionAlert()
+            // If the Permiso coach is still up (e.g. user briefly Cmd-Tabbed over), leave
+            // it alone rather than stacking a modal on top of the drag flow. Fall back to
+            // the NSAlert only once the user has dismissed the overlay.
+            if !PermisoAssistant.shared.isPresenting {
+                showPermissionAlert()
+            }
         }
     }
 

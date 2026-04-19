@@ -15,8 +15,16 @@ struct PermisoHostApp {
     }
 
     static func current(bundle: Bundle = .main) -> PermisoHostApp {
-        let displayName = bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
-            ?? bundle.object(forInfoDictionaryKey: kCFBundleNameKey as String) as? String
+        // JustNow ships CFBundleDisplayName as an empty string deliberately so macOS
+        // falls back to CFBundleName; treat blanks as missing instead of taking them.
+        func nonEmpty(_ key: String) -> String? {
+            guard let value = bundle.object(forInfoDictionaryKey: key) as? String, !value.isEmpty else {
+                return nil
+            }
+            return value
+        }
+        let displayName = nonEmpty("CFBundleDisplayName")
+            ?? nonEmpty(kCFBundleNameKey as String)
             ?? bundle.bundleURL.deletingPathExtension().lastPathComponent
         let icon = NSWorkspace.shared.icon(forFile: bundle.bundleURL.path)
         icon.size = NSSize(width: 48, height: 48)
