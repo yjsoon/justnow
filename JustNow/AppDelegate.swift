@@ -332,7 +332,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
                 }
             case .requestedThisLaunch:
                 self.updateCaptureStatus("Awaiting Permission")
-                PermisoAssistant.shared.present(panel: .screenRecording)
+                // Intro alert first — clicking "Open System Settings" fires the Permiso
+                // coach, so users who dismiss the alert aren't surprised by a floating
+                // panel appearing over System Settings out of nowhere.
+                self.showPermissionAlert()
             case .deniedPreviously:
                 self.updateCaptureStatus("No Permission")
                 self.showPermissionAlert()
@@ -743,12 +746,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
             showPermissionRestartAlert()
         case .showPermissionAlert:
             // This branch is one-shot per launch: by the time it fires the user has
-            // already returned to JustNow without granting. Tear down the coach so the
-            // user always gets a visible fallback prompt even if the overlay was still
-            // mid-tick when we became active.
+            // already returned to JustNow without granting. Tear down the coach and
+            // force the alert even if it already ran from the launch path, so the
+            // user is never stuck without visible guidance.
             PermisoAssistant.shared.dismiss()
             updateCaptureStatus("No Permission")
-            showPermissionAlert()
+            showPermissionAlert(force: true)
         }
     }
 
