@@ -727,15 +727,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
     }
 
     private func handlePendingPermissionPromptResolutionIfNeeded() {
-        switch screenRecordingPermission.resolvePendingPrompt(
+        let resolution = screenRecordingPermission.resolvePendingPrompt(
             hasPermission: ScreenCaptureManager.hasScreenRecordingPermission()
-        ) {
+        )
+        switch resolution {
         case .none:
             return
         case .showRestartAlert:
+            PermisoAssistant.shared.dismiss()
             updateCaptureStatus("Restart Required")
             showPermissionRestartAlert()
         case .showPermissionAlert:
+            PermisoAssistant.shared.dismiss()
             updateCaptureStatus("No Permission")
             showPermissionAlert()
         }
@@ -767,9 +770,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
         NSApp.activate(ignoringOtherApps: true)
 
         if alert.runModal() == .alertFirstButtonReturn {
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
-                NSWorkspace.shared.open(url)
-            }
+            let sourceFrame = alert.window.frame
+            PermisoAssistant.shared.present(
+                panel: .screenRecording,
+                sourceFrameInScreen: sourceFrame.isEmpty ? nil : sourceFrame
+            )
             return
         }
 
