@@ -1,4 +1,4 @@
-// Vendored from https://github.com/zats/permiso (MIT).
+// Adapted from https://github.com/zats/permiso. See ATTRIBUTION.md in this directory.
 
 import AppKit
 import Foundation
@@ -17,7 +17,7 @@ final class PermisoAssistant {
     init() {}
 
     var isPresenting: Bool {
-        overlayController != nil
+        overlayController?.window?.isVisible == true
     }
 
     func present(
@@ -38,8 +38,7 @@ final class PermisoAssistant {
     }
 
     func dismiss() {
-        trackingTimer?.invalidate()
-        trackingTimer = nil
+        pausePolling()
         if let activationObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
             self.activationObserver = nil
@@ -52,15 +51,12 @@ final class PermisoAssistant {
     }
 
     private func startTracking() {
-        trackingTimer?.invalidate()
-        trackingTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.refreshPosition()
-            }
-        }
         if let activationObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
         }
+        // Watching app activation lets us wake the polling timer when the user returns
+        // to System Settings without paying the idle-CPU cost of a 150ms poll while
+        // Settings isn't frontmost.
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
@@ -75,9 +71,13 @@ final class PermisoAssistant {
 
     private func refreshPosition() {
         guard let snapshot = SettingsWindowLocator.frontmostWindow() else {
+            pausePolling()
             overlayController?.hide()
             return
         }
+
+        ensurePolling()
+
         if didPresentCurrentOverlay {
             overlayController?.updatePosition(with: snapshot.frame, visibleFrame: snapshot.visibleFrame)
             return
@@ -89,5 +89,19 @@ final class PermisoAssistant {
             visibleFrame: snapshot.visibleFrame
         )
         didPresentCurrentOverlay = true
+    }
+
+    private func ensurePolling() {
+        guard trackingTimer == nil else { return }
+        trackingTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshPosition()
+            }
+        }
+    }
+
+    private func pausePolling() {
+        trackingTimer?.invalidate()
+        trackingTimer = nil
     }
 }
