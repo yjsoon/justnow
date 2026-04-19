@@ -1,4 +1,4 @@
-// Vendored from https://github.com/zats/permiso (MIT) by zats.
+// Adapted from https://github.com/zats/permiso. See ATTRIBUTION.md in this directory.
 // Kept local because upstream's Package.swift pins to macOS 26 while JustNow targets macOS 15.
 
 import AppKit

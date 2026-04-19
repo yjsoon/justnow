@@ -1,5 +1,6 @@
-// Vendored from https://github.com/zats/permiso (MIT). Class renamed to avoid collision
-// with JustNow's existing OverlayWindowController.
+// Adapted from https://github.com/zats/permiso. See ATTRIBUTION.md in this directory.
+// Class renamed from the upstream `OverlayWindowController` to avoid colliding with
+// JustNow's own overlay controller.
 
 import AppKit
 import Foundation

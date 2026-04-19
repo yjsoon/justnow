@@ -1,4 +1,4 @@
-// Vendored from https://github.com/zats/permiso (MIT).
+// Adapted from https://github.com/zats/permiso. See ATTRIBUTION.md in this directory.
 
 import AppKit
 import CoreGraphics
