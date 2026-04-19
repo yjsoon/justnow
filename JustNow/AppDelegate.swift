@@ -742,13 +742,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ScreenCaptureDelegate {
             updateCaptureStatus("Restart Required")
             showPermissionRestartAlert()
         case .showPermissionAlert:
+            // This branch is one-shot per launch: by the time it fires the user has
+            // already returned to JustNow without granting. Tear down the coach so the
+            // user always gets a visible fallback prompt even if the overlay was still
+            // mid-tick when we became active.
+            PermisoAssistant.shared.dismiss()
             updateCaptureStatus("No Permission")
-            // If the Permiso coach is still up (e.g. user briefly Cmd-Tabbed over), leave
-            // it alone rather than stacking a modal on top of the drag flow. Fall back to
-            // the NSAlert only once the user has dismissed the overlay.
-            if !PermisoAssistant.shared.isPresenting {
-                showPermissionAlert()
-            }
+            showPermissionAlert()
         }
     }
 
