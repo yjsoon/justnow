@@ -70,13 +70,26 @@ final class PermisoAssistant {
     }
 
     private func refreshPosition() {
-        guard let snapshot = SettingsWindowLocator.frontmostWindow() else {
+        guard SettingsWindowLocator.isSystemSettingsFrontmost else {
             pausePolling()
             overlayController?.hide()
             return
         }
 
+        // Settings is frontmost — ensure the poll is running even before we have a
+        // window snapshot. When the user launches Settings from cold, the activation
+        // notification fires before the window is registered with CGWindowList, so we
+        // need the timer to retry until the window shows up.
         ensurePolling()
+
+        guard let snapshot = SettingsWindowLocator.frontmostWindow() else {
+            // Settings is frontmost but has no matching window (either still spinning
+            // up or the user just closed its last window). Keep polling so we catch
+            // the window when it appears, but hide the coach so it doesn't stay parked
+            // at its previous position over an empty desktop.
+            overlayController?.hide()
+            return
+        }
 
         if didPresentCurrentOverlay {
             overlayController?.updatePosition(with: snapshot.frame, visibleFrame: snapshot.visibleFrame)
