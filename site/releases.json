@@ -11,10 +11,22 @@
   },
   "releases": [
     {
+      "tag": "v1.2.0",
+      "version": "1.2.0",
+      "published_at": "2026-04-24",
+      "status": "Current public build",
+      "notes": [
+        "Added multi-display capture and rewind support, including monitor selection in the overlay.",
+        "Added clearer Screen Recording permission guidance during first launch and recovery.",
+        "Fixed stopped display capture recovery so capture can restart cleanly after display changes.",
+        "Polished overlay monitor selection copy, alignment, and selected-state highlight."
+      ]
+    },
+    {
       "tag": "v1.1.0",
       "version": "1.1.0",
       "published_at": "2026-04-18",
-      "status": "Current public build",
+      "status": "Previous release",
       "notes": [
         "feat: option to hide menu bar icon (closes #17) by @yjsoon in https://github.com/yjsoon/justnow/pull/19"
       ]
