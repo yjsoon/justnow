@@ -4,6 +4,19 @@ All notable changes to JustNow will be documented in this file.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-04-24
+
+### Added
+- Added multi-display capture and rewind support, including monitor selection in the overlay.
+- Added clearer Screen Recording permission guidance during first launch and recovery.
+
+### Changed
+- Polished overlay monitor selection copy, alignment, and selected-state highlight.
+
+### Fixed
+- Fixed stopped display capture recovery so capture can restart cleanly after display changes.
+- Fixed target-display matching so missing displays fail explicitly instead of capturing a different monitor under stale identity.
+
 ## [1.1.0] - 2026-04-18
 
 ### Added
