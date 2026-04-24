@@ -288,7 +288,7 @@ private struct OverlayTopBar: View {
                         MenuBarVisibilityIsland()
                             .overlay(alignment: .leading) {
                                 GeometryReader { proxy in
-                                    Text("menu restored; re-hide in settings")
+                                    Text("Menu restored; re-hide in settings")
                                         .font(.system(size: 11, weight: .medium))
                                         .foregroundStyle(.white.opacity(0.55))
                                         .fixedSize()
@@ -343,6 +343,7 @@ private struct DisplayPickerStrip: View {
                 .foregroundStyle(.white.opacity(0.45))
                 .padding(.leading, 2)
                 .padding(.top, 2)
+                .offset(y: -1)
                 .accessibilityHidden(true)
         }
         .padding(.horizontal, 10)
@@ -385,7 +386,7 @@ private struct DisplayChip: View {
     }
 
     private var backgroundFill: Color {
-        isActive ? Color.white.opacity(0.95) : Color.clear
+        isActive ? Color.white.opacity(0.6) : Color.clear
     }
 }
 

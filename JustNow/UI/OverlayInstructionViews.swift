@@ -3,9 +3,9 @@ import SwiftUI
 struct InstructionsOverlay: View {
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            instructionPill(textGrabLabel: "drag to grab text", showsSearchShortcut: FeatureFlags.isSearchEnabled)
-            instructionPill(textGrabLabel: "grab text", showsSearchShortcut: FeatureFlags.isSearchEnabled)
-            instructionPill(textGrabLabel: "grab", showsSearchShortcut: FeatureFlags.isSearchEnabled)
+            instructionPill(textGrabLabel: "Drag to grab text", showsSearchShortcut: FeatureFlags.isSearchEnabled)
+            instructionPill(textGrabLabel: "Grab text", showsSearchShortcut: FeatureFlags.isSearchEnabled)
+            instructionPill(textGrabLabel: "Grab", showsSearchShortcut: FeatureFlags.isSearchEnabled)
             instructionPill(textGrabLabel: "", showsSearchShortcut: FeatureFlags.isSearchEnabled)
         }
     }
