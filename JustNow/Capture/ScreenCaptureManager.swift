@@ -83,8 +83,7 @@ class ScreenCaptureManager: NSObject {
 
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         try Task.checkCancellation()
-        guard let display = content.displays.first(where: { $0.displayID == targetDisplayID })
-            ?? content.displays.first else {
+        guard let display = content.displays.first(where: { $0.displayID == targetDisplayID }) else {
             throw CaptureError.noDisplay
         }
 

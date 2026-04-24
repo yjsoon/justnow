@@ -81,7 +81,7 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
     func startCapture() async throws {
         isRunning = true
         try await reconcileDisplays(startNewManagers: true)
-        if managed.isEmpty {
+        if !isCapturing {
             throw CaptureError.noDisplay
         }
     }
@@ -189,9 +189,12 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
 
     func captureManagerDidStop(_ manager: ScreenCaptureManager) {
         // A single display dropped. If we're supposed to be running, ask the
-        // delegate to treat this as an unexpected stop and let the normal
-        // restart flow re-enter reconcileDisplays.
+        // delegate to treat this as an unexpected stop after removing the
+        // stopped manager so the restart flow can create a fresh one.
         guard isRunning else { return }
+        guard let stopped = managed.first(where: { $0.value.manager === manager }) else { return }
+        managed.removeValue(forKey: stopped.key)
+        delegate?.captureCoordinatorDidUpdateDisplays(self)
         delegate?.captureCoordinatorDidStopUnexpectedly(self)
     }
 }
