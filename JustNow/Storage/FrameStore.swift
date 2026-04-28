@@ -146,6 +146,44 @@ actor FrameStore {
         return image
     }
 
+    /// Copy the frame's stored JPEG to the user's Desktop, preserving original
+    /// pixel dimensions and the encoder quality used when capturing. Returns
+    /// the destination URL, with a `(n)` suffix if the target name is taken.
+    func copyFrameToDesktop(id: UUID, timestamp: Date) throws -> URL {
+        guard let metadata = manifest.frames.first(where: { $0.id == id }) else {
+            throw FrameStoreError.fileNotFound(id)
+        }
+
+        let sourcePath = framesURL.appendingPathComponent(metadata.filename)
+        guard fileManager.fileExists(atPath: sourcePath.path) else {
+            throw FrameStoreError.fileNotFound(id)
+        }
+
+        let desktopURL = try fileManager.url(
+            for: .desktopDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: false
+        )
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
+        let stamp = formatter.string(from: timestamp)
+        let baseName = "JustNow \(stamp)"
+        let ext = (metadata.filename as NSString).pathExtension
+
+        var destination = desktopURL.appendingPathComponent("\(baseName).\(ext)")
+        var suffix = 2
+        while fileManager.fileExists(atPath: destination.path) {
+            destination = desktopURL.appendingPathComponent("\(baseName) (\(suffix)).\(ext)")
+            suffix += 1
+        }
+
+        try fileManager.copyItem(at: sourcePath, to: destination)
+        return destination
+    }
+
     func loadThumbnail(id: UUID) -> CGImage? {
         guard let metadata = manifest.frames.first(where: { $0.id == id }) else {
             return nil

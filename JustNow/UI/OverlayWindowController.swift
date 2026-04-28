@@ -12,6 +12,7 @@ class OverlayWindowController: NSObject {
     private var window: OverlayWindow?
     private let frameBuffer: FrameBuffer
     private let onVisibilityChanged: ((Bool) -> Void)?
+    private let onOpenSettings: () -> Void
     private var dismissShortcutKeyCode: Int
     private var dismissShortcutModifiers: Int
     private var keyEventMonitor: Any?
@@ -22,12 +23,14 @@ class OverlayWindowController: NSObject {
         frameBuffer: FrameBuffer,
         dismissShortcutKeyCode: Int,
         dismissShortcutModifiers: Int,
-        onVisibilityChanged: ((Bool) -> Void)? = nil
+        onVisibilityChanged: ((Bool) -> Void)? = nil,
+        onOpenSettings: @escaping () -> Void
     ) {
         self.frameBuffer = frameBuffer
         self.dismissShortcutKeyCode = dismissShortcutKeyCode
         self.dismissShortcutModifiers = dismissShortcutModifiers
         self.onVisibilityChanged = onVisibilityChanged
+        self.onOpenSettings = onOpenSettings
         super.init()
     }
 
@@ -80,7 +83,8 @@ class OverlayWindowController: NSObject {
             primaryDisplayID: primaryDisplayID,
             onDismiss: { [weak self] in
                 self?.hideOverlay()
-            }
+            },
+            onOpenSettings: onOpenSettings
         )
         self.viewModel = vm
 
@@ -171,6 +175,10 @@ class OverlayWindowController: NSObject {
                 vm.cycleDisplay(forward: true)
             case .cycleDisplayBackward:
                 vm.cycleDisplay(forward: false)
+            case .saveScreenshot:
+                vm.saveCurrentFrameToDesktop()
+            case .openSettings:
+                vm.openSettings()
             }
 
             return nil

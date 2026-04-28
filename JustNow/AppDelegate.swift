@@ -580,7 +580,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                     onVisibilityChanged: { [weak self] isVisible in
                         guard let self else { return }
                         self.captureEventController.handleOverlayVisibilityChanged(isVisible: isVisible)
-                    }
+                    },
+                    onOpenSettings: { [weak self] in self?.showSettings() }
                 )
             } else {
                 self.overlayController?.updateDismissShortcut(
