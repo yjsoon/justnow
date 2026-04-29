@@ -28,7 +28,11 @@ enum ScreenshotSaveLocation {
     ///
     /// 1. `overridePath` (JustNow setting) — empty string skips this.
     /// 2. `systemLocationRaw` (macOS' screenshot `location` default).
-    /// 3. `desktopURL` (`~/Desktop`).
+    /// 3. `desktopURL` (`~/Desktop`) — the terminal fallback, returned even
+    ///    when validation rejects it. The downstream copy will surface a
+    ///    real filesystem error (and a "Couldn't save screenshot" toast) if
+    ///    the Desktop is somehow unwritable, which is preferable to looping
+    ///    or silently inventing another path.
     ///
     /// `directoryExists` is the validation hook: it returns `true` when the
     /// supplied URL points to an existing directory we can plausibly write
@@ -76,7 +80,8 @@ enum ScreenshotSaveLocation {
         return resolve(inputs: inputs, directoryExists: { url in
             var isDirectory: ObjCBool = false
             let exists = fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory)
-            return exists && isDirectory.boolValue
+            guard exists, isDirectory.boolValue else { return false }
+            return fileManager.isWritableFile(atPath: url.path)
         })
     }
 
