@@ -176,7 +176,7 @@ class OverlayWindowController: NSObject {
             case .cycleDisplayBackward:
                 vm.cycleDisplay(forward: false)
             case .saveScreenshot:
-                vm.saveCurrentFrameToDesktop()
+                vm.saveCurrentFrameToScreenshotsLocation()
             case .openSettings:
                 vm.openSettings()
             }

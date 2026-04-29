@@ -51,9 +51,9 @@ struct OverlayMoreMenuIsland: View {
     var body: some View {
         Menu {
             Button {
-                viewModel.saveCurrentFrameToDesktop()
+                viewModel.saveCurrentFrameToScreenshotsLocation()
             } label: {
-                Label("Save Screenshot to Desktop", systemImage: "square.and.arrow.down")
+                Label("Save Screenshot", systemImage: "square.and.arrow.down")
             }
             .keyboardShortcut("s", modifiers: .command)
             .disabled(!viewModel.canSaveCurrentFrame)

@@ -146,10 +146,11 @@ actor FrameStore {
         return image
     }
 
-    /// Copy the frame's stored JPEG to the user's Desktop, preserving original
-    /// pixel dimensions and the encoder quality used when capturing. Returns
-    /// the destination URL, with a `(n)` suffix if the target name is taken.
-    func copyFrameToDesktop(id: UUID, timestamp: Date) throws -> URL {
+    /// Copy the frame's stored JPEG to the user's chosen screenshots location,
+    /// preserving original pixel dimensions and the encoder quality used when
+    /// capturing. Returns the destination URL, with a `(n)` suffix if the
+    /// target name is taken.
+    func copyFrameToScreenshotsLocation(id: UUID, timestamp: Date) throws -> URL {
         guard let metadata = manifest.frames.first(where: { $0.id == id }) else {
             throw FrameStoreError.fileNotFound(id)
         }
@@ -159,12 +160,7 @@ actor FrameStore {
             throw FrameStoreError.fileNotFound(id)
         }
 
-        let desktopURL = try fileManager.url(
-            for: .desktopDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: false
-        )
+        let destinationDirectory = ScreenshotSaveLocation.resolveLive(fileManager: fileManager)
 
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -173,10 +169,10 @@ actor FrameStore {
         let baseName = "JustNow \(stamp)"
         let ext = (metadata.filename as NSString).pathExtension
 
-        var destination = desktopURL.appendingPathComponent("\(baseName).\(ext)")
+        var destination = destinationDirectory.appendingPathComponent("\(baseName).\(ext)")
         var suffix = 2
         while fileManager.fileExists(atPath: destination.path) {
-            destination = desktopURL.appendingPathComponent("\(baseName) (\(suffix)).\(ext)")
+            destination = destinationDirectory.appendingPathComponent("\(baseName) (\(suffix)).\(ext)")
             suffix += 1
         }
 

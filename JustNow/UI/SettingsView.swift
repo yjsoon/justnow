@@ -24,6 +24,8 @@ struct SettingsView: View {
     @AppStorage(AppStorageKey.textGrabDebugPreviewEnabled) private var textGrabDebugPreviewEnabled: Bool = AppStorageDefault.textGrabDebugPreviewEnabled
     @AppStorage(AppStorageKey.showMenuBarIcon) private var showMenuBarIcon: Bool = AppStorageDefault.showMenuBarIcon
     @AppStorage(AppStorageKey.hasSeenMenuBarHideInfo) private var hasSeenMenuBarHideInfo: Bool = AppStorageDefault.hasSeenMenuBarHideInfo
+    @AppStorage(AppStorageKey.screenshotSaveLocationOverride)
+    private var screenshotSaveLocationOverride: String = AppStorageDefault.screenshotSaveLocationOverride
     @State private var showHideIconInfoAlert: Bool = false
 
     var context: SettingsContext = SettingsContext()
@@ -128,6 +130,14 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             } header: {
                 Text("Rewind")
+            }
+
+            Section {
+                ScreenshotSaveLocationSettingsSection(
+                    overridePath: $screenshotSaveLocationOverride
+                )
+            } header: {
+                Text("Screenshot save location")
             }
 
             Section {
