@@ -3,7 +3,6 @@
 //  JustNow
 //
 
-import AppKit
 import CoreGraphics
 import Foundation
 import Observation
