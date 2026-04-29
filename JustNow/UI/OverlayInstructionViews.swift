@@ -68,7 +68,7 @@ struct OverlayMoreMenuIsland: View {
             .keyboardShortcut(",", modifiers: .command)
         } label: {
             Image(systemName: "ellipsis")
-                .font(.system(size: 14, weight: .bold))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.white.opacity(0.75))
                 .frame(width: 32, height: 32)
                 .contentShape(Circle())
