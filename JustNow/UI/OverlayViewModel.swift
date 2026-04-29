@@ -391,8 +391,8 @@ class OverlayViewModel {
     }
 
     func openSettings() {
-        onOpenSettings()
         onDismiss()
+        onOpenSettings()
     }
 
     func saveCurrentFrameToDesktop() {
