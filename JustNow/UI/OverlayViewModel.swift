@@ -17,6 +17,7 @@ struct OverlayToast: Equatable, Identifiable {
     let title: String
     let detail: String?
     let isError: Bool
+    let revealURL: URL?
 }
 
 enum SearchTimeScope: String, CaseIterable {
@@ -404,7 +405,8 @@ class OverlayViewModel {
                     icon: "checkmark.circle.fill",
                     title: "Saved to Desktop",
                     detail: url.lastPathComponent,
-                    isError: false
+                    isError: false,
+                    revealURL: url
                 ))
             } catch {
                 overlayViewLogger.error("Failed to save frame to Desktop: \(error.localizedDescription)")
@@ -412,7 +414,8 @@ class OverlayViewModel {
                     icon: "exclamationmark.triangle.fill",
                     title: "Couldn't save screenshot",
                     detail: error.localizedDescription,
-                    isError: true
+                    isError: true,
+                    revealURL: nil
                 ))
             }
         }
@@ -426,6 +429,12 @@ class OverlayViewModel {
             guard !Task.isCancelled else { return }
             saveToast = nil
         }
+    }
+
+    func dismissSaveToast() {
+        saveToastTask?.cancel()
+        saveToastTask = nil
+        saveToast = nil
     }
 
     func setPresentedFrame(_ frame: StoredFrame?) {
