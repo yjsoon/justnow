@@ -403,7 +403,7 @@ class OverlayViewModel {
                 let url = try await buffer.saveFrameToScreenshotsLocation(frame)
                 showSaveToast(OverlayToast(
                     icon: "checkmark.circle.fill",
-                    title: "Saved to Desktop",
+                    title: savedToastTitle(for: url),
                     detail: url.lastPathComponent,
                     isError: false,
                     revealURL: url
@@ -419,6 +419,19 @@ class OverlayViewModel {
                 ))
             }
         }
+    }
+
+    /// Toast title for a successful save. Prefers "Saved to <FolderName>"
+    /// when the folder name is short and looks like a normal directory name;
+    /// falls back to plain "Saved" so we never overflow the toast width.
+    private func savedToastTitle(for url: URL) -> String {
+        let folderName = url.deletingLastPathComponent().lastPathComponent
+        let allowed = CharacterSet.alphanumerics.union(.whitespaces).union(CharacterSet(charactersIn: "-_."))
+        let isFriendly =
+            !folderName.isEmpty
+            && folderName.count <= 14
+            && folderName.unicodeScalars.allSatisfy { allowed.contains($0) }
+        return isFriendly ? "Saved to \(folderName)" : "Saved"
     }
 
     private func showSaveToast(_ toast: OverlayToast) {
