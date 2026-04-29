@@ -3,6 +3,7 @@
 //  JustNow
 //
 
+import AppKit
 import CoreGraphics
 import SwiftUI
 
@@ -49,7 +50,10 @@ struct OverlayView: View {
         }
         .overlay(alignment: .top) {
             if let toast = viewModel.saveToast {
-                OverlayToastView(toast: toast)
+                OverlayToastView(toast: toast) { url in
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                    viewModel.dismissSaveToast()
+                }
                     .padding(.top, 90)
                     .transition(.asymmetric(
                         insertion: .move(edge: .top).combined(with: .opacity),
@@ -64,8 +68,35 @@ struct OverlayView: View {
 
 private struct OverlayToastView: View {
     let toast: OverlayToast
+    let onReveal: (URL) -> Void
+
+    @State private var isHovering = false
 
     var body: some View {
+        if let url = toast.revealURL {
+            Button {
+                onReveal(url)
+            } label: {
+                toastContent
+            }
+            .buttonStyle(.plain)
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .onHover { hovering in
+                isHovering = hovering
+                if hovering {
+                    NSCursor.pointingHand.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            .accessibilityLabel(Text(toast.title))
+            .accessibilityHint(Text("Click to reveal in Finder."))
+        } else {
+            toastContent
+        }
+    }
+
+    private var toastContent: some View {
         HStack(spacing: 10) {
             Image(systemName: toast.icon)
                 .font(.system(size: 14, weight: .semibold))
@@ -86,7 +117,14 @@ private struct OverlayToastView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .darkBarBackground(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            if isHovering {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+            }
+        }
         .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+        .animation(.easeOut(duration: 0.12), value: isHovering)
     }
 }
 
