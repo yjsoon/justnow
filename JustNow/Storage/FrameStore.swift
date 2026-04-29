@@ -146,10 +146,11 @@ actor FrameStore {
         return image
     }
 
-    /// Copy the frame's stored JPEG to the user's Desktop, preserving original
-    /// pixel dimensions and the encoder quality used when capturing. Returns
-    /// the destination URL, with a `(n)` suffix if the target name is taken.
-    func copyFrameToDesktop(id: UUID, timestamp: Date) throws -> URL {
+    /// Copy the frame's stored JPEG to the user's chosen screenshots location,
+    /// preserving original pixel dimensions and the encoder quality used when
+    /// capturing. Returns the destination URL, with a `(n)` suffix if the
+    /// target name is taken.
+    func copyFrameToScreenshotsLocation(id: UUID, timestamp: Date) throws -> URL {
         guard let metadata = manifest.frames.first(where: { $0.id == id }) else {
             throw FrameStoreError.fileNotFound(id)
         }

@@ -395,12 +395,12 @@ class OverlayViewModel {
         onOpenSettings()
     }
 
-    func saveCurrentFrameToDesktop() {
+    func saveCurrentFrameToScreenshotsLocation() {
         guard let frame = displayedFrames[safe: selectedIndex] else { return }
         let buffer = frameBuffer
         Task { @MainActor in
             do {
-                let url = try await buffer.saveFrameToDesktop(frame)
+                let url = try await buffer.saveFrameToScreenshotsLocation(frame)
                 showSaveToast(OverlayToast(
                     icon: "checkmark.circle.fill",
                     title: "Saved to Desktop",
@@ -409,7 +409,7 @@ class OverlayViewModel {
                     revealURL: url
                 ))
             } catch {
-                overlayViewLogger.error("Failed to save frame to Desktop: \(error.localizedDescription)")
+                overlayViewLogger.error("Failed to save frame to screenshots location: \(error.localizedDescription)")
                 showSaveToast(OverlayToast(
                     icon: "exclamationmark.triangle.fill",
                     title: "Couldn't save screenshot",

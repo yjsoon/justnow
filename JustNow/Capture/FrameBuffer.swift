@@ -367,9 +367,9 @@ class FrameBuffer {
     }
 
     /// Copy the frame's stored JPEG (full original pixel dimensions) to the
-    /// user's Desktop. Returns the destination URL.
-    func saveFrameToDesktop(_ frame: StoredFrame) async throws -> URL {
-        try await frameStore.copyFrameToDesktop(id: frame.id, timestamp: frame.timestamp)
+    /// user's chosen screenshots location. Returns the destination URL.
+    func saveFrameToScreenshotsLocation(_ frame: StoredFrame) async throws -> URL {
+        try await frameStore.copyFrameToScreenshotsLocation(id: frame.id, timestamp: frame.timestamp)
     }
 
     /// Get thumbnail, with caching
