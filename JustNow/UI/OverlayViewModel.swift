@@ -11,6 +11,14 @@ import os.log
 
 private let overlayViewLogger = Logger(subsystem: "sg.tk.JustNow", category: "OverlayView")
 
+struct OverlayToast: Equatable, Identifiable {
+    let id = UUID()
+    let icon: String
+    let title: String
+    let detail: String?
+    let isError: Bool
+}
+
 enum SearchTimeScope: String, CaseIterable {
     case fiveMinutes
     case oneHour
@@ -102,6 +110,7 @@ class OverlayViewModel {
     let rewindHistoryOption: RewindHistoryOption
     let timelineReferenceDate: Date
     let onDismiss: () -> Void
+    let onOpenSettings: () -> Void
     let availableDisplays: [DisplayInfo]
     private(set) var activeDisplay: DisplayInfo?
     private let primaryDisplayID: UUID?
@@ -119,6 +128,9 @@ class OverlayViewModel {
     private var resolvedSearchRequest: SearchRequest?
     var isTextGrabActive = false
     private var cancelTextGrabHandler: (() -> Void)?
+
+    var saveToast: OverlayToast?
+    private var saveToastTask: Task<Void, Never>?
 
     var isSearchAvailable: Bool {
         FeatureFlags.isSearchEnabled
@@ -182,7 +194,8 @@ class OverlayViewModel {
         availableDisplays: [DisplayInfo],
         activeDisplay: DisplayInfo?,
         primaryDisplayID: UUID?,
-        onDismiss: @escaping () -> Void
+        onDismiss: @escaping () -> Void,
+        onOpenSettings: @escaping () -> Void
     ) {
         self.timelineFrames = timelineFrames
         self.frameBuffer = frameBuffer
@@ -193,6 +206,7 @@ class OverlayViewModel {
         self.activeDisplay = activeDisplay
         self.primaryDisplayID = primaryDisplayID
         self.onDismiss = onDismiss
+        self.onOpenSettings = onOpenSettings
         self.selectedIndex = max(0, timelineFrames.count - 1)
     }
 
@@ -369,6 +383,49 @@ class OverlayViewModel {
         let step = delta > 0 ? -1 : 1
         let newIndex = selectedIndex + step
         selectedIndex = max(0, min(displayedFrameCount - 1, newIndex))
+    }
+
+    var canSaveCurrentFrame: Bool {
+        displayedFrames[safe: selectedIndex] != nil
+    }
+
+    func openSettings() {
+        onDismiss()
+        onOpenSettings()
+    }
+
+    func saveCurrentFrameToDesktop() {
+        guard let frame = displayedFrames[safe: selectedIndex] else { return }
+        let buffer = frameBuffer
+        Task { @MainActor in
+            do {
+                let url = try await buffer.saveFrameToDesktop(frame)
+                showSaveToast(OverlayToast(
+                    icon: "checkmark.circle.fill",
+                    title: "Saved to Desktop",
+                    detail: url.lastPathComponent,
+                    isError: false
+                ))
+            } catch {
+                overlayViewLogger.error("Failed to save frame to Desktop: \(error.localizedDescription)")
+                showSaveToast(OverlayToast(
+                    icon: "exclamationmark.triangle.fill",
+                    title: "Couldn't save screenshot",
+                    detail: error.localizedDescription,
+                    isError: true
+                ))
+            }
+        }
+    }
+
+    private func showSaveToast(_ toast: OverlayToast) {
+        saveToastTask?.cancel()
+        saveToast = toast
+        saveToastTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(toast.isError ? 4 : 2.5))
+            guard !Task.isCancelled else { return }
+            saveToast = nil
+        }
     }
 
     func setPresentedFrame(_ frame: StoredFrame?) {

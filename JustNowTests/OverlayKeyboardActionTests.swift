@@ -52,6 +52,54 @@ final class OverlayKeyboardActionTests: XCTestCase {
         XCTAssertEqual(action, .passthrough)
     }
 
+    func testCommandSResolvesToSaveScreenshot() {
+        let action = resolveOverlayKeyboardAction(
+            keyCode: UInt16(kVK_ANSI_S),
+            modifiers: [.command],
+            dismissShortcutKeyCode: Int(kVK_Escape),
+            dismissShortcutModifiers: 0,
+            state: .init(isSearchAvailable: true, isSearching: false, hasSearchQuery: false, isTextGrabActive: false)
+        )
+
+        XCTAssertEqual(action, .saveScreenshot)
+    }
+
+    func testPlainSPassesThroughWithoutCommand() {
+        let action = resolveOverlayKeyboardAction(
+            keyCode: UInt16(kVK_ANSI_S),
+            modifiers: [],
+            dismissShortcutKeyCode: Int(kVK_Escape),
+            dismissShortcutModifiers: 0,
+            state: .init(isSearchAvailable: true, isSearching: false, hasSearchQuery: false, isTextGrabActive: false)
+        )
+
+        XCTAssertEqual(action, .passthrough)
+    }
+
+    func testCommandCommaResolvesToOpenSettings() {
+        let action = resolveOverlayKeyboardAction(
+            keyCode: UInt16(kVK_ANSI_Comma),
+            modifiers: [.command],
+            dismissShortcutKeyCode: Int(kVK_Escape),
+            dismissShortcutModifiers: 0,
+            state: .init(isSearchAvailable: true, isSearching: false, hasSearchQuery: false, isTextGrabActive: false)
+        )
+
+        XCTAssertEqual(action, .openSettings)
+    }
+
+    func testPlainCommaPassesThroughWithoutCommand() {
+        let action = resolveOverlayKeyboardAction(
+            keyCode: UInt16(kVK_ANSI_Comma),
+            modifiers: [],
+            dismissShortcutKeyCode: Int(kVK_Escape),
+            dismissShortcutModifiers: 0,
+            state: .init(isSearchAvailable: true, isSearching: false, hasSearchQuery: false, isTextGrabActive: false)
+        )
+
+        XCTAssertEqual(action, .passthrough)
+    }
+
     func testArrowModifiersMapToJumpAndBoundaryActions() {
         let dismissModifiers = Int(NSEvent.ModifierFlags.command.rawValue)
 

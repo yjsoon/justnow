@@ -29,6 +29,8 @@ enum OverlayKeyboardAction: Equatable {
     case goToEnd
     case cycleDisplayForward
     case cycleDisplayBackward
+    case saveScreenshot
+    case openSettings
 }
 
 func resolveOverlayKeyboardAction(
@@ -90,6 +92,18 @@ func resolveOverlayKeyboardAction(
             return .passthrough
         }
         return pressedModifiers.contains(.shift) ? .cycleDisplayBackward : .cycleDisplayForward
+
+    case UInt16(kVK_ANSI_S):
+        if pressedModifiers == .command {
+            return .saveScreenshot
+        }
+        return .passthrough
+
+    case UInt16(kVK_ANSI_Comma):
+        if pressedModifiers == .command {
+            return .openSettings
+        }
+        return .passthrough
 
     default:
         return matchesDismissShortcut ? .dismissOverlay : .passthrough

@@ -45,28 +45,40 @@ struct CompactInstructionLabelStyle: LabelStyle {
     }
 }
 
-struct MenuBarVisibilityIsland: View {
-    @AppStorage(AppStorageKey.showMenuBarIcon) private var showMenuBarIcon: Bool = AppStorageDefault.showMenuBarIcon
+struct OverlayMoreMenuIsland: View {
+    var viewModel: OverlayViewModel
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "inset.filled.tophalf.bottomhalf.rectangle")
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.6))
-            Toggle("", isOn: $showMenuBarIcon)
-                .toggleStyle(.switch)
-                .labelsHidden()
-                .controlSize(.mini)
-                .scaleEffect(0.6)
-                .frame(width: 22, height: 13)
+        Menu {
+            Button {
+                viewModel.saveCurrentFrameToDesktop()
+            } label: {
+                Label("Save Screenshot to Desktop", systemImage: "square.and.arrow.down")
+            }
+            .keyboardShortcut("s", modifiers: .command)
+            .disabled(!viewModel.canSaveCurrentFrame)
+
+            Divider()
+
+            Button {
+                viewModel.openSettings()
+            } label: {
+                Label("Open Settings…", systemImage: "gearshape")
+            }
+            .keyboardShortcut(",", modifiers: .command)
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.white.opacity(0.75))
+                .frame(width: 32, height: 32)
+                .contentShape(Circle())
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .darkBarBackground(in: Capsule())
-        .help(showMenuBarIcon ? "Hide menu bar icon" : "Show menu bar icon")
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Show menu bar icon")
-        .accessibilityValue(showMenuBarIcon ? "On" : "Off")
-        .accessibilityHint("Toggles whether JustNow's icon appears in the macOS menu bar.")
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .darkBarBackground(in: Circle())
+        .help("More actions")
+        .accessibilityLabel("More actions")
+        .accessibilityHint("Save the current screenshot or open Settings.")
     }
 }

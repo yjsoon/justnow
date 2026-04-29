@@ -47,6 +47,46 @@ struct OverlayView: View {
 
             OverlayTopBar(viewModel: viewModel)
         }
+        .overlay(alignment: .top) {
+            if let toast = viewModel.saveToast {
+                OverlayToastView(toast: toast)
+                    .padding(.top, 90)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .top).combined(with: .opacity),
+                        removal: .opacity
+                    ))
+                    .id(toast.id)
+            }
+        }
+        .animation(.easeOut(duration: 0.22), value: viewModel.saveToast?.id)
+    }
+}
+
+private struct OverlayToastView: View {
+    let toast: OverlayToast
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: toast.icon)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(toast.isError ? Color.red.opacity(0.9) : Color.green.opacity(0.9))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(toast.title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.95))
+                if let detail = toast.detail {
+                    Text(detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .darkBarBackground(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
     }
 }
 
@@ -243,8 +283,6 @@ struct ContentAreaView: View {
 
 private struct OverlayTopBar: View {
     var viewModel: OverlayViewModel
-    @AppStorage(AppStorageKey.showMenuBarIcon) private var showMenuBarIcon: Bool = AppStorageDefault.showMenuBarIcon
-    @State private var shouldShowIsland: Bool = false
 
     @ViewBuilder
     private var searchControl: some View {
@@ -284,22 +322,7 @@ private struct OverlayTopBar: View {
                     if viewModel.availableDisplays.count > 1 {
                         DisplayPickerStrip(viewModel: viewModel)
                     }
-                    if shouldShowIsland {
-                        MenuBarVisibilityIsland()
-                            .overlay(alignment: .leading) {
-                                GeometryReader { proxy in
-                                    Text("Menu restored; re-hide in settings")
-                                        .font(.system(size: 11, weight: .medium))
-                                        .foregroundStyle(.white.opacity(0.55))
-                                        .fixedSize()
-                                        .frame(height: proxy.size.height, alignment: .center)
-                                        .offset(x: proxy.size.width + 10)
-                                        .opacity(showMenuBarIcon ? 1 : 0)
-                                        .animation(.easeInOut(duration: 0.25), value: showMenuBarIcon)
-                                }
-                                .allowsHitTesting(false)
-                            }
-                    }
+                    OverlayMoreMenuIsland(viewModel: viewModel)
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
                 .layoutPriority(1)
@@ -311,16 +334,6 @@ private struct OverlayTopBar: View {
             .padding(.top, OverlayChromeMetrics.topPadding)
 
             Spacer()
-        }
-        .onAppear {
-            if !showMenuBarIcon {
-                shouldShowIsland = true
-            }
-        }
-        .onChange(of: showMenuBarIcon) { _, newValue in
-            if !newValue {
-                shouldShowIsland = true
-            }
         }
     }
 }
