@@ -160,12 +160,7 @@ actor FrameStore {
             throw FrameStoreError.fileNotFound(id)
         }
 
-        let desktopURL = try fileManager.url(
-            for: .desktopDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: false
-        )
+        let destinationDirectory = ScreenshotSaveLocation.resolveLive(fileManager: fileManager)
 
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -174,10 +169,10 @@ actor FrameStore {
         let baseName = "JustNow \(stamp)"
         let ext = (metadata.filename as NSString).pathExtension
 
-        var destination = desktopURL.appendingPathComponent("\(baseName).\(ext)")
+        var destination = destinationDirectory.appendingPathComponent("\(baseName).\(ext)")
         var suffix = 2
         while fileManager.fileExists(atPath: destination.path) {
-            destination = desktopURL.appendingPathComponent("\(baseName) (\(suffix)).\(ext)")
+            destination = destinationDirectory.appendingPathComponent("\(baseName) (\(suffix)).\(ext)")
             suffix += 1
         }
 

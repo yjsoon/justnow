@@ -15,6 +15,7 @@ enum AppStorageKey {
     static let textGrabDebugPreviewEnabled = "textGrabDebugPreviewEnabled"
     static let showMenuBarIcon = "showMenuBarIcon"
     static let hasSeenMenuBarHideInfo = "hasSeenMenuBarHideInfo"
+    static let screenshotSaveLocationOverride = "screenshotSaveLocationOverride"
 }
 
 enum AppStorageDefault {
@@ -32,4 +33,5 @@ enum AppStorageDefault {
     static let textGrabDebugPreviewEnabled = false
     static let showMenuBarIcon = true
     static let hasSeenMenuBarHideInfo = false
+    static let screenshotSaveLocationOverride = ""
 }
