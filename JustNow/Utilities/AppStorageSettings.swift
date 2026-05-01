@@ -12,6 +12,7 @@ enum AppStorageKey {
     static let overlayDismissKeyCode = "overlayDismissKeyCode"
     static let overlayDismissModifiers = "overlayDismissModifiers"
     static let textGrabSoundEnabled = "textGrabSoundEnabled"
+    static let saveScreenshotSoundEnabled = "saveScreenshotSoundEnabled"
     static let textGrabDebugPreviewEnabled = "textGrabDebugPreviewEnabled"
     static let showMenuBarIcon = "showMenuBarIcon"
     static let hasSeenMenuBarHideInfo = "hasSeenMenuBarHideInfo"
@@ -30,6 +31,7 @@ enum AppStorageDefault {
     static let overlayDismissKeyCode = 53
     static let overlayDismissModifiers = 0
     static let textGrabSoundEnabled = true
+    static let saveScreenshotSoundEnabled = true
     static let textGrabDebugPreviewEnabled = false
     static let showMenuBarIcon = true
     static let hasSeenMenuBarHideInfo = false

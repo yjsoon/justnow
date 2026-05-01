@@ -3,6 +3,7 @@
 //  JustNow
 //
 
+import AppKit
 import CoreGraphics
 import Foundation
 import Observation
@@ -401,6 +402,7 @@ class OverlayViewModel {
         Task { @MainActor in
             do {
                 let url = try await buffer.saveFrameToScreenshotsLocation(frame)
+                playSavedSoundIfNeeded()
                 showSaveToast(OverlayToast(
                     icon: "checkmark.circle.fill",
                     title: savedToastTitle(for: url),
@@ -448,6 +450,15 @@ class OverlayViewModel {
         saveToastTask?.cancel()
         saveToastTask = nil
         saveToast = nil
+    }
+
+    private func playSavedSoundIfNeeded() {
+        let defaults = UserDefaults.standard
+        let enabled = defaults.object(forKey: AppStorageKey.saveScreenshotSoundEnabled) as? Bool
+            ?? AppStorageDefault.saveScreenshotSoundEnabled
+        guard enabled, let sound = NSSound(named: .init("Tink")) else { return }
+        sound.stop()
+        sound.play()
     }
 
     func setPresentedFrame(_ frame: StoredFrame?) {

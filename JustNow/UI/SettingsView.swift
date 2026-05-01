@@ -21,6 +21,7 @@ struct SettingsView: View {
     @AppStorage(AppStorageKey.overlayDismissKeyCode) private var overlayDismissKeyCode: Int = AppStorageDefault.overlayDismissKeyCode
     @AppStorage(AppStorageKey.overlayDismissModifiers) private var overlayDismissModifiers: Int = AppStorageDefault.overlayDismissModifiers
     @AppStorage(AppStorageKey.textGrabSoundEnabled) private var textGrabSoundEnabled: Bool = AppStorageDefault.textGrabSoundEnabled
+    @AppStorage(AppStorageKey.saveScreenshotSoundEnabled) private var saveScreenshotSoundEnabled: Bool = AppStorageDefault.saveScreenshotSoundEnabled
     @AppStorage(AppStorageKey.textGrabDebugPreviewEnabled) private var textGrabDebugPreviewEnabled: Bool = AppStorageDefault.textGrabDebugPreviewEnabled
     @AppStorage(AppStorageKey.showMenuBarIcon) private var showMenuBarIcon: Bool = AppStorageDefault.showMenuBarIcon
     @AppStorage(AppStorageKey.hasSeenMenuBarHideInfo) private var hasSeenMenuBarHideInfo: Bool = AppStorageDefault.hasSeenMenuBarHideInfo
@@ -136,6 +137,8 @@ struct SettingsView: View {
                 ScreenshotSaveLocationSettingsSection(
                     overridePath: $screenshotSaveLocationOverride
                 )
+
+                Toggle("Play sound when saving screenshot", isOn: $saveScreenshotSoundEnabled)
             } header: {
                 Text("Screenshot save location")
             }
