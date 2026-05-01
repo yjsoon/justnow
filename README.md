@@ -31,7 +31,7 @@ JustNow is a native macOS menu bar app that keeps a rolling record of your recen
 6. Press `Tab` in the overlay to switch monitors when multiple displays are connected.
 7. Press `/` in the overlay to search indexed text across your retained history and jump through highlighted matches.
 8. Drag over visible text in the current frame to copy it from OCR.
-9. Press `⌘S` to save the current frame, or hold `⌘` and drag to save just that region. Click the resulting toast to reveal the file in Finder.
+9. Press `⌘S` to save the current frame, or hold `⌘` and drag to save just that region. Click the resulting toast to reveal the file in Finder. The overlay's `…` menu also has a **Save Region…** item that primes the next drag for a region capture, so you can use it without learning the shortcut.
 10. Press `Escape` to close the overlay.
 
 If Screen Recording already looks enabled but JustNow still cannot capture after switching between differently signed builds, remove the `JustNow` entry in **System Settings → Privacy & Security → Screen Recording**, then relaunch and allow it again.
