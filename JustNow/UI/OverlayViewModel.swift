@@ -3,7 +3,6 @@
 //  JustNow
 //
 
-import AppKit
 import CoreGraphics
 import Foundation
 import Observation
@@ -456,9 +455,8 @@ class OverlayViewModel {
         let defaults = UserDefaults.standard
         let enabled = defaults.object(forKey: AppStorageKey.saveScreenshotSoundEnabled) as? Bool
             ?? AppStorageDefault.saveScreenshotSoundEnabled
-        guard enabled, let sound = NSSound(named: .init("Tink")) else { return }
-        sound.stop()
-        sound.play()
+        guard enabled else { return }
+        ScreenshotSound.play()
     }
 
     func setPresentedFrame(_ frame: StoredFrame?) {
