@@ -12,6 +12,7 @@ JustNow is a native macOS menu bar app that keeps a rolling record of your recen
 - Lets you keep between 30 minutes and 24 hours of rewind history
 - Lets you search indexed text across your retained history from the overlay, with matching words highlighted in the frame preview
 - Drag over a rewind frame to OCR on-screen text and copy the cleaned result to the clipboard
+- Save the current frame with `⌘S`, or hold `⌘` and drag to save just a region — to a folder of your choice, the clipboard, or both
 - Adapts capture behaviour when your Mac is on battery, idle, or under thermal pressure
 - Stays out of the way with no Dock icon, and can hide its menu bar item if you prefer shortcuts
 
@@ -30,9 +31,18 @@ JustNow is a native macOS menu bar app that keeps a rolling record of your recen
 6. Press `Tab` in the overlay to switch monitors when multiple displays are connected.
 7. Press `/` in the overlay to search indexed text across your retained history and jump through highlighted matches.
 8. Drag over visible text in the current frame to copy it from OCR.
-9. Press `Escape` to close the overlay.
+9. Press `⌘S` to save the current frame, or hold `⌘` and drag to save just that region. Click the resulting toast to reveal the file in Finder.
+10. Press `Escape` to close the overlay.
 
 If Screen Recording already looks enabled but JustNow still cannot capture after switching between differently signed builds, remove the `JustNow` entry in **System Settings → Privacy & Security → Screen Recording**, then relaunch and allow it again.
+
+### Saving screenshots
+
+Saved screenshots come from JustNow's rewind history rather than a fresh screen capture, so they aren't pixel-identical to `⇧⌘3`:
+
+- **Format**: JPEG, using the same compression as the rewind history.
+- **Resolution**: full pixel density when plugged in. Halved when capturing on battery or in Low Power Mode for performance — change this in **Settings → Capture**.
+- **Destination**: by default, JustNow saves to your `com.apple.screencapture` location (Desktop unless you've changed it system-wide). You can pick a different folder, copy to the clipboard, or both, in **Settings → Screenshot save location**.
 
 ## Settings
 
@@ -41,7 +51,9 @@ You can adjust:
 - capture interval
 - rewind history length
 - full-detail window for the newest history
+- where saved screenshots go (folder, clipboard, or both) and a custom save folder
 - play a copied-text sound after OCR succeeds
+- play a system shutter sound on screenshot save
 - show a text-grab debug preview of the OCR crop
 - automatic power saving behaviour
 - launch on startup
