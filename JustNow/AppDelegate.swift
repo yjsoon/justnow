@@ -467,13 +467,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     private func startCaptureIfAllowed(successMessage: String, failurePrefix: String, failureStatus: String) async -> Bool {
-        guard !Task.isCancelled, captureEventController.canStartCapture() else { return false }
+        guard !Task.isCancelled else { return false }
+        guard captureEventController.canStartCapture() else {
+            // Without this update, the caller's transient "Resuming..."
+            // (or similar) status would stick forever when the lifecycle
+            // says we shouldn't start.
+            applyBlockedCaptureStatusIfAvailable()
+            return false
+        }
 
         do {
             try await captureCoordinator.startCapture()
-            guard !Task.isCancelled,
-                  captureEventController.canStartCapture() else {
+            guard !Task.isCancelled else { return false }
+            guard captureEventController.canStartCapture() else {
                 await captureCoordinator.stopCapture()
+                applyBlockedCaptureStatusIfAvailable()
                 return false
             }
             updateCaptureStatus("Active")
@@ -491,6 +499,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             print("\(failurePrefix): \(error)")
             updateCaptureStatus(failureStatus)
             return false
+        }
+    }
+
+    private func applyBlockedCaptureStatusIfAvailable() {
+        if let blockedStatus = captureEventController.blockedStatus() {
+            updateCaptureStatus(blockedStatus)
         }
     }
 
