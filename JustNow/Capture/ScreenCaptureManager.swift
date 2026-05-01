@@ -5,6 +5,9 @@
 
 import ScreenCaptureKit
 import AppKit
+import os.log
+
+private let captureLogger = Logger(subsystem: "sg.tk.JustNow", category: "Capture")
 
 enum CaptureError: Error {
     case permissionDenied
@@ -106,7 +109,7 @@ class ScreenCaptureManager: NSObject {
         nextCaptureAt = Date()
         scheduleCaptureLoop()
 
-        print("Capture started successfully (one-shot mode)")
+        captureLogger.info("Capture started successfully (one-shot mode) for display \(self.targetDisplayID, privacy: .public)")
     }
 
     func stopCapture() async {
@@ -127,7 +130,7 @@ class ScreenCaptureManager: NSObject {
         cancelQueuedCaptureRequests()
         wakeCaptureLoop()
         if wasCapturing {
-            print("Capture stopped")
+            captureLogger.info("Capture stopped")
         }
         return previousLoop
     }
@@ -326,7 +329,7 @@ class ScreenCaptureManager: NSObject {
 
         consecutiveCaptureFailures += 1
         let failureCount = consecutiveCaptureFailures
-        print("Screenshot capture failed (\(failureCount)/\(maximumConsecutiveCaptureFailures)): \(error)")
+        captureLogger.error("Screenshot capture failed (\(failureCount, privacy: .public)/\(self.maximumConsecutiveCaptureFailures, privacy: .public)): \(error.localizedDescription, privacy: .public)")
 
         guard failureCount >= maximumConsecutiveCaptureFailures else { return }
 

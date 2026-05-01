@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let captureLogger = Logger(subsystem: "sg.tk.JustNow", category: "Capture")
 
 struct CaptureEventContext {
     let hasCaptureManager: Bool
@@ -30,7 +33,7 @@ final class CaptureEventController {
         enableBlackFrameFilter: @escaping (TimeInterval) -> Void,
         endForegroundActivity: @escaping () -> Void,
         updatePauseMenu: @escaping (Bool) -> Void,
-        logger: @escaping (String) -> Void = { print($0) }
+        logger: @escaping (String) -> Void = { captureLogger.info("\($0, privacy: .public)") }
     ) {
         self.context = context
         self.scheduleStart = scheduleStart

@@ -7,6 +7,9 @@ import AppKit
 import CoreGraphics
 import Foundation
 import ScreenCaptureKit
+import os.log
+
+private let captureLogger = Logger(subsystem: "sg.tk.JustNow", category: "Capture")
 
 @MainActor
 protocol CaptureCoordinatorDelegate: AnyObject {
@@ -151,7 +154,7 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
         for id in removedIDs {
             if let entry = managed.removeValue(forKey: id) {
                 await entry.manager.stopCapture()
-                print("Capture stopped for removed display: \(entry.info.name)")
+                captureLogger.info("Capture stopped for removed display: \(entry.info.name, privacy: .public)")
             }
         }
 
@@ -166,9 +169,9 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
                 managed[id] = ManagedDisplay(info: info, manager: manager)
                 do {
                     try await manager.startCapture()
-                    print("Capture started for display: \(info.name)")
+                    captureLogger.info("Capture started for display: \(info.name, privacy: .public)")
                 } catch {
-                    print("Failed to start capture for \(info.name): \(error)")
+                    captureLogger.error("Failed to start capture for \(info.name, privacy: .public): \(error.localizedDescription, privacy: .public)")
                     managed.removeValue(forKey: id)
                     if error is CaptureError, case CaptureError.permissionDenied = error {
                         throw error

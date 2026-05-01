@@ -7,6 +7,9 @@ import AppKit
 import CoreGraphics
 import SwiftUI
 import Sparkle
+import os.log
+
+private let captureLogger = Logger(subsystem: "sg.tk.JustNow", category: "Capture")
 
 enum FeatureFlags {
     /// Temporary kill switch while in-app search is hidden from release builds.
@@ -275,13 +278,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
 
                 let loadedCount = buffer.frameCount
                 if loadedCount > 0 {
-                    print("Loaded \(loadedCount) frames from disk")
+                    captureLogger.info("Loaded \(loadedCount, privacy: .public) frames from disk")
                 }
             } catch {
                 if error is CancellationError || Task.isCancelled {
                     return
                 }
-                print("Failed to initialize frame buffer: \(error)")
+                captureLogger.error("Failed to initialize frame buffer: \(error.localizedDescription, privacy: .public)")
                 // Show error but don't quit
                 self.showErrorAlert(error)
                 return
@@ -487,7 +490,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             updateCaptureStatus("Active")
             capturePolicyController.resetAppliedPolicy()
             updateCapturePolicy()
-            print(successMessage)
+            captureLogger.info("\(successMessage, privacy: .public)")
             return true
         } catch is CancellationError {
             return false
@@ -496,7 +499,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             showPermissionAlert()
             return false
         } catch {
-            print("\(failurePrefix): \(error)")
+            captureLogger.error("\(failurePrefix, privacy: .public): \(error.localizedDescription, privacy: .public)")
             updateCaptureStatus(failureStatus)
             return false
         }

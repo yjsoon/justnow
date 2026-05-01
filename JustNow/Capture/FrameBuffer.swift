@@ -5,6 +5,9 @@
 
 import AppKit
 import Foundation
+import os.log
+
+private let captureLogger = Logger(subsystem: "sg.tk.JustNow", category: "Capture")
 
 /// Lightweight frame reference - actual image loaded from disk on demand
 struct StoredFrame: Identifiable, Sendable {
@@ -150,7 +153,7 @@ class FrameBuffer {
     func addFrame(_ cgImage: CGImage, timestamp: Date, display: DisplayInfo?) {
         // Skip black frames only during sleep/wake transitions.
         if shouldCheckBlackFrame(at: timestamp) && blackFrameDetector.isBlackFrame(cgImage) {
-            print("Skipping black frame")
+            captureLogger.debug("Skipping black frame")
             return
         }
 
@@ -667,7 +670,7 @@ class FrameBuffer {
         } catch is CancellationError {
             return .retryAfterClear
         } catch {
-            print("Failed to save frame: \(error)")
+            captureLogger.error("Failed to save frame: \(error.localizedDescription, privacy: .public)")
             return .completed
         }
     }
@@ -699,9 +702,9 @@ class FrameBuffer {
             removeQueuedOCRFrames(ids: toPrune)
             let validIDs = Set(frames.map { $0.id })
             await textCache.prune(keepingFrameIDs: validIDs)
-            print("Pruned \(toPrune.count) frames, \(frames.count) remaining")
+            captureLogger.info("Pruned \(toPrune.count, privacy: .public) frames, \(self.frames.count, privacy: .public) remaining")
         } catch {
-            print("Failed to prune frames: \(error)")
+            captureLogger.error("Failed to prune frames: \(error.localizedDescription, privacy: .public)")
         }
     }
 

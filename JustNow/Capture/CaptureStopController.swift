@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let captureLogger = Logger(subsystem: "sg.tk.JustNow", category: "Capture")
 
 struct CaptureStopRequest {
     let status: String
@@ -21,7 +24,7 @@ final class CaptureStopController {
         updateStatus: @escaping (String) -> Void,
         stopCapture: @escaping () async -> Void,
         endForegroundActivity: @escaping () -> Void,
-        logger: @escaping (String) -> Void = { print($0) }
+        logger: @escaping (String) -> Void = { captureLogger.info("\($0, privacy: .public)") }
     ) {
         self.updateStatus = updateStatus
         self.stopCapture = stopCapture
