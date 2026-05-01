@@ -45,4 +45,9 @@ dist/
 .env.release.local
 .wrangler/
 
+# Agent tooling state (local-only)
+.agents/
+.claude/
+skills-lock.json
+
 AppIcon.icns
