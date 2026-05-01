@@ -91,7 +91,7 @@ private struct MoreMenuTrigger: NSViewRepresentable {
             // between modifier glyph and key character.
             menu.addItem(makeRow(
                 title: "Save Screenshot",
-                systemImageName: "square.and.arrow.down",
+                systemImageName: "camera.viewfinder",
                 shortcut: "\u{2318}\u{2009}S",
                 isEnabled: viewModel.canSaveCurrentFrame,
                 action: #selector(handleSaveScreenshot)
