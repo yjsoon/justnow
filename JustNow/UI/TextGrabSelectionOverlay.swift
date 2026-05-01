@@ -241,6 +241,13 @@ struct TextGrabSelectionOverlay: View {
                 )
             }
             .onEnded { value in
+                // Capture the armed flag and disarm now so every exit path
+                // (including the early returns below) leaves the menu-armed
+                // state cleared. Subsequent drags then revert to OCR unless
+                // ⌘ is held.
+                let wasArmed = viewModel.isRegionScreenshotArmed
+                viewModel.disarmRegionScreenshot()
+
                 guard !isProcessing else { return }
                 guard !isCurrentDragCancelled else {
                     isCurrentDragCancelled = false
@@ -267,7 +274,8 @@ struct TextGrabSelectionOverlay: View {
                 }
 
                 selectionRect = finalRect
-                if NSEvent.modifierFlags.contains(.command) {
+                let isRegionMode = NSEvent.modifierFlags.contains(.command) || wasArmed
+                if isRegionMode {
                     beginRegionScreenshot(for: finalRect, displayedImageRect: displayedImageRect)
                 } else {
                     beginTextGrab(for: finalRect, displayedImageRect: displayedImageRect)
@@ -275,10 +283,11 @@ struct TextGrabSelectionOverlay: View {
             }
     }
 
-    /// ⌘-drag variant: crop the displayed image to the selection and hand
-    /// it to the view model's screenshot save flow. We don't run OCR or
-    /// touch the banner state so the toast (with reveal-in-Finder) is the
-    /// only feedback, mirroring ⌘S on the full frame.
+    /// ⌘-drag (or menu-armed) variant: crop the displayed image to the
+    /// selection and hand it to the view model's screenshot save flow. We
+    /// don't run OCR or touch the banner state so the toast (with
+    /// reveal-in-Finder) is the only feedback, mirroring ⌘S on the full
+    /// frame. The arm flag has already been cleared by the caller.
     private func beginRegionScreenshot(for selectionRect: CGRect, displayedImageRect: CGRect) {
         guard let cropRect = TextGrabGeometry.cropRect(
             for: selectionRect,

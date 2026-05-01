@@ -14,6 +14,8 @@ import SwiftUI
 /// the macOS system screenshot location, which in turn wins over `~/Desktop`.
 struct ScreenshotSaveLocationSettingsSection: View {
     @Binding var overridePath: String
+    @Binding var saveToFolder: Bool
+    @Binding var saveToClipboard: Bool
 
     /// Bumped on appear, when the override changes, and after picking a
     /// folder, so the resolved path display refreshes against the live system
@@ -31,49 +33,79 @@ struct ScreenshotSaveLocationSettingsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            LabeledContent {
-                Text(displayPath(for: resolvedURL))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            } label: {
-                Text("Saving to")
-            }
+            Toggle("Save to folder", isOn: $saveToFolder)
+                .onChange(of: saveToFolder) { _, newValue in
+                    if !newValue && !saveToClipboard {
+                        // Don't allow both off — turn clipboard on so a
+                        // save attempt always lands somewhere.
+                        saveToClipboard = true
+                    }
+                }
+            Toggle("Copy to clipboard", isOn: $saveToClipboard)
+                .onChange(of: saveToClipboard) { _, newValue in
+                    if !newValue && !saveToFolder {
+                        saveToFolder = true
+                    }
+                }
 
-            if !trimmedOverride.isEmpty {
+            if saveToFolder {
                 LabeledContent {
-                    Text(displayPath(for: URL(fileURLWithPath: (trimmedOverride as NSString).expandingTildeInPath, isDirectory: true)))
+                    Text(displayPath(for: resolvedURL))
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 } label: {
-                    Text("Override")
+                    Text("Saving to")
+                }
+
+                if !trimmedOverride.isEmpty {
+                    LabeledContent {
+                        Text(displayPath(for: URL(fileURLWithPath: (trimmedOverride as NSString).expandingTildeInPath, isDirectory: true)))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    } label: {
+                        Text("Override")
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    Button("Choose folder…") {
+                        chooseFolder()
+                    }
+
+                    Button("Use system default") {
+                        overridePath = ""
+                        refreshTick &+= 1
+                    }
+                    .disabled(trimmedOverride.isEmpty)
+
+                    Spacer()
                 }
             }
 
-            HStack(spacing: 8) {
-                Button("Choose folder…") {
-                    chooseFolder()
-                }
-
-                Button("Use system default") {
-                    overridePath = ""
-                    refreshTick &+= 1
-                }
-                .disabled(trimmedOverride.isEmpty)
-
-                Spacer()
-            }
-
-            Text("Screenshots saved with ⌘S in rewind go to your override if it's set, otherwise to the macOS system screenshot folder, otherwise to your Desktop.")
+            Text(captionText)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .onAppear { refreshTick &+= 1 }
         .onChange(of: overridePath) { _, _ in refreshTick &+= 1 }
+    }
+
+    private var captionText: String {
+        switch (saveToFolder, saveToClipboard) {
+        case (true, true):
+            return "⌘S and ⌘-drag in rewind both save the screenshot to the folder above and copy it to your clipboard."
+        case (true, false):
+            return "⌘S and ⌘-drag in rewind save the screenshot to your override if it's set, otherwise to the macOS system screenshot folder, otherwise to your Desktop."
+        case (false, true):
+            return "⌘S and ⌘-drag in rewind copy the screenshot to your clipboard. No file is written to disk."
+        case (false, false):
+            return ""
+        }
     }
 
     // MARK: - Actions

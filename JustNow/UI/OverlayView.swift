@@ -106,11 +106,19 @@ private struct OverlayToastView: View {
         }
     }
 
+    private func iconColor(for style: OverlayToastStyle) -> Color {
+        switch style {
+        case .success: return Color.green.opacity(0.9)
+        case .error: return Color.red.opacity(0.9)
+        case .info: return Color.white.opacity(0.85)
+        }
+    }
+
     private var toastContent: some View {
         HStack(spacing: 10) {
             Image(systemName: toast.icon)
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(toast.isError ? Color.red.opacity(0.9) : Color.green.opacity(0.9))
+                .foregroundStyle(iconColor(for: toast.style))
             VStack(alignment: .leading, spacing: 1) {
                 Text(toast.title)
                     .font(.system(size: 12, weight: .semibold))

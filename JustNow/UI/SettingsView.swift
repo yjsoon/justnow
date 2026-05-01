@@ -27,6 +27,8 @@ struct SettingsView: View {
     @AppStorage(AppStorageKey.hasSeenMenuBarHideInfo) private var hasSeenMenuBarHideInfo: Bool = AppStorageDefault.hasSeenMenuBarHideInfo
     @AppStorage(AppStorageKey.screenshotSaveLocationOverride)
     private var screenshotSaveLocationOverride: String = AppStorageDefault.screenshotSaveLocationOverride
+    @AppStorage(AppStorageKey.screenshotSaveToFolder) private var screenshotSaveToFolder: Bool = AppStorageDefault.screenshotSaveToFolder
+    @AppStorage(AppStorageKey.screenshotSaveToClipboard) private var screenshotSaveToClipboard: Bool = AppStorageDefault.screenshotSaveToClipboard
     @State private var showHideIconInfoAlert: Bool = false
 
     var context: SettingsContext = SettingsContext()
@@ -135,7 +137,9 @@ struct SettingsView: View {
 
             Section {
                 ScreenshotSaveLocationSettingsSection(
-                    overridePath: $screenshotSaveLocationOverride
+                    overridePath: $screenshotSaveLocationOverride,
+                    saveToFolder: $screenshotSaveToFolder,
+                    saveToClipboard: $screenshotSaveToClipboard
                 )
 
                 Toggle("Play sound when saving screenshot", isOn: $saveScreenshotSoundEnabled)

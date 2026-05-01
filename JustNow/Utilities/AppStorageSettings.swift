@@ -17,6 +17,9 @@ enum AppStorageKey {
     static let showMenuBarIcon = "showMenuBarIcon"
     static let hasSeenMenuBarHideInfo = "hasSeenMenuBarHideInfo"
     static let screenshotSaveLocationOverride = "screenshotSaveLocationOverride"
+    static let screenshotSaveToFolder = "screenshotSaveToFolder"
+    static let screenshotSaveToClipboard = "screenshotSaveToClipboard"
+    static let hasSeenSaveQualityInfo = "hasSeenSaveQualityInfo"
 }
 
 enum AppStorageDefault {
@@ -36,4 +39,7 @@ enum AppStorageDefault {
     static let showMenuBarIcon = true
     static let hasSeenMenuBarHideInfo = false
     static let screenshotSaveLocationOverride = ""
+    static let screenshotSaveToFolder = true
+    static let screenshotSaveToClipboard = false
+    static let hasSeenSaveQualityInfo = false
 }

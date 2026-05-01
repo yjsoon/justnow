@@ -4,11 +4,11 @@ struct InstructionsOverlay: View {
     var viewModel: OverlayViewModel
 
     var body: some View {
-        // The "drag" affordance flips to "drag for screenshot" when ⌘ is
-        // held — same gesture, but the drop will save a region instead of
-        // OCRing it.
-        let dragLabel = viewModel.isCommandHeld ? "Drag for screenshot" : "Drag to grab text"
-        let dragIcon = viewModel.isCommandHeld ? "camera.viewfinder" : "text.viewfinder"
+        // The "drag" affordance flips to "drag for screenshot" whenever
+        // we're in region-screenshot mode — either ⌘ is held, or the user
+        // armed it via the "Save Region…" menu item.
+        let dragLabel = viewModel.isInRegionScreenshotMode ? "Drag for screenshot" : "Drag to grab text"
+        let dragIcon = viewModel.isInRegionScreenshotMode ? "camera.viewfinder" : "text.viewfinder"
 
         ViewThatFits(in: .horizontal) {
             instructionPill(dragLabel: dragLabel, dragIcon: dragIcon, showsSearchShortcut: FeatureFlags.isSearchEnabled)
@@ -77,6 +77,13 @@ struct OverlayMoreMenuIsland: View {
                 Label("Save Screenshot", systemImage: "square.and.arrow.down")
             }
             .keyboardShortcut("s", modifiers: .command)
+            .disabled(!viewModel.canSaveCurrentFrame)
+
+            Button {
+                viewModel.armRegionScreenshot()
+            } label: {
+                Label("Save Region…", systemImage: "rectangle.dashed")
+            }
             .disabled(!viewModel.canSaveCurrentFrame)
 
             Divider()

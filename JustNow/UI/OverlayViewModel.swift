@@ -3,6 +3,7 @@
 //  JustNow
 //
 
+import AppKit
 import CoreGraphics
 import Foundation
 import Observation
@@ -11,13 +12,21 @@ import os.log
 
 private let overlayViewLogger = Logger(subsystem: "sg.tk.JustNow", category: "OverlayView")
 
+enum OverlayToastStyle: Equatable {
+    case success
+    case error
+    case info
+}
+
 struct OverlayToast: Equatable, Identifiable {
     let id = UUID()
     let icon: String
     let title: String
     let detail: String?
-    let isError: Bool
+    let style: OverlayToastStyle
     let revealURL: URL?
+
+    var isError: Bool { style == .error }
 }
 
 enum SearchTimeScope: String, CaseIterable {
@@ -138,6 +147,17 @@ class OverlayViewModel {
     /// instructions pill and selection drag handler can switch to
     /// "screenshot region" mode without each component owning a monitor.
     var isCommandHeld: Bool = false
+
+    /// Set true by the "Save Region…" menu item so the very next drag
+    /// performs a region screenshot without requiring ⌘. The drag handler
+    /// clears it after consuming, so this is one-shot.
+    var isRegionScreenshotArmed: Bool = false
+
+    /// Either path that should make the next drag perform a region
+    /// screenshot — live ⌘ hold or armed via the menu.
+    var isInRegionScreenshotMode: Bool {
+        isCommandHeld || isRegionScreenshotArmed
+    }
 
     var isSearchAvailable: Bool {
         FeatureFlags.isSearchEnabled
@@ -404,57 +424,153 @@ class OverlayViewModel {
     func saveCurrentFrameToScreenshotsLocation() {
         guard let frame = displayedFrames[safe: selectedIndex] else { return }
         let buffer = frameBuffer
+        let destinations = currentSaveDestinations()
         Task { @MainActor in
             do {
-                let url = try await buffer.saveFrameToScreenshotsLocation(frame)
+                var savedURL: URL? = nil
+                if destinations.toFolder {
+                    savedURL = try await buffer.saveFrameToScreenshotsLocation(frame)
+                }
+                if destinations.toClipboard {
+                    let image = try await buffer.getFullImage(for: frame)
+                    Self.copyImageToClipboard(image)
+                }
                 playSavedSoundIfNeeded()
-                showSaveToast(OverlayToast(
-                    icon: "checkmark.circle.fill",
-                    title: savedToastTitle(for: url),
-                    detail: url.lastPathComponent,
-                    isError: false,
-                    revealURL: url
-                ))
+                showSaveToast(makeSuccessToast(savedURL: savedURL, destinations: destinations))
+                markQualityInfoPendingIfNeeded()
             } catch {
                 overlayViewLogger.error("Failed to save frame to screenshots location: \(error.localizedDescription)")
-                showSaveToast(OverlayToast(
-                    icon: "exclamationmark.triangle.fill",
-                    title: "Couldn't save screenshot",
-                    detail: error.localizedDescription,
-                    isError: true,
-                    revealURL: nil
-                ))
+                showSaveToast(makeErrorToast(error))
             }
         }
     }
 
-    /// Save a region cropped from the displayed frame to the user's chosen
-    /// screenshots location. Called by the drag-to-region path when ⌘ is
-    /// held during the drag.
+    /// Save a region cropped from the displayed frame. Called by the
+    /// drag-to-region path when ⌘ is held during the drag.
     func saveCroppedScreenshot(image: CGImage) {
         let buffer = frameBuffer
+        let destinations = currentSaveDestinations()
         Task { @MainActor in
             do {
-                let url = try await buffer.saveCroppedImageToScreenshotsLocation(image)
+                var savedURL: URL? = nil
+                if destinations.toFolder {
+                    savedURL = try await buffer.saveCroppedImageToScreenshotsLocation(image)
+                }
+                if destinations.toClipboard {
+                    Self.copyImageToClipboard(image)
+                }
                 playSavedSoundIfNeeded()
-                showSaveToast(OverlayToast(
-                    icon: "checkmark.circle.fill",
-                    title: savedToastTitle(for: url),
-                    detail: url.lastPathComponent,
-                    isError: false,
-                    revealURL: url
-                ))
+                showSaveToast(makeSuccessToast(savedURL: savedURL, destinations: destinations))
+                markQualityInfoPendingIfNeeded()
             } catch {
                 overlayViewLogger.error("Failed to save cropped screenshot: \(error.localizedDescription)")
-                showSaveToast(OverlayToast(
-                    icon: "exclamationmark.triangle.fill",
-                    title: "Couldn't save screenshot",
-                    detail: error.localizedDescription,
-                    isError: true,
-                    revealURL: nil
-                ))
+                showSaveToast(makeErrorToast(error))
             }
         }
+    }
+
+    private struct SaveDestinations {
+        var toFolder: Bool
+        var toClipboard: Bool
+    }
+
+    /// Resolve the user's chosen save destinations. If both toggles end up
+    /// off (which the Settings UI prevents but UserDefaults could still
+    /// reach via direct edits), force folder back on so a save attempt is
+    /// never silently dropped.
+    private func currentSaveDestinations() -> SaveDestinations {
+        let defaults = UserDefaults.standard
+        let toFolder = defaults.object(forKey: AppStorageKey.screenshotSaveToFolder) as? Bool
+            ?? AppStorageDefault.screenshotSaveToFolder
+        let toClipboard = defaults.object(forKey: AppStorageKey.screenshotSaveToClipboard) as? Bool
+            ?? AppStorageDefault.screenshotSaveToClipboard
+        if !toFolder && !toClipboard {
+            return SaveDestinations(toFolder: true, toClipboard: false)
+        }
+        return SaveDestinations(toFolder: toFolder, toClipboard: toClipboard)
+    }
+
+    private static func copyImageToClipboard(_ image: CGImage) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        let nsImage = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+        pasteboard.writeObjects([nsImage])
+    }
+
+    private func makeSuccessToast(savedURL: URL?, destinations: SaveDestinations) -> OverlayToast {
+        let title: String
+        let detail: String?
+        let revealURL: URL?
+
+        if destinations.toFolder && destinations.toClipboard, let savedURL {
+            title = "Saved & copied"
+            detail = savedURL.lastPathComponent
+            revealURL = savedURL
+        } else if destinations.toFolder, let savedURL {
+            title = savedToastTitle(for: savedURL)
+            detail = savedURL.lastPathComponent
+            revealURL = savedURL
+        } else if destinations.toClipboard {
+            title = "Copied to clipboard"
+            detail = nil
+            revealURL = nil
+        } else {
+            title = "Saved"
+            detail = nil
+            revealURL = nil
+        }
+
+        return OverlayToast(
+            icon: "checkmark.circle.fill",
+            title: title,
+            detail: detail,
+            style: .success,
+            revealURL: revealURL
+        )
+    }
+
+    private func makeErrorToast(_ error: Error) -> OverlayToast {
+        OverlayToast(
+            icon: "exclamationmark.triangle.fill",
+            title: "Couldn't save screenshot",
+            detail: error.localizedDescription,
+            style: .error,
+            revealURL: nil
+        )
+    }
+
+    /// Show a transient instructional banner in the toast slot. Used by
+    /// region-arming so the user knows what to do next.
+    func showInfoToast(icon: String, title: String, dismissAfter: TimeInterval = 4) {
+        let toast = OverlayToast(
+            icon: icon,
+            title: title,
+            detail: nil,
+            style: .info,
+            revealURL: nil
+        )
+        saveToastTask?.cancel()
+        saveToast = toast
+        saveToastTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(dismissAfter))
+            guard !Task.isCancelled else { return }
+            saveToast = nil
+        }
+    }
+
+    /// Triggered by the "Save Region…" menu item: behave as if ⌘ is held
+    /// for the next drag, and surface a one-line tip pointing the user at
+    /// the ⌘-drag shortcut for next time.
+    func armRegionScreenshot() {
+        isRegionScreenshotArmed = true
+        showInfoToast(
+            icon: "rectangle.dashed",
+            title: "Drag to capture. Next time, just hold \u{2318} and drag."
+        )
+    }
+
+    func disarmRegionScreenshot() {
+        isRegionScreenshotArmed = false
     }
 
     /// Toast title for a successful save. Prefers "Saved to <FolderName>"
@@ -484,6 +600,26 @@ class OverlayViewModel {
         saveToastTask?.cancel()
         saveToastTask = nil
         saveToast = nil
+    }
+
+    /// Set true on the first successful save when the user hasn't yet seen
+    /// the quality info. The window controller reads and clears this on
+    /// hideOverlay so the NSAlert can present *after* the overlay window
+    /// has gone — avoiding the z-order trap (overlay sits at .statusBar+1
+    /// while NSAlert defaults to .modalPanel) and the keyDown monitor
+    /// stealing the alert's Enter.
+    var shouldShowQualityInfoOnDismiss: Bool = false
+
+    /// Mark that the quality alert should fire after this overlay session
+    /// closes. Idempotent: a second mark in the same session is harmless.
+    /// Setting hasSeen here (not after the alert dismisses) keeps a forced
+    /// quit between save and overlay-close from re-prompting next time.
+    private func markQualityInfoPendingIfNeeded() {
+        let defaults = UserDefaults.standard
+        let hasSeen = defaults.bool(forKey: AppStorageKey.hasSeenSaveQualityInfo)
+        guard !hasSeen else { return }
+        defaults.set(true, forKey: AppStorageKey.hasSeenSaveQualityInfo)
+        shouldShowQualityInfoOnDismiss = true
     }
 
     private func playSavedSoundIfNeeded() {

@@ -214,6 +214,10 @@ class OverlayWindowController: NSObject {
         frameBuffer.isPruningPaused = false
         viewModel?.clearSearch()
 
+        // Capture pending educational alert before tearing down the
+        // viewModel, so it can fire once the overlay window is gone.
+        let shouldShowQualityInfo = viewModel?.shouldShowQualityInfoOnDismiss ?? false
+
         if let monitor = keyEventMonitor {
             NSEvent.removeMonitor(monitor)
             keyEventMonitor = nil
@@ -230,6 +234,32 @@ class OverlayWindowController: NSObject {
         window = nil
         viewModel = nil
         onVisibilityChanged?(false)
+
+        if shouldShowQualityInfo {
+            // Run-loop tick so the overlay is fully torn down before the
+            // alert grabs key. Without this the alert briefly appears
+            // behind the dismissing window on slower machines.
+            DispatchQueue.main.async { [weak self] in
+                self?.presentSaveQualityInfoAlert()
+            }
+        }
+    }
+
+    private func presentSaveQualityInfoAlert() {
+        let alert = NSAlert()
+        alert.messageText = "About JustNow saves"
+        alert.informativeText = """
+        JustNow saves screenshots from its rewind history rather than re-capturing the screen, so saves aren't pixel-identical to ⇧⌘3:
+
+        • Format: JPEG (the same compression JustNow uses for the rewind history).
+        • Resolution: full pixel density when plugged in. Halved when capturing on battery or in Low Power Mode for performance.
+
+        You can adjust these in Settings.
+        """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Got it")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
 
     var isVisible: Bool {
