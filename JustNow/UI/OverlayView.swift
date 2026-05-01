@@ -52,7 +52,7 @@ struct OverlayView: View {
             if let toast = viewModel.saveToast {
                 OverlayToastView(toast: toast) { url in
                     NSWorkspace.shared.activateFileViewerSelecting([url])
-                    viewModel.dismissSaveToast()
+                    viewModel.onDismiss()
                 }
                     .padding(.top, 90)
                     .transition(.asymmetric(
@@ -81,12 +81,22 @@ private struct OverlayToastView: View {
             }
             .buttonStyle(.plain)
             .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .onHover { hovering in
-                isHovering = hovering
-                if hovering {
-                    NSCursor.pointingHand.push()
-                } else {
-                    NSCursor.pop()
+            // The frame preview's text-grab tracking area continuously calls
+            // ScreenshotCursor.shared.set() on every mouse-moved event, which
+            // would override a one-shot push()/pop(). Reasserting pointingHand
+            // on every continuous-hover tick keeps the toast's cursor on top.
+            .onContinuousHover { phase in
+                switch phase {
+                case .active:
+                    isHovering = true
+                    NSCursor.pointingHand.set()
+                case .ended:
+                    isHovering = false
+                    // Without this, the hand stays put over chrome/backdrop
+                    // (no tracking area there to reset). The frame preview's
+                    // PointerTrackingView will reassert the screenshot cursor
+                    // when the pointer re-enters that region.
+                    NSCursor.arrow.set()
                 }
             }
             .accessibilityLabel(Text(toast.title))
