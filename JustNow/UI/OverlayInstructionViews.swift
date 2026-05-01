@@ -66,47 +66,6 @@ struct CompactInstructionLabelStyle: LabelStyle {
     }
 }
 
-struct OverlayMoreMenuIsland: View {
-    var viewModel: OverlayViewModel
-
-    var body: some View {
-        Menu {
-            Button {
-                viewModel.saveCurrentFrameToScreenshotsLocation()
-            } label: {
-                Label("Save Screenshot", systemImage: "square.and.arrow.down")
-            }
-            .keyboardShortcut("s", modifiers: .command)
-            .disabled(!viewModel.canSaveCurrentFrame)
-
-            Button {
-                viewModel.armRegionScreenshot()
-            } label: {
-                Label("Save Region…", systemImage: "rectangle.dashed")
-            }
-            .disabled(!viewModel.canSaveCurrentFrame)
-
-            Divider()
-
-            Button {
-                viewModel.openSettings()
-            } label: {
-                Label("Open Settings…", systemImage: "gearshape")
-            }
-            .keyboardShortcut(",", modifiers: .command)
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.white.opacity(0.75))
-                .frame(width: 32, height: 32)
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .darkBarBackground(in: Circle())
-        .help("More actions")
-        .accessibilityLabel("More actions")
-        .accessibilityHint("Save the current screenshot, save a region, or open Settings.")
-    }
-}
+// `OverlayMoreMenuIsland` lives in OverlayMoreMenu.swift — it's an AppKit
+// `NSMenu` rather than a SwiftUI `Menu` so it can render a bare ⌘ symbol in
+// the shortcut column for "Save Region…".
