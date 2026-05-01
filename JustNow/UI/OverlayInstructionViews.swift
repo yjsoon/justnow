@@ -107,6 +107,6 @@ struct OverlayMoreMenuIsland: View {
         .darkBarBackground(in: Circle())
         .help("More actions")
         .accessibilityLabel("More actions")
-        .accessibilityHint("Save the current screenshot or open Settings.")
+        .accessibilityHint("Save the current screenshot, save a region, or open Settings.")
     }
 }
