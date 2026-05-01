@@ -133,6 +133,12 @@ class OverlayViewModel {
     var saveToast: OverlayToast?
     private var saveToastTask: Task<Void, Never>?
 
+    /// Tracks whether ⌘ is currently held inside the overlay window. The
+    /// modifier-flag monitor in OverlayWindowController writes here so the
+    /// instructions pill and selection drag handler can switch to
+    /// "screenshot region" mode without each component owning a monitor.
+    var isCommandHeld: Bool = false
+
     var isSearchAvailable: Bool {
         FeatureFlags.isSearchEnabled
     }
@@ -411,6 +417,35 @@ class OverlayViewModel {
                 ))
             } catch {
                 overlayViewLogger.error("Failed to save frame to screenshots location: \(error.localizedDescription)")
+                showSaveToast(OverlayToast(
+                    icon: "exclamationmark.triangle.fill",
+                    title: "Couldn't save screenshot",
+                    detail: error.localizedDescription,
+                    isError: true,
+                    revealURL: nil
+                ))
+            }
+        }
+    }
+
+    /// Save a region cropped from the displayed frame to the user's chosen
+    /// screenshots location. Called by the drag-to-region path when ⌘ is
+    /// held during the drag.
+    func saveCroppedScreenshot(image: CGImage) {
+        let buffer = frameBuffer
+        Task { @MainActor in
+            do {
+                let url = try await buffer.saveCroppedImageToScreenshotsLocation(image)
+                playSavedSoundIfNeeded()
+                showSaveToast(OverlayToast(
+                    icon: "checkmark.circle.fill",
+                    title: savedToastTitle(for: url),
+                    detail: url.lastPathComponent,
+                    isError: false,
+                    revealURL: url
+                ))
+            } catch {
+                overlayViewLogger.error("Failed to save cropped screenshot: \(error.localizedDescription)")
                 showSaveToast(OverlayToast(
                     icon: "exclamationmark.triangle.fill",
                     title: "Couldn't save screenshot",

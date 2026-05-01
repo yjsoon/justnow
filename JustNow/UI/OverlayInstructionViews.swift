@@ -1,25 +1,46 @@
 import SwiftUI
 
 struct InstructionsOverlay: View {
+    var viewModel: OverlayViewModel
+
     var body: some View {
+        // The "drag" affordance flips to "drag for screenshot" when ⌘ is
+        // held — same gesture, but the drop will save a region instead of
+        // OCRing it.
+        let dragLabel = viewModel.isCommandHeld ? "Drag for screenshot" : "Drag to grab text"
+        let dragIcon = viewModel.isCommandHeld ? "camera.viewfinder" : "text.viewfinder"
+
         ViewThatFits(in: .horizontal) {
-            instructionPill(textGrabLabel: "Drag to grab text", showsSearchShortcut: FeatureFlags.isSearchEnabled)
-            instructionPill(textGrabLabel: "Grab text", showsSearchShortcut: FeatureFlags.isSearchEnabled)
-            instructionPill(textGrabLabel: "Grab", showsSearchShortcut: FeatureFlags.isSearchEnabled)
-            instructionPill(textGrabLabel: "", showsSearchShortcut: FeatureFlags.isSearchEnabled)
+            instructionPill(dragLabel: dragLabel, dragIcon: dragIcon, showsSearchShortcut: FeatureFlags.isSearchEnabled)
+            instructionPill(dragLabel: shortened(dragLabel, to: 1), dragIcon: dragIcon, showsSearchShortcut: FeatureFlags.isSearchEnabled)
+            instructionPill(dragLabel: shortened(dragLabel, to: 2), dragIcon: dragIcon, showsSearchShortcut: FeatureFlags.isSearchEnabled)
+            instructionPill(dragLabel: "", dragIcon: dragIcon, showsSearchShortcut: FeatureFlags.isSearchEnabled)
         }
     }
 
-    private func instructionPill(textGrabLabel: String, showsSearchShortcut: Bool) -> some View {
+    private func shortened(_ full: String, to step: Int) -> String {
+        // Mirror the previous "Drag to grab text" → "Grab text" → "Grab"
+        // squeeze. For "Drag for screenshot" we go "For screenshot" → "Screenshot".
+        switch (full, step) {
+        case ("Drag to grab text", 1): return "Grab text"
+        case ("Drag to grab text", 2): return "Grab"
+        case ("Drag for screenshot", 1): return "For screenshot"
+        case ("Drag for screenshot", 2): return "Screenshot"
+        default: return full
+        }
+    }
+
+    private func instructionPill(dragLabel: String, dragIcon: String, showsSearchShortcut: Bool) -> some View {
         HStack(spacing: 16) {
             Label("← →", systemImage: "arrow.left.arrow.right")
-            if textGrabLabel.isEmpty {
-                Image(systemName: "text.viewfinder")
+            if dragLabel.isEmpty {
+                Image(systemName: dragIcon)
                     .font(.system(size: 10))
                     .foregroundStyle(.white.opacity(0.5))
             } else {
-                Label(textGrabLabel, systemImage: "text.viewfinder")
+                Label(dragLabel, systemImage: dragIcon)
             }
+            Label("\u{2318}S", systemImage: "camera.viewfinder")
             if showsSearchShortcut {
                 Label("/", systemImage: "magnifyingglass")
             }

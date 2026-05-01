@@ -366,7 +366,7 @@ private struct OverlayTopBar: View {
                 .frame(width: OverlayChromeMetrics.sideSlotWidth, alignment: .leading)
 
                 HStack(spacing: 12) {
-                    InstructionsOverlay()
+                    InstructionsOverlay(viewModel: viewModel)
                     if viewModel.availableDisplays.count > 1 {
                         DisplayPickerStrip(viewModel: viewModel)
                     }

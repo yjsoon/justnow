@@ -372,6 +372,13 @@ class FrameBuffer {
         try await frameStore.copyFrameToScreenshotsLocation(id: frame.id, timestamp: frame.timestamp)
     }
 
+    /// Encode an in-memory cropped CGImage as JPEG and save it to the user's
+    /// chosen screenshots location. Used for ⌘-drag region screenshots from
+    /// the rewind overlay.
+    func saveCroppedImageToScreenshotsLocation(_ image: CGImage, timestamp: Date = Date()) async throws -> URL {
+        try await frameStore.saveCroppedImageToScreenshotsLocation(image: image, timestamp: timestamp)
+    }
+
     /// Get thumbnail, with caching
     func getThumbnail(for frame: StoredFrame) async -> CGImage? {
         let key = frame.id as NSUUID

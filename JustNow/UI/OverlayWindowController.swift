@@ -17,6 +17,7 @@ class OverlayWindowController: NSObject {
     private var dismissShortcutModifiers: Int
     private var keyEventMonitor: Any?
     private var scrollEventMonitor: Any?
+    private var flagsChangedMonitor: Any?
     private var viewModel: OverlayViewModel?
 
     init(
@@ -184,6 +185,13 @@ class OverlayWindowController: NSObject {
             return nil
         }
 
+        // Track ⌘ state so the instructions pill and drag handler can switch
+        // to "screenshot region" mode without each owning its own monitor.
+        flagsChangedMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.viewModel?.isCommandHeld = event.modifierFlags.contains(.command)
+            return event
+        }
+
         // Monitor scroll events
         scrollEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             guard let self = self, let vm = self.viewModel else { return event }
@@ -213,6 +221,10 @@ class OverlayWindowController: NSObject {
         if let monitor = scrollEventMonitor {
             NSEvent.removeMonitor(monitor)
             scrollEventMonitor = nil
+        }
+        if let monitor = flagsChangedMonitor {
+            NSEvent.removeMonitor(monitor)
+            flagsChangedMonitor = nil
         }
         window?.orderOut(nil)
         window = nil

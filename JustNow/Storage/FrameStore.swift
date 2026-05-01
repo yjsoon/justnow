@@ -180,6 +180,34 @@ actor FrameStore {
         return destination
     }
 
+    /// Encode the in-memory cropped image as JPEG and write it to the user's
+    /// chosen screenshots location, using the same filename pattern as
+    /// `copyFrameToScreenshotsLocation` and the same `(n)`-suffix collision
+    /// handling. Used by ⌘-drag screenshots from the rewind overlay.
+    func saveCroppedImageToScreenshotsLocation(image: CGImage, timestamp: Date) throws -> URL {
+        guard let jpegData = ImageEncoder.jpegData(from: image, quality: ImageEncoder.fullImageQuality) else {
+            throw FrameStoreError.imageEncodingFailed
+        }
+
+        let destinationDirectory = ScreenshotSaveLocation.resolveLive(fileManager: fileManager)
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
+        let stamp = formatter.string(from: timestamp)
+        let baseName = "JustNow \(stamp)"
+
+        var destination = destinationDirectory.appendingPathComponent("\(baseName).jpg")
+        var suffix = 2
+        while fileManager.fileExists(atPath: destination.path) {
+            destination = destinationDirectory.appendingPathComponent("\(baseName) (\(suffix)).jpg")
+            suffix += 1
+        }
+
+        try jpegData.write(to: destination, options: .atomic)
+        return destination
+    }
+
     func loadThumbnail(id: UUID) -> CGImage? {
         guard let metadata = manifest.frames.first(where: { $0.id == id }) else {
             return nil

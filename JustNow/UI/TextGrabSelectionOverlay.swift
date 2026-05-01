@@ -267,8 +267,31 @@ struct TextGrabSelectionOverlay: View {
                 }
 
                 selectionRect = finalRect
-                beginTextGrab(for: finalRect, displayedImageRect: displayedImageRect)
+                if NSEvent.modifierFlags.contains(.command) {
+                    beginRegionScreenshot(for: finalRect, displayedImageRect: displayedImageRect)
+                } else {
+                    beginTextGrab(for: finalRect, displayedImageRect: displayedImageRect)
+                }
             }
+    }
+
+    /// ⌘-drag variant: crop the displayed image to the selection and hand
+    /// it to the view model's screenshot save flow. We don't run OCR or
+    /// touch the banner state so the toast (with reveal-in-Finder) is the
+    /// only feedback, mirroring ⌘S on the full frame.
+    private func beginRegionScreenshot(for selectionRect: CGRect, displayedImageRect: CGRect) {
+        guard let cropRect = TextGrabGeometry.cropRect(
+            for: selectionRect,
+            displayedImageRect: displayedImageRect,
+            imageSize: CGSize(width: image.width, height: image.height)
+        ), let croppedImage = image.cropping(to: cropRect) else {
+            self.selectionRect = nil
+            updateBanner(.failed, resetAfter: .seconds(2.4))
+            return
+        }
+
+        self.selectionRect = nil
+        viewModel.saveCroppedScreenshot(image: croppedImage)
     }
 
     private func beginTextGrab(for selectionRect: CGRect, displayedImageRect: CGRect) {
