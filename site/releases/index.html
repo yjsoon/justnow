@@ -38,9 +38,32 @@
 
       <main class="release-list">
         <article class="release-card">
-          <h2>v1.2.0</h2>
+          <h2>v1.3.0</h2>
           <div class="release-meta">
             <span>Current public build</span>
+            <span>May 2, 2026</span>
+          </div>
+          <ul>
+            <li>Save the current overlay screenshot to disk: use ⌘S, the new &quot;Save Screenshot&quot; item in the more-menu, or hold ⌘ while dragging a region.</li>
+            <li>Choose a custom save location for overlay screenshots in Settings.</li>
+            <li>Click the saved-file toast to reveal the screenshot in Finder; clicking dismisses the overlay.</li>
+            <li>Plays a system shutter sound on successful screenshot save (CC0 fallback bundled).</li>
+            <li>Surfaced ⌘S in the overlay&#x27;s instruction pill so the screenshot shortcut is discoverable.</li>
+            <li>Rebuilt the overlay more-menu on AppKit so &quot;Save Region…&quot; shows a bare ⌘ aligned with the other shortcut hints in the right-hand column.</li>
+            <li>&quot;Save Screenshot&quot; in the more-menu now uses the camera-viewfinder glyph to match the instruction-pill ⌘S hint.</li>
+            <li>The ⌘-drag region-screenshot hint now appears only on the first two menu uses, then quietly drops to &quot;Drag to capture.&quot;</li>
+            <li>Region screenshots now crop pixel-exact instead of using the OCR padding; text-grab still uses padded crops.</li>
+            <li>Surface a blocked capture status when capture-start bails silently.</li>
+            <li>Retain the shutter sound across rapid plays so it never clips on the first save.</li>
+            <li>Defer the save-quality info alert when reveal-in-Finder dismisses the overlay so it surfaces on a future save instead of being buried behind Finder.</li>
+            <li>Removed an empty CFBundleDisplayName and stale INFOPLIST_KEY_* build settings.</li>
+            <li>Routed the capture pipeline through unified logging.</li>
+          </ul>
+        </article>
+        <article class="release-card">
+          <h2>v1.2.0</h2>
+          <div class="release-meta">
+            <span>Previous release</span>
             <span>April 24, 2026</span>
           </div>
           <ul>
