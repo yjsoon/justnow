@@ -20,6 +20,7 @@ enum AppStorageKey {
     static let screenshotSaveToFolder = "screenshotSaveToFolder"
     static let screenshotSaveToClipboard = "screenshotSaveToClipboard"
     static let hasSeenSaveQualityInfo = "hasSeenSaveQualityInfo"
+    static let regionScreenshotShortcutHintCount = "regionScreenshotShortcutHintCount"
 }
 
 enum AppStorageDefault {

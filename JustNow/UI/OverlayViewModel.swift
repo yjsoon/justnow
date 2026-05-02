@@ -559,13 +559,22 @@ class OverlayViewModel {
     }
 
     /// Triggered by the "Save Region…" menu item: behave as if ⌘ is held
-    /// for the next drag, and surface a one-line tip pointing the user at
-    /// the ⌘-drag shortcut for next time.
+    /// for the next drag, and briefly teach the ⌘-drag shortcut the first
+    /// couple of times the menu path is used.
     func armRegionScreenshot() {
         isRegionScreenshotArmed = true
+        let defaults = UserDefaults.standard
+        let hintCount = defaults.integer(forKey: AppStorageKey.regionScreenshotShortcutHintCount)
+        let title: String
+        if hintCount < 2 {
+            title = "Drag to capture. You can also hold \u{2318} and drag."
+            defaults.set(hintCount + 1, forKey: AppStorageKey.regionScreenshotShortcutHintCount)
+        } else {
+            title = "Drag to capture."
+        }
         showInfoToast(
             icon: "rectangle.dashed",
-            title: "Drag to capture. Next time, just hold \u{2318} and drag."
+            title: title
         )
     }
 

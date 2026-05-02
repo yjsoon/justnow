@@ -292,7 +292,8 @@ struct TextGrabSelectionOverlay: View {
         guard let cropRect = TextGrabGeometry.cropRect(
             for: selectionRect,
             displayedImageRect: displayedImageRect,
-            imageSize: CGSize(width: image.width, height: image.height)
+            imageSize: CGSize(width: image.width, height: image.height),
+            paddingFraction: 0
         ), let croppedImage = image.cropping(to: cropRect) else {
             self.selectionRect = nil
             updateBanner(.failed, resetAfter: .seconds(2.4))
