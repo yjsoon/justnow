@@ -51,8 +51,7 @@ struct OverlayView: View {
         .overlay(alignment: .top) {
             if let toast = viewModel.saveToast {
                 OverlayToastView(toast: toast) { url in
-                    NSWorkspace.shared.activateFileViewerSelecting([url])
-                    viewModel.onDismiss()
+                    viewModel.revealSavedFile(url)
                 }
                     .padding(.top, 90)
                     .transition(.asymmetric(

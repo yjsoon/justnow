@@ -602,6 +602,12 @@ class OverlayViewModel {
         saveToast = nil
     }
 
+    func revealSavedFile(_ url: URL) {
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+        deferQualityInfoUntilLaterIfPending()
+        onDismiss()
+    }
+
     /// Set true on the first successful save when the user hasn't yet seen
     /// the quality info. The window controller reads and clears this on
     /// hideOverlay so the NSAlert can present *after* the overlay window
@@ -620,6 +626,12 @@ class OverlayViewModel {
         guard !hasSeen else { return }
         defaults.set(true, forKey: AppStorageKey.hasSeenSaveQualityInfo)
         shouldShowQualityInfoOnDismiss = true
+    }
+
+    private func deferQualityInfoUntilLaterIfPending() {
+        guard shouldShowQualityInfoOnDismiss else { return }
+        shouldShowQualityInfoOnDismiss = false
+        UserDefaults.standard.set(false, forKey: AppStorageKey.hasSeenSaveQualityInfo)
     }
 
     private func playSavedSoundIfNeeded() {
