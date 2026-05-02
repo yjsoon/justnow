@@ -22,12 +22,22 @@ enum ScreenshotSound {
         "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif",
         "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Shutter.aif"
     ]
+    private static var retainedSound: NSSound?
+    private static var retainedSoundURL: URL?
 
     static func play() {
-        guard let url = resolvedURL(),
-              let sound = NSSound(contentsOf: url, byReference: false)
-        else { return }
+        guard let url = resolvedURL() else { return }
+        let sound: NSSound
+        if retainedSoundURL == url, let existingSound = retainedSound {
+            sound = existingSound
+        } else {
+            guard let newSound = NSSound(contentsOf: url, byReference: false) else { return }
+            retainedSound = newSound
+            retainedSoundURL = url
+            sound = newSound
+        }
         sound.stop()
+        sound.currentTime = 0
         sound.play()
     }
 
