@@ -4,6 +4,30 @@ All notable changes to JustNow will be documented in this file.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-05-02
+
+### Added
+- Save the current overlay screenshot to disk: use ⌘S, the new "Save Screenshot" item in the more-menu, or hold ⌘ while dragging a region.
+- Choose a custom save location for overlay screenshots in Settings.
+- Click the saved-file toast to reveal the screenshot in Finder; clicking dismisses the overlay.
+- Plays a system shutter sound on successful screenshot save (CC0 fallback bundled).
+
+### Changed
+- Surfaced ⌘S in the overlay's instruction pill so the screenshot shortcut is discoverable.
+- Rebuilt the overlay more-menu on AppKit so "Save Region…" shows a bare ⌘ aligned with the other shortcut hints in the right-hand column.
+- "Save Screenshot" in the more-menu now uses the camera-viewfinder glyph to match the instruction-pill ⌘S hint.
+- The ⌘-drag region-screenshot hint now appears only on the first two menu uses, then quietly drops to "Drag to capture."
+- Region screenshots now crop pixel-exact instead of using the OCR padding; text-grab still uses padded crops.
+
+### Fixed
+- Surface a blocked capture status when capture-start bails silently.
+- Retain the shutter sound across rapid plays so it never clips on the first save.
+- Defer the save-quality info alert when reveal-in-Finder dismisses the overlay so it surfaces on a future save instead of being buried behind Finder.
+- Removed an empty CFBundleDisplayName and stale INFOPLIST_KEY_* build settings.
+
+### Internal
+- Routed the capture pipeline through unified logging.
+
 ## [1.2.0] - 2026-04-24
 
 ### Added
