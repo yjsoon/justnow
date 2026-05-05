@@ -38,7 +38,7 @@ enum ScreenshotSaveLocation {
     /// supplied URL points to an existing directory we can plausibly write
     /// into. Tests can supply an in-memory predicate; production passes a
     /// closure that defers to `FileManager`.
-    static func resolve(
+    nonisolated static func resolve(
         inputs: ScreenshotSaveLocationInputs,
         directoryExists: (URL) -> Bool
     ) -> URL {
@@ -58,7 +58,7 @@ enum ScreenshotSaveLocation {
     /// Live convenience that wires the pure resolver up to the real
     /// `FileManager`, the running app's `UserDefaults`, and the system
     /// `com.apple.screencapture` domain.
-    static func resolveLive(
+    nonisolated static func resolveLive(
         defaults: UserDefaults = .standard,
         fileManager: FileManager = .default
     ) -> URL {
@@ -87,18 +87,18 @@ enum ScreenshotSaveLocation {
 
     // MARK: - Helpers
 
-    private static func candidateFromOverride(_ path: String) -> URL? {
+    nonisolated private static func candidateFromOverride(_ path: String) -> URL? {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         return URL(fileURLWithPath: expandTilde(trimmed), isDirectory: true)
     }
 
-    private static func candidateFromSystemLocation(_ raw: String?) -> URL? {
+    nonisolated private static func candidateFromSystemLocation(_ raw: String?) -> URL? {
         guard let raw, !raw.isEmpty else { return nil }
         return URL(fileURLWithPath: expandTilde(raw), isDirectory: true)
     }
 
-    private static func expandTilde(_ raw: String) -> String {
+    nonisolated private static func expandTilde(_ raw: String) -> String {
         (raw as NSString).expandingTildeInPath
     }
 }

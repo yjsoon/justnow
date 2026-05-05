@@ -22,7 +22,18 @@ final class PermisoAssistant {
 
     func present(
         panel: PermisoPanel,
-        hostApp: PermisoHostApp = .current(),
+        sourceFrameInScreen: CGRect? = nil
+    ) {
+        present(
+            panel: panel,
+            hostApp: .current(),
+            sourceFrameInScreen: sourceFrameInScreen
+        )
+    }
+
+    func present(
+        panel: PermisoPanel,
+        hostApp: PermisoHostApp,
         sourceFrameInScreen: CGRect? = nil
     ) {
         dismiss()
@@ -62,8 +73,9 @@ final class PermisoAssistant {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
-                self?.refreshPosition()
+            guard let self else { return }
+            MainActor.assumeIsolated {
+                self.refreshPosition()
             }
         }
         refreshPosition()
@@ -107,8 +119,9 @@ final class PermisoAssistant {
     private func ensurePolling() {
         guard trackingTimer == nil else { return }
         trackingTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.refreshPosition()
+            guard let self else { return }
+            MainActor.assumeIsolated {
+                self.refreshPosition()
             }
         }
     }

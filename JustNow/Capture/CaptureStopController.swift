@@ -24,12 +24,14 @@ final class CaptureStopController {
         updateStatus: @escaping (String) -> Void,
         stopCapture: @escaping () async -> Void,
         endForegroundActivity: @escaping () -> Void,
-        logger: @escaping (String) -> Void = { captureLogger.info("\($0, privacy: .public)") }
+        logger: ((String) -> Void)? = nil
     ) {
         self.updateStatus = updateStatus
         self.stopCapture = stopCapture
         self.endForegroundActivity = endForegroundActivity
-        self.logger = logger
+        self.logger = logger ?? { message in
+            captureLogger.info("\(message, privacy: .public)")
+        }
     }
 
     func scheduleStop(_ request: CaptureStopRequest) {
