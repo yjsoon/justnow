@@ -91,6 +91,7 @@ private final class CachedCGImageBox {
 @MainActor
 class FrameBuffer {
     private var frames: [StoredFrame] = []
+    private var frameLookup: [UUID: StoredFrame] = [:]
     private let frameStore: FrameStore
     private let retentionManager: RetentionManager
     private let blackFrameDetector = BlackFrameDetector.screenOff
@@ -211,7 +212,22 @@ class FrameBuffer {
     }
 
     func containsFrame(id: UUID) -> Bool {
-        frames.contains { $0.id == id }
+        frameLookup[id] != nil
+    }
+
+    /// Return frames for the provided IDs in the same order as the IDs.
+    func frames(withIDs ids: [UUID]) -> [StoredFrame] {
+        guard !ids.isEmpty else { return [] }
+
+        var matchedFrames: [StoredFrame] = []
+        matchedFrames.reserveCapacity(ids.count)
+
+        for id in ids {
+            guard let frame = frameLookup[id] else { continue }
+            matchedFrames.append(frame)
+        }
+
+        return matchedFrames
     }
 
     func cacheOCRTextIfCurrent(_ text: String, for frame: StoredFrame) async -> Bool {
@@ -427,6 +443,7 @@ class FrameBuffer {
         cancelBackgroundOCRIndexing(clearQueue: true)
         try await frameStore.clear()
         frames.removeAll()
+        frameLookup.removeAll()
         thumbnailCache.removeAllObjects()
         fullImageCache.removeAllObjects()
         inFlightFullImageLoads.removeAll()
@@ -472,8 +489,7 @@ class FrameBuffer {
 
     private func loadPersistedFrames() async {
         let metadata = await frameStore.getAllMetadata()
-
-        frames = metadata
+        let persistedFrames = metadata
             .sorted { $0.timestamp < $1.timestamp }
             .map {
                 StoredFrame(
@@ -484,6 +500,8 @@ class FrameBuffer {
                     displayName: $0.displayName
                 )
             }
+        frames = persistedFrames
+        frameLookup = Dictionary(uniqueKeysWithValues: persistedFrames.map { ($0.id, $0) })
     }
 
     func enableBlackFrameFilter(for seconds: TimeInterval) {
@@ -699,6 +717,9 @@ class FrameBuffer {
         do {
             try await frameStore.pruneFrames(ids: toPrune)
             frames.removeAll { toPrune.contains($0.id) }
+            for id in toPrune {
+                frameLookup.removeValue(forKey: id)
+            }
             removeQueuedOCRFrames(ids: toPrune)
             let validIDs = Set(frames.map { $0.id })
             await textCache.prune(keepingFrameIDs: validIDs)
@@ -743,6 +764,7 @@ class FrameBuffer {
 
     private func recordStoredFrame(_ frame: StoredFrame) {
         frames.insert(frame, at: frameInsertionIndex(for: frame.timestamp))
+        frameLookup[frame.id] = frame
     }
 
     private func enqueueFrameForBackgroundOCR(_ frame: StoredFrame) {

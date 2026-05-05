@@ -424,24 +424,16 @@ class OverlayViewModel {
     func saveCurrentFrameToScreenshotsLocation() {
         guard let frame = displayedFrames[safe: selectedIndex] else { return }
         let buffer = frameBuffer
-        let destinations = currentSaveDestinations()
-        Task { @MainActor in
-            do {
-                var savedURL: URL? = nil
-                if destinations.toFolder {
-                    savedURL = try await buffer.saveFrameToScreenshotsLocation(frame)
-                }
-                if destinations.toClipboard {
-                    let image = try await buffer.getFullImage(for: frame)
-                    Self.copyImageToClipboard(image)
-                }
-                playSavedSoundIfNeeded()
-                showSaveToast(makeSuccessToast(savedURL: savedURL, destinations: destinations))
-                markQualityInfoPendingIfNeeded()
-            } catch {
-                overlayViewLogger.error("Failed to save frame to screenshots location: \(error.localizedDescription)")
-                showSaveToast(makeErrorToast(error))
+        performScreenshotSave(operationName: "current frame") { destinations in
+            var savedURL: URL? = nil
+            if destinations.toFolder {
+                savedURL = try await buffer.saveFrameToScreenshotsLocation(frame)
             }
+            if destinations.toClipboard {
+                let image = try await buffer.getFullImage(for: frame)
+                Self.copyImageToClipboard(image)
+            }
+            return savedURL
         }
     }
 
@@ -449,21 +441,33 @@ class OverlayViewModel {
     /// drag-to-region path when ⌘ is held during the drag.
     func saveCroppedScreenshot(image: CGImage) {
         let buffer = frameBuffer
+        performScreenshotSave(operationName: "cropped region") { destinations in
+            var savedURL: URL? = nil
+            if destinations.toFolder {
+                savedURL = try await buffer.saveCroppedImageToScreenshotsLocation(image)
+            }
+            if destinations.toClipboard {
+                Self.copyImageToClipboard(image)
+            }
+            return savedURL
+        }
+    }
+
+    private func performScreenshotSave(
+        operationName: String,
+        operation: @escaping (_ destinations: SaveDestinations) async throws -> URL?
+    ) {
         let destinations = currentSaveDestinations()
         Task { @MainActor in
             do {
-                var savedURL: URL? = nil
-                if destinations.toFolder {
-                    savedURL = try await buffer.saveCroppedImageToScreenshotsLocation(image)
-                }
-                if destinations.toClipboard {
-                    Self.copyImageToClipboard(image)
-                }
+                let savedURL = try await operation(destinations)
                 playSavedSoundIfNeeded()
                 showSaveToast(makeSuccessToast(savedURL: savedURL, destinations: destinations))
                 markQualityInfoPendingIfNeeded()
             } catch {
-                overlayViewLogger.error("Failed to save cropped screenshot: \(error.localizedDescription)")
+                overlayViewLogger.error(
+                    "Failed screenshot save (\(operationName, privacy: .public)): \(error.localizedDescription, privacy: .public)"
+                )
                 showSaveToast(makeErrorToast(error))
             }
         }
@@ -688,12 +692,10 @@ class OverlayViewModel {
 
             guard !Task.isCancelled else { return }
 
-            let allFrames = buffer.getFrames()
-            let frameByID = Dictionary(uniqueKeysWithValues: allFrames.map { ($0.id, $0) })
+            let matchedFrames = buffer.frames(withIDs: matchedIDs)
             var results: [StoredFrame] = []
-            results.reserveCapacity(matchedIDs.count)
-            for matchedID in matchedIDs {
-                guard let frame = frameByID[matchedID] else { continue }
+            results.reserveCapacity(matchedFrames.count)
+            for frame in matchedFrames {
                 if let activeDisplayID {
                     if let frameDisplayID = frame.displayID {
                         guard frameDisplayID == activeDisplayID else { continue }
