@@ -264,85 +264,101 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         setupCaptureTask?.cancel()
         setupCaptureTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { self.setupCaptureTask = nil }
+            await self.runSetupCapture()
+        }
+    }
 
-            // Initialize frame buffer (loads persisted frames from disk)
-            do {
-                let retentionPolicy = self.currentRetentionPolicy()
-                let buffer = try await FrameBuffer(retentionPolicy: retentionPolicy)
-                guard !Task.isCancelled else { return }
+    private func runSetupCapture() async {
+        defer { setupCaptureTask = nil }
 
-                self.frameBuffer = buffer
-                self.lastAppliedRetentionPolicy = retentionPolicy
-                self.settingsContext.frameBuffer = buffer
+        do {
+            try await initializeFrameBufferForStartup()
+        } catch {
+            handleFrameBufferInitializationFailure(error)
+            return
+        }
 
-                let loadedCount = buffer.frameCount
-                if loadedCount > 0 {
-                    captureLogger.info("Loaded \(loadedCount, privacy: .public) frames from disk")
-                }
-            } catch {
-                if error is CancellationError || Task.isCancelled {
-                    return
-                }
-                captureLogger.error("Failed to initialize frame buffer: \(error.localizedDescription, privacy: .public)")
-                // Show error but don't quit
-                self.showErrorAlert(error)
-                return
-            }
+        guard !Task.isCancelled else { return }
 
+        configureCaptureStartupCoordinator()
+
+        guard captureEventController.canStartCapture() else {
+            applyBlockedCaptureStatusIfAvailable()
+            return
+        }
+
+        await startCaptureForLaunchState()
+    }
+
+    private func initializeFrameBufferForStartup() async throws {
+        let retentionPolicy = currentRetentionPolicy()
+        let buffer = try await FrameBuffer(retentionPolicy: retentionPolicy)
+        guard !Task.isCancelled else { return }
+
+        frameBuffer = buffer
+        lastAppliedRetentionPolicy = retentionPolicy
+        settingsContext.frameBuffer = buffer
+        logLoadedFrameCount(buffer.frameCount)
+    }
+
+    private func handleFrameBufferInitializationFailure(_ error: Error) {
+        guard !(error is CancellationError), !Task.isCancelled else { return }
+        captureLogger.error("Failed to initialize frame buffer: \(error.localizedDescription, privacy: .public)")
+        // Show error but don't quit
+        showErrorAlert(error)
+    }
+
+    private func logLoadedFrameCount(_ loadedCount: Int) {
+        guard loadedCount > 0 else { return }
+        captureLogger.info("Loaded \(loadedCount, privacy: .public) frames from disk")
+    }
+
+    private func configureCaptureStartupCoordinator() {
+        captureCoordinator.delegate = self
+        applyCapturePolicy(currentCapturePolicy())
+    }
+
+    private func applyCapturePolicy(_ policy: CapturePolicy) {
+        captureCoordinator.updateCaptureInterval(policy.interval)
+        captureCoordinator.updateCaptureScale(policy.scale)
+        frameBuffer?.updateSaveOptions(
+            policy.saveOptions,
+            duplicatePolicy: policy.duplicatePolicy
+        )
+        frameBuffer?.updateOCRIndexingPolicy(policy.ocrIndexingPolicy)
+    }
+
+    private func startCaptureForLaunchState() async {
+        switch resolveLaunchPermissionState() {
+        case .granted:
+            await startCaptureForGrantedLaunchPermission()
+        case .requestedThisLaunch:
+            // Intro alert first — clicking "Open System Settings" fires the Permiso
+            // coach, so users who dismiss the alert aren't surprised by a floating
+            // panel appearing over System Settings out of nowhere.
+            presentPermissionAlert(status: "Awaiting Permission")
+        case .deniedPreviously:
+            presentPermissionAlert(status: "No Permission")
+        }
+    }
+
+    private func startCaptureForGrantedLaunchPermission() async {
+        do {
+            try await captureCoordinator.startCapture()
             guard !Task.isCancelled else { return }
-
-            self.captureCoordinator.delegate = self
-            let preflightPolicy = self.currentCapturePolicy()
-            self.captureCoordinator.updateCaptureInterval(preflightPolicy.interval)
-            self.captureCoordinator.updateCaptureScale(preflightPolicy.scale)
-            self.frameBuffer?.updateSaveOptions(
-                preflightPolicy.saveOptions,
-                duplicatePolicy: preflightPolicy.duplicatePolicy
-            )
-            self.frameBuffer?.updateOCRIndexingPolicy(preflightPolicy.ocrIndexingPolicy)
-
-            guard self.captureEventController.canStartCapture() else {
-                if let blockedStatus = self.captureEventController.blockedStatus() {
-                    self.updateCaptureStatus(blockedStatus)
-                }
+            guard captureEventController.canStartCapture() else {
+                await captureCoordinator.stopCapture()
+                applyBlockedCaptureStatusIfAvailable()
                 return
             }
-
-            switch self.resolveLaunchPermissionState() {
-            case .granted:
-                do {
-                    try await self.captureCoordinator.startCapture()
-                    guard !Task.isCancelled else { return }
-                    guard self.captureEventController.canStartCapture() else {
-                        await self.captureCoordinator.stopCapture()
-                        if let blockedStatus = self.captureEventController.blockedStatus() {
-                            self.updateCaptureStatus(blockedStatus)
-                        }
-                        return
-                    }
-                    self.updateCaptureStatus("Active")
-                    self.capturePolicyController.resetAppliedPolicy()
-                    self.updateCapturePolicy()
-                } catch is CancellationError {
-                    return
-                } catch CaptureError.permissionDenied {
-                    self.updateCaptureStatus("No Permission")
-                    self.showPermissionAlert()
-                } catch {
-                    self.updateCaptureStatus("Error")
-                    self.showErrorAlert(error)
-                }
-            case .requestedThisLaunch:
-                self.updateCaptureStatus("Awaiting Permission")
-                // Intro alert first — clicking "Open System Settings" fires the Permiso
-                // coach, so users who dismiss the alert aren't surprised by a floating
-                // panel appearing over System Settings out of nowhere.
-                self.showPermissionAlert()
-            case .deniedPreviously:
-                self.updateCaptureStatus("No Permission")
-                self.showPermissionAlert()
-            }
+            handleSuccessfulCaptureStart()
+        } catch is CancellationError {
+            return
+        } catch CaptureError.permissionDenied {
+            presentPermissionAlert(status: "No Permission")
+        } catch {
+            updateCaptureStatus("Error")
+            showErrorAlert(error)
         }
     }
 
@@ -487,16 +503,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 applyBlockedCaptureStatusIfAvailable()
                 return false
             }
-            updateCaptureStatus("Active")
-            capturePolicyController.resetAppliedPolicy()
-            updateCapturePolicy()
-            captureLogger.info("\(successMessage, privacy: .public)")
+            handleSuccessfulCaptureStart(successMessage: successMessage)
             return true
         } catch is CancellationError {
             return false
         } catch CaptureError.permissionDenied {
-            updateCaptureStatus("No Permission")
-            showPermissionAlert()
+            presentPermissionAlert(status: "No Permission")
             return false
         } catch {
             captureLogger.error("\(failurePrefix, privacy: .public): \(error.localizedDescription, privacy: .public)")
@@ -508,6 +520,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     private func applyBlockedCaptureStatusIfAvailable() {
         if let blockedStatus = captureEventController.blockedStatus() {
             updateCaptureStatus(blockedStatus)
+        }
+    }
+
+    private func handleSuccessfulCaptureStart(successMessage: String? = nil) {
+        updateCaptureStatus("Active")
+        capturePolicyController.resetAppliedPolicy()
+        updateCapturePolicy()
+        if let successMessage {
+            captureLogger.info("\(successMessage, privacy: .public)")
         }
     }
 
@@ -813,6 +834,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     private func updatePermissionHelpMenuItem() {
         let needsPermissionHelp = !ScreenCaptureManager.hasScreenRecordingPermission()
         statusItemController?.setPermissionHelpVisible(needsPermissionHelp)
+    }
+
+    private func presentPermissionAlert(status: String, force: Bool = false) {
+        updateCaptureStatus(status)
+        showPermissionAlert(force: force)
     }
 
     private func showPermissionAlert(force: Bool = false) {
