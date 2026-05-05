@@ -33,7 +33,7 @@ final class CaptureEventController {
         enableBlackFrameFilter: @escaping (TimeInterval) -> Void,
         endForegroundActivity: @escaping () -> Void,
         updatePauseMenu: @escaping (Bool) -> Void,
-        logger: @escaping (String) -> Void = { captureLogger.info("\($0, privacy: .public)") }
+        logger: ((String) -> Void)? = nil
     ) {
         self.context = context
         self.scheduleStart = scheduleStart
@@ -43,7 +43,9 @@ final class CaptureEventController {
         self.enableBlackFrameFilter = enableBlackFrameFilter
         self.endForegroundActivity = endForegroundActivity
         self.updatePauseMenu = updatePauseMenu
-        self.logger = logger
+        self.logger = logger ?? { message in
+            captureLogger.info("\(message, privacy: .public)")
+        }
     }
 
     var isUserPaused: Bool {
