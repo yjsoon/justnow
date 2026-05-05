@@ -466,7 +466,7 @@ class OverlayViewModel {
                 markQualityInfoPendingIfNeeded()
             } catch {
                 overlayViewLogger.error(
-                    "Failed screenshot save (\(operationName, privacy: .public)): \(error.localizedDescription, privacy: .public)"
+                    "Failed screenshot save (\(operationName, privacy: .public)): \(error.localizedDescription, privacy: .private)"
                 )
                 showSaveToast(makeErrorToast(error))
             }
