@@ -33,7 +33,7 @@ This repo now carries both the macOS app source and the static public site used 
 3. Read the published GitHub release body back into `site/releases.json`.
 4. Generate the Sparkle appcast from the signed archive.
 5. Regenerate the public release notes page.
-6. Deploy `site/` to GitHub Pages or the final product domain.
+6. Deploy `site/` to Cloudflare Pages at the final product domain.
 
 ## Notes
 
@@ -42,4 +42,4 @@ This repo now carries both the macOS app source and the static public site used 
 - Prefer hosting release note pages in `site/releases/` and linking to them from appcast items.
 - Run `python3 Scripts/generate-site-content.py` after editing `site/releases.json` by hand.
 - Run `./Scripts/generate-sparkle-appcast.sh vX.Y.Z` after producing a signed Sparkle-enabled archive if you need to rebuild the feed outside the publish helper.
-- Site deployment is intentionally separate from app binary building; GitHub Actions may publish Pages, but release artefacts remain locally built and uploaded.
+- Site deployment is intentionally separate from app binary building; the local release publish flow deploys the static site to Cloudflare Pages, while release artefacts remain locally built and uploaded.
