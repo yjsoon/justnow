@@ -31,6 +31,16 @@ struct ScreenshotSaveLocationSettingsSection: View {
         overridePath.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var overrideURL: URL? {
+        guard !trimmedOverride.isEmpty else { return nil }
+        return URL(fileURLWithPath: (trimmedOverride as NSString).expandingTildeInPath, isDirectory: true)
+    }
+
+    private var isUsingOverride: Bool {
+        guard let overrideURL else { return false }
+        return resolvedURL.standardizedFileURL == overrideURL.standardizedFileURL
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Toggle("Save to folder", isOn: $saveToFolder)
@@ -49,26 +59,22 @@ struct ScreenshotSaveLocationSettingsSection: View {
                 }
 
             if saveToFolder {
-                LabeledContent {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Saving to")
+
                     Text(displayPath(for: resolvedURL))
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
-                } label: {
-                    Text("Saving to")
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                if !trimmedOverride.isEmpty {
-                    LabeledContent {
-                        Text(displayPath(for: URL(fileURLWithPath: (trimmedOverride as NSString).expandingTildeInPath, isDirectory: true)))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    } label: {
-                        Text("Override")
-                    }
+                if overrideURL != nil && !isUsingOverride {
+                    Text("The selected custom folder is unavailable, so JustNow is using the system screenshot location.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 HStack(spacing: 8) {
