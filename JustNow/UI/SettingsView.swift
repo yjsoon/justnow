@@ -481,11 +481,11 @@ struct SettingsView: View {
 
     @ViewBuilder
     private func shortcutRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        HStack(alignment: .center, spacing: 16) {
-            Text(title)
-            Spacer(minLength: 16)
+        LabeledContent {
             content()
                 .frame(width: 240, alignment: .trailing)
+        } label: {
+            Text(title)
         }
     }
 

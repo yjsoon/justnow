@@ -276,7 +276,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(handleShowSettings), keyEquivalent: ",")
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(handleShowSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
 
