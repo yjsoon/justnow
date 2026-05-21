@@ -42,7 +42,7 @@ struct ScreenshotSaveLocationSettingsSection: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        Group {
             Toggle("Save to folder", isOn: $saveToFolder)
                 .onChange(of: saveToFolder) { _, newValue in
                     if !newValue && !saveToClipboard {
