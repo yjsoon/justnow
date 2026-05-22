@@ -16,6 +16,7 @@ struct ScreenshotSaveLocationSettingsSection: View {
     @Binding var overridePath: String
     @Binding var saveToFolder: Bool
     @Binding var saveToClipboard: Bool
+    @Binding var saveScreenshotSoundEnabled: Bool
 
     /// Bumped on appear, when the override changes, and after picking a
     /// folder, so the resolved path display refreshes against the live system
@@ -57,38 +58,41 @@ struct ScreenshotSaveLocationSettingsSection: View {
                         saveToFolder = true
                     }
                 }
+            Toggle("Play sound when saving screenshot", isOn: $saveScreenshotSoundEnabled)
 
             if saveToFolder {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Saving to")
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Saving to")
 
-                    Text(displayPath(for: resolvedURL))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(displayPath(for: resolvedURL))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                if overrideURL != nil && !isUsingOverride {
-                    Text("The selected custom folder is unavailable, so JustNow is using the system screenshot location.")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                HStack(spacing: 8) {
-                    Button("Choose folder…") {
-                        chooseFolder()
+                    if overrideURL != nil && !isUsingOverride {
+                        Text("The selected custom folder is unavailable, so JustNow is using the system screenshot location.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    Button("Use system default") {
-                        overridePath = ""
-                        refreshTick &+= 1
-                    }
-                    .disabled(trimmedOverride.isEmpty)
+                    HStack(spacing: 8) {
+                        Button("Choose folder…") {
+                            chooseFolder()
+                        }
 
-                    Spacer()
+                        Button("Use system default") {
+                            overridePath = ""
+                            refreshTick &+= 1
+                        }
+                        .disabled(trimmedOverride.isEmpty)
+
+                        Spacer()
+                    }
                 }
             }
 

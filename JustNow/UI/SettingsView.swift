@@ -139,10 +139,9 @@ struct SettingsView: View {
                 ScreenshotSaveLocationSettingsSection(
                     overridePath: $screenshotSaveLocationOverride,
                     saveToFolder: $screenshotSaveToFolder,
-                    saveToClipboard: $screenshotSaveToClipboard
+                    saveToClipboard: $screenshotSaveToClipboard,
+                    saveScreenshotSoundEnabled: $saveScreenshotSoundEnabled
                 )
-
-                Toggle("Play sound when saving screenshot", isOn: $saveScreenshotSoundEnabled)
             } header: {
                 Text("Screenshot save location")
             }
