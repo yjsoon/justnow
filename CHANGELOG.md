@@ -4,6 +4,16 @@ All notable changes to JustNow will be documented in this file.
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-05-22
+
+### Changed
+- Refined Settings rows to better match native macOS layout, including keyboard shortcut alignment and screenshot save-location grouping.
+- Simplified screenshot save-location settings so the active folder is shown once and related controls stay grouped together.
+
+### Fixed
+- Kept screenshot save-location fallback messaging accurate when JustNow falls back to the folder shown in Settings.
+- Kept screenshot save failure logs private.
+
 ## [1.3.0] - 2026-05-02
 
 ### Added
