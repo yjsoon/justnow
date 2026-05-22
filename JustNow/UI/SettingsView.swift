@@ -139,10 +139,9 @@ struct SettingsView: View {
                 ScreenshotSaveLocationSettingsSection(
                     overridePath: $screenshotSaveLocationOverride,
                     saveToFolder: $screenshotSaveToFolder,
-                    saveToClipboard: $screenshotSaveToClipboard
+                    saveToClipboard: $screenshotSaveToClipboard,
+                    saveScreenshotSoundEnabled: $saveScreenshotSoundEnabled
                 )
-
-                Toggle("Play sound when saving screenshot", isOn: $saveScreenshotSoundEnabled)
             } header: {
                 Text("Screenshot save location")
             }
@@ -481,11 +480,11 @@ struct SettingsView: View {
 
     @ViewBuilder
     private func shortcutRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        HStack(alignment: .center, spacing: 16) {
-            Text(title)
-            Spacer(minLength: 16)
+        LabeledContent {
             content()
                 .frame(width: 240, alignment: .trailing)
+        } label: {
+            Text(title)
         }
     }
 

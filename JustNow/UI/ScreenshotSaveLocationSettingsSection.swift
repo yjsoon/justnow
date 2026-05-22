@@ -16,6 +16,7 @@ struct ScreenshotSaveLocationSettingsSection: View {
     @Binding var overridePath: String
     @Binding var saveToFolder: Bool
     @Binding var saveToClipboard: Bool
+    @Binding var saveScreenshotSoundEnabled: Bool
 
     /// Bumped on appear, when the override changes, and after picking a
     /// folder, so the resolved path display refreshes against the live system
@@ -31,9 +32,23 @@ struct ScreenshotSaveLocationSettingsSection: View {
         overridePath.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var overrideURL: URL? {
+        guard !trimmedOverride.isEmpty else { return nil }
+        return URL(fileURLWithPath: (trimmedOverride as NSString).expandingTildeInPath, isDirectory: true)
+    }
+
+    private func isUsingOverride(resolvedURL: URL) -> Bool {
+        guard let overrideURL else { return false }
+        return resolvedURL.standardizedFileURL == overrideURL.standardizedFileURL
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let resolvedURL = resolvedURL
+
+        Group {
             Toggle("Save to folder", isOn: $saveToFolder)
+                .onAppear { refreshTick &+= 1 }
+                .onChange(of: overridePath) { _, _ in refreshTick &+= 1 }
                 .onChange(of: saveToFolder) { _, newValue in
                     if !newValue && !saveToClipboard {
                         // Don't allow both off — turn clipboard on so a
@@ -47,42 +62,41 @@ struct ScreenshotSaveLocationSettingsSection: View {
                         saveToFolder = true
                     }
                 }
+            Toggle("Play sound when saving screenshot", isOn: $saveScreenshotSoundEnabled)
 
             if saveToFolder {
-                LabeledContent {
-                    Text(displayPath(for: resolvedURL))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                } label: {
-                    Text("Saving to")
-                }
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Saving to")
 
-                if !trimmedOverride.isEmpty {
-                    LabeledContent {
-                        Text(displayPath(for: URL(fileURLWithPath: (trimmedOverride as NSString).expandingTildeInPath, isDirectory: true)))
+                        Text(displayPath(for: resolvedURL))
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
-                    } label: {
-                        Text("Override")
                     }
-                }
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                HStack(spacing: 8) {
-                    Button("Choose folder…") {
-                        chooseFolder()
+                    if overrideURL != nil && !isUsingOverride(resolvedURL: resolvedURL) {
+                        Text("The selected custom folder is unavailable, so JustNow is using the folder shown above.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    Button("Use system default") {
-                        overridePath = ""
-                        refreshTick &+= 1
-                    }
-                    .disabled(trimmedOverride.isEmpty)
+                    HStack(spacing: 8) {
+                        Button("Choose folder…") {
+                            chooseFolder()
+                        }
 
-                    Spacer()
+                        Button("Use system default") {
+                            overridePath = ""
+                            refreshTick &+= 1
+                        }
+                        .disabled(trimmedOverride.isEmpty)
+
+                        Spacer()
+                    }
                 }
             }
 
@@ -91,8 +105,6 @@ struct ScreenshotSaveLocationSettingsSection: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .onAppear { refreshTick &+= 1 }
-        .onChange(of: overridePath) { _, _ in refreshTick &+= 1 }
     }
 
     private var captionText: String {
