@@ -37,14 +37,18 @@ struct ScreenshotSaveLocationSettingsSection: View {
         return URL(fileURLWithPath: (trimmedOverride as NSString).expandingTildeInPath, isDirectory: true)
     }
 
-    private var isUsingOverride: Bool {
+    private func isUsingOverride(resolvedURL: URL) -> Bool {
         guard let overrideURL else { return false }
         return resolvedURL.standardizedFileURL == overrideURL.standardizedFileURL
     }
 
     var body: some View {
+        let resolvedURL = resolvedURL
+
         Group {
             Toggle("Save to folder", isOn: $saveToFolder)
+                .onAppear { refreshTick &+= 1 }
+                .onChange(of: overridePath) { _, _ in refreshTick &+= 1 }
                 .onChange(of: saveToFolder) { _, newValue in
                     if !newValue && !saveToClipboard {
                         // Don't allow both off — turn clipboard on so a
@@ -73,8 +77,8 @@ struct ScreenshotSaveLocationSettingsSection: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                    if overrideURL != nil && !isUsingOverride {
-                        Text("The selected custom folder is unavailable, so JustNow is using the system screenshot location.")
+                    if overrideURL != nil && !isUsingOverride(resolvedURL: resolvedURL) {
+                        Text("The selected custom folder is unavailable, so JustNow is using the folder shown above.")
                             .font(.caption)
                             .foregroundStyle(.orange)
                             .fixedSize(horizontal: false, vertical: true)
@@ -101,8 +105,6 @@ struct ScreenshotSaveLocationSettingsSection: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .onAppear { refreshTick &+= 1 }
-        .onChange(of: overridePath) { _, _ in refreshTick &+= 1 }
     }
 
     private var captionText: String {
