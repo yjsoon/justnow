@@ -42,6 +42,7 @@ dist/
 
 # Codex
 .codex/
+.release-credentials/
 .env.release.local
 .wrangler/
 
