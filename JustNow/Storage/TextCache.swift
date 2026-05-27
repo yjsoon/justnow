@@ -426,8 +426,18 @@ actor TextCache {
             "SELECT frame_id FROM frame_text_fts EXCEPT SELECT frame_id FROM frame_text LIMIT 1;",
             on: db
         )) ?? true
+        let staleTextInFTS = (try? hasRows(
+            """
+            SELECT frame_text.frame_id
+            FROM frame_text
+            JOIN frame_text_fts ON frame_text.frame_id = frame_text_fts.frame_id
+            WHERE frame_text.text <> frame_text_fts.text
+            LIMIT 1;
+            """,
+            on: db
+        )) ?? true
 
-        guard primaryCount != ftsCount || missingFromFTS || staleInFTS else { return }
+        guard primaryCount != ftsCount || missingFromFTS || staleInFTS || staleTextInFTS else { return }
 
         Self.logger.info("Repairing FTS index (primary=\(primaryCount), fts=\(ftsCount))")
         try execute("DELETE FROM frame_text_fts;", on: db)
