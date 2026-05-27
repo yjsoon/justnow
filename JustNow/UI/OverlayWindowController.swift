@@ -130,8 +130,6 @@ class OverlayWindowController: NSObject {
         keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self = self, let vm = self.viewModel else { return event }
 
-            print("[JustNow] Key pressed: keyCode=\(event.keyCode), chars='\(event.characters ?? "")'")
-
             let action = resolveOverlayKeyboardAction(
                 keyCode: event.keyCode,
                 modifiers: event.modifierFlags,
@@ -188,7 +186,12 @@ class OverlayWindowController: NSObject {
         // Track ⌘ state so the instructions pill and drag handler can switch
         // to "screenshot region" mode without each owning its own monitor.
         flagsChangedMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            self?.viewModel?.isCommandHeld = event.modifierFlags.contains(.command)
+            // Only publish when the bit actually flips — Observation invalidates
+            // subscribers on every assignment, equal-value writes included.
+            let isHeld = event.modifierFlags.contains(.command)
+            if self?.viewModel?.isCommandHeld != isHeld {
+                self?.viewModel?.isCommandHeld = isHeld
+            }
             return event
         }
 
@@ -263,7 +266,7 @@ class OverlayWindowController: NSObject {
     }
 
     var isVisible: Bool {
-        window != nil && window!.isVisible
+        window?.isVisible == true
     }
 
     /// Picks the built-in display first, else the first in the list. Legacy

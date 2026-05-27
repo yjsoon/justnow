@@ -22,7 +22,8 @@ actor TextCache {
     private static let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
     init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support")
         let appDir = appSupport.appendingPathComponent("JustNow", isDirectory: true)
         self.databaseURL = appDir.appendingPathComponent("text_cache.sqlite")
         self.legacyCacheURL = appDir.appendingPathComponent("text_cache.json")
@@ -32,7 +33,7 @@ actor TextCache {
             let connection = try Self.openDatabase(at: databaseURL)
             db = connection
             try Self.createSchema(on: connection)
-            try Self.repairIndex(on: connection)
+            try Self.repairIndexIfNeeded(on: connection)
             Self.logger.info("Text cache ready with \(Self.countRows(in: connection)) entries")
 
             Task { [weak self] in
@@ -404,9 +405,39 @@ actor TextCache {
         try execute("CREATE INDEX IF NOT EXISTS idx_frame_text_timestamp ON frame_text(timestamp DESC);", on: db)
     }
 
-    private static func repairIndex(on db: OpaquePointer) throws {
+    /// FTS5 maintains its own durable inverted index; routine rebuilds are
+    /// unnecessary and quadratic with history size. Rebuild only when the FTS
+    /// table drifts from the primary table, including same-count missing or
+    /// duplicate rows.
+    private static func repairIndexIfNeeded(on db: OpaquePointer) throws {
+        let primaryCount = (try? withPreparedStatement("SELECT COUNT(*) FROM frame_text;", on: db) { statement in
+            sqlite3_step(statement) == SQLITE_ROW ? Int(sqlite3_column_int64(statement, 0)) : 0
+        }) ?? 0
+
+        let ftsCount = (try? withPreparedStatement("SELECT COUNT(*) FROM frame_text_fts;", on: db) { statement in
+            sqlite3_step(statement) == SQLITE_ROW ? Int(sqlite3_column_int64(statement, 0)) : 0
+        }) ?? 0
+
+        let missingFromFTS = (try? hasRows(
+            "SELECT frame_id FROM frame_text EXCEPT SELECT frame_id FROM frame_text_fts LIMIT 1;",
+            on: db
+        )) ?? true
+        let staleInFTS = (try? hasRows(
+            "SELECT frame_id FROM frame_text_fts EXCEPT SELECT frame_id FROM frame_text LIMIT 1;",
+            on: db
+        )) ?? true
+
+        guard primaryCount != ftsCount || missingFromFTS || staleInFTS else { return }
+
+        Self.logger.info("Repairing FTS index (primary=\(primaryCount), fts=\(ftsCount))")
         try execute("DELETE FROM frame_text_fts;", on: db)
         try execute("INSERT INTO frame_text_fts(frame_id, text) SELECT frame_id, text FROM frame_text;", on: db)
+    }
+
+    private static func hasRows(_ sql: String, on db: OpaquePointer) throws -> Bool {
+        try withPreparedStatement(sql, on: db) { statement in
+            sqlite3_step(statement) == SQLITE_ROW
+        }
     }
 
     private static func countRows(in db: OpaquePointer) -> Int {

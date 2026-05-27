@@ -30,6 +30,14 @@ struct BlackFrameDetector {
         let bytesPerRow = image.bytesPerRow
 
         guard bytesPerPixel >= 3 else { return false }
+
+        // SCK delivers BGRA8888, so the first byte is blue and the third is
+        // red. Treating them as R/G/B silently miscomputes luma for non-zero
+        // uniform dark colours.
+        let bitmapInfo = image.bitmapInfo
+        let byteOrder = bitmapInfo.intersection(.byteOrderMask)
+        let isBGRA = bytesPerPixel == 4 && byteOrder == .byteOrder32Little
+
         var maximumLuma: UInt8 = 0
         var minimumLuma: UInt8 = 255
         var darkCount = 0
@@ -40,10 +48,12 @@ struct BlackFrameDetector {
             for gridX in 0..<gridSize {
                 let x = (width * (2 * gridX + 1)) / (2 * gridSize)
                 let offset = y * bytesPerRow + x * bytesPerPixel
+                let red = isBGRA ? bytes[offset + 2] : bytes[offset]
+                let blue = isBGRA ? bytes[offset] : bytes[offset + 2]
                 let luma = lumaForRGBSample(
-                    red: bytes[offset],
+                    red: red,
                     green: bytes[offset + 1],
-                    blue: bytes[offset + 2]
+                    blue: blue
                 )
 
                 maximumLuma = max(maximumLuma, luma)

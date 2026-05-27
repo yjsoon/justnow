@@ -7,6 +7,10 @@ import CoreGraphics
 import CoreImage
 
 nonisolated struct PerceptualHash {
+    // Cache the colourspace across calls; per-call construction is wasteful on
+    // a per-frame hot path.
+    private static let grayColorSpace = CGColorSpaceCreateDeviceGray()
+
     /// Compute a 64-bit perceptual hash from a CGImage
     /// Uses average hash algorithm: resize to 8x8, convert to grayscale, threshold by mean
     /// Runs on background thread to keep main actor responsive
@@ -26,7 +30,7 @@ nonisolated struct PerceptualHash {
             height: height,
             bitsPerComponent: 8,
             bytesPerRow: width,
-            space: CGColorSpaceCreateDeviceGray(),
+            space: grayColorSpace,
             bitmapInfo: CGImageAlphaInfo.none.rawValue
         ) else {
             return 0

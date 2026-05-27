@@ -5,6 +5,7 @@
 
 import ScreenCaptureKit
 import AppKit
+import CoreVideo
 import os.log
 
 private let captureLogger = Logger(subsystem: "sg.tk.JustNow", category: "Capture")
@@ -97,6 +98,11 @@ class ScreenCaptureManager: NSObject {
         applyCaptureScale(to: cfg, dimensions: dimensions)
         cfg.showsCursor = true
         cfg.capturesAudio = false
+        // Pin the surface format so SCK doesn't pick a wider, more expensive
+        // default. BGRA + sRGB matches the JPEG encode path and avoids hidden
+        // colour-space conversion on every capture.
+        cfg.pixelFormat = kCVPixelFormatType_32BGRA
+        cfg.colorSpaceName = CGColorSpace.sRGB
         try Task.checkCancellation()
 
         self.filter = filter

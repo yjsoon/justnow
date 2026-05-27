@@ -135,6 +135,21 @@ final class TextRecognitionManagerTests: XCTestCase {
         XCTAssertEqual(layout.highlightRects(matching: "capture"), [lineRect])
     }
 
+    func testHighlightRectsFallBackToLineRectForPunctuationQueries() {
+        let lineRect = CGRect(x: 0.14, y: 0.3, width: 0.42, height: 0.1)
+        let layout = SearchTextLayout(
+            lines: [
+                SearchTextLine(
+                    text: "Loading...",
+                    rect: lineRect,
+                    words: []
+                )
+            ]
+        )
+
+        XCTAssertEqual(layout.highlightRects(matching: "..."), [lineRect])
+    }
+
     func testDisplayedRectFlipsNormalisedVisionCoordinatesIntoOverlaySpace() {
         let displayedRect = TextGrabGeometry.displayedRect(
             forNormalisedImageRect: CGRect(x: 0.25, y: 0.5, width: 0.25, height: 0.25),

@@ -23,32 +23,36 @@ nonisolated struct SearchTextLayout: Codable, Sendable {
     }
 
     func highlightRects(matching query: String) -> [CGRect] {
-        let tokens = SearchQueryTokeniser.tokens(from: query)
-        guard !tokens.isEmpty else { return [] }
+        let queryTokens = SearchQueryTokeniser.tokens(from: query)
+        let lowercasedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !queryTokens.isEmpty else {
+            guard !lowercasedQuery.isEmpty else { return [] }
+            return lines.compactMap { line in
+                line.text.lowercased().contains(lowercasedQuery) ? line.rect : nil
+            }
+        }
 
         var rects: [CGRect] = []
         rects.reserveCapacity(lines.count)
 
+        // Single pass: collect word-level rects when we can, fall back to the
+        // line rect when the query matches the line as a whole. Each word and
+        // line is tokenised at most once per call.
         for line in lines {
-            let matchingWordRects = line.words.compactMap { word -> CGRect? in
+            var lineHasWordHit = false
+            for word in line.words {
                 let wordTokens = SearchQueryTokeniser.tokens(from: word.text)
-                guard wordTokens.contains(where: { token in
-                    tokens.contains(where: { token.hasPrefix($0) })
-                }) else {
-                    return nil
-                }
-                return word.rect
+                guard tokensMatch(wordTokens, anyOf: queryTokens) else { continue }
+                rects.append(word.rect)
+                lineHasWordHit = true
             }
 
-            if !matchingWordRects.isEmpty {
-                rects.append(contentsOf: matchingWordRects)
+            if lineHasWordHit {
                 continue
             }
 
             let lineTokens = SearchQueryTokeniser.tokens(from: line.text)
-            if lineTokens.contains(where: { token in
-                tokens.contains(where: { token.hasPrefix($0) })
-            }) {
+            if tokensMatch(lineTokens, anyOf: queryTokens) {
                 rects.append(line.rect)
             }
         }
@@ -57,12 +61,22 @@ nonisolated struct SearchTextLayout: Codable, Sendable {
             return rects
         }
 
-        let lowercasedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // Last-resort substring match (catches queries that tokenise empty,
+        // e.g. punctuation-only or whitespace-only highlights from FTS).
         guard !lowercasedQuery.isEmpty else { return [] }
 
         return lines.compactMap { line in
             line.text.lowercased().contains(lowercasedQuery) ? line.rect : nil
         }
+    }
+
+    private func tokensMatch(_ candidateTokens: [String], anyOf queryTokens: [String]) -> Bool {
+        for candidate in candidateTokens {
+            for query in queryTokens where candidate.hasPrefix(query) {
+                return true
+            }
+        }
+        return false
     }
 }
 

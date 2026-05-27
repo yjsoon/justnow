@@ -238,7 +238,16 @@ nonisolated enum TextRecognitionManager {
         request.recognitionLevel = recognitionLevel
         request.usesLanguageCorrection = usesLanguageCorrection
         request.automaticallyDetectsLanguage = automaticallyDetectsLanguage
-        request.recognitionLanguages = Locale.preferredLanguages
+        // When auto-detect is off, every entry in `recognitionLanguages` loads
+        // an additional language model and broadens the glyph set — material
+        // per-frame cost for background indexing. Pin to the user's primary
+        // language. When auto-detect is on, supplying the full list is just an
+        // ordering hint to the detector and stays cheap.
+        if automaticallyDetectsLanguage {
+            request.recognitionLanguages = Locale.preferredLanguages
+        } else if let primary = Locale.preferredLanguages.first {
+            request.recognitionLanguages = [primary]
+        }
         return request
     }
 
