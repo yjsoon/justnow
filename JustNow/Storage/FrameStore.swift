@@ -39,9 +39,15 @@ actor FrameStore {
     private let manifestURL: URL
 
     private var manifest: FrameManifest
+    private var manifestIndex: [UUID: Int] = [:]
     private var manifestDirty = false
     private var pendingManifestChanges = 0
     private var manifestSaveTask: Task<Void, Never>?
+    private let manifestEncoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }()
 
     private static let manifestSaveDelay: Duration = .seconds(5)
     private static let manifestSaveImmediateThreshold = 25
@@ -68,6 +74,25 @@ actor FrameStore {
         } else {
             manifest = FrameManifest()
         }
+        manifestIndex = Self.makeManifestIndex(from: manifest.frames)
+    }
+
+    private static func makeManifestIndex(from frames: [FrameMetadata]) -> [UUID: Int] {
+        var index: [UUID: Int] = [:]
+        index.reserveCapacity(frames.count)
+        for (offset, frame) in frames.enumerated() {
+            index[frame.id] = offset
+        }
+        return index
+    }
+
+    private func rebuildManifestIndex() {
+        manifestIndex = Self.makeManifestIndex(from: manifest.frames)
+    }
+
+    private func metadata(forID id: UUID) -> FrameMetadata? {
+        guard let index = manifestIndex[id], index < manifest.frames.count else { return nil }
+        return manifest.frames[index]
     }
 
     // MARK: - Public API
@@ -113,6 +138,7 @@ actor FrameStore {
             displayName: displayName
         )
 
+        manifestIndex[metadata.id] = manifest.frames.count
         manifest.frames.append(metadata)
         manifest.lastModified = Date()
         scheduleManifestSave()
@@ -121,7 +147,7 @@ actor FrameStore {
     }
 
     func loadFullImage(id: UUID) throws -> CGImage {
-        guard let metadata = manifest.frames.first(where: { $0.id == id }) else {
+        guard let metadata = metadata(forID: id) else {
             throw FrameStoreError.fileNotFound(id)
         }
 
@@ -134,7 +160,7 @@ actor FrameStore {
     }
 
     func loadSearchIndexImage(id: UUID, maxPixelSize: Int) throws -> CGImage {
-        guard let metadata = manifest.frames.first(where: { $0.id == id }) else {
+        guard let metadata = metadata(forID: id) else {
             throw FrameStoreError.fileNotFound(id)
         }
 
@@ -151,7 +177,7 @@ actor FrameStore {
     /// capturing. Returns the destination URL, with a `(n)` suffix if the
     /// target name is taken.
     func copyFrameToScreenshotsLocation(id: UUID, timestamp: Date) throws -> URL {
-        guard let metadata = manifest.frames.first(where: { $0.id == id }) else {
+        guard let metadata = metadata(forID: id) else {
             throw FrameStoreError.fileNotFound(id)
         }
 
@@ -209,7 +235,7 @@ actor FrameStore {
     }
 
     func loadThumbnail(id: UUID) -> CGImage? {
-        guard let metadata = manifest.frames.first(where: { $0.id == id }) else {
+        guard let metadata = metadata(forID: id) else {
             return nil
         }
 
@@ -237,7 +263,7 @@ actor FrameStore {
         guard !ids.isEmpty else { return }
 
         for id in ids {
-            guard let metadata = manifest.frames.first(where: { $0.id == id }) else { continue }
+            guard let metadata = metadata(forID: id) else { continue }
 
             let fullPath = framesURL.appendingPathComponent(metadata.filename)
             let thumbPath = framesURL.appendingPathComponent(metadata.thumbnailFilename)
@@ -246,6 +272,7 @@ actor FrameStore {
         }
 
         manifest.frames.removeAll { ids.contains($0.id) }
+        rebuildManifestIndex()
         manifest.lastModified = Date()
         scheduleManifestSave()
     }
@@ -260,6 +287,7 @@ actor FrameStore {
         }
 
         manifest.frames.removeAll()
+        manifestIndex.removeAll(keepingCapacity: true)
         manifest.lastModified = Date()
         performManifestSave()
     }
@@ -267,6 +295,13 @@ actor FrameStore {
     func cleanupOrphans() throws {
         // Get all files in frames directory
         guard let files = try? fileManager.contentsOfDirectory(at: framesURL, includingPropertiesForKeys: nil) else {
+            return
+        }
+
+        // Refuse to wipe on-disk frames when the manifest looks suspiciously
+        // empty — protects against a corrupted or missing manifest forcing
+        // every captured JPEG to be deleted as an "orphan".
+        if manifest.frames.isEmpty && !files.isEmpty {
             return
         }
 
@@ -280,9 +315,13 @@ actor FrameStore {
         }
 
         // Remove manifest entries for missing files
+        let beforeCount = manifest.frames.count
         manifest.frames = manifest.frames.filter { frame in
             let fullPath = framesURL.appendingPathComponent(frame.filename)
             return fileManager.fileExists(atPath: fullPath.path)
+        }
+        if manifest.frames.count != beforeCount {
+            rebuildManifestIndex()
         }
 
         performManifestSave()
@@ -330,10 +369,9 @@ actor FrameStore {
     }
 
     private func saveManifest() throws {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = .prettyPrinted
-        let data = try encoder.encode(manifest)
-        try data.write(to: manifestURL)
+        let data = try manifestEncoder.encode(manifest)
+        // Atomic write so a crash mid-flush leaves the previous manifest
+        // intact rather than truncating it to zero bytes.
+        try data.write(to: manifestURL, options: .atomic)
     }
 }

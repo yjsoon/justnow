@@ -129,14 +129,28 @@ class FrameBuffer {
     private let fullImageCache = NSCache<NSUUID, CachedCGImageBox>()
     private var inFlightFullImageLoads: [UUID: Task<CachedCGImageBox, Error>] = [:]
 
+    private static let fullImageCacheByteBudget: Int = 256 * 1024 * 1024
+    private static let thumbnailCacheByteBudget: Int = 16 * 1024 * 1024
+
+    private static func byteCost(of image: CGImage) -> Int {
+        // Decoded bitmap size — `bytesPerRow * height` is a tight approximation
+        // even when the underlying surface uses extra padding.
+        max(image.bytesPerRow * image.height, image.width * image.height * 4)
+    }
+
     // OCR text cache for faster subsequent searches
     let textCache = TextCache()
 
     init(retentionPolicy: RetentionPolicy) async throws {
         self.frameStore = try FrameStore()
         self.retentionManager = RetentionManager(policy: retentionPolicy)
-        thumbnailCache.countLimit = 100
-        fullImageCache.countLimit = 24
+        // A single 5K BGRA frame is ~58 MB decoded. `countLimit` lets 24 of
+        // those pin ~1.4 GB; switch to byte budgets so the cache evicts under
+        // real memory pressure.
+        thumbnailCache.countLimit = 200
+        thumbnailCache.totalCostLimit = Self.thumbnailCacheByteBudget
+        fullImageCache.countLimit = 12
+        fullImageCache.totalCostLimit = Self.fullImageCacheByteBudget
 
         // Load persisted frames
         await loadPersistedFrames()
@@ -410,7 +424,7 @@ class FrameBuffer {
             return nil
         }
 
-        thumbnailCache.setObject(CachedCGImageBox(cgImage), forKey: key)
+        thumbnailCache.setObject(CachedCGImageBox(cgImage), forKey: key, cost: Self.byteCost(of: cgImage))
         return cgImage
     }
 
@@ -555,7 +569,7 @@ class FrameBuffer {
 
         do {
             let cachedImage = try await loadTask.value
-            fullImageCache.setObject(cachedImage, forKey: key)
+            fullImageCache.setObject(cachedImage, forKey: key, cost: Self.byteCost(of: cachedImage.image))
             inFlightFullImageLoads.removeValue(forKey: frame.id)
             return cachedImage
         } catch {

@@ -10,6 +10,7 @@ import Sparkle
 import os.log
 
 private let captureLogger = Logger(subsystem: "sg.tk.JustNow", category: "Capture")
+private let inputActivityForwardingInterval: TimeInterval = 1.0
 
 enum FeatureFlags {
     /// Temporary kill switch while in-app search is hidden from release builds.
@@ -402,9 +403,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     private func setupInputMonitor() {
+        var lastMouseMoveForwardedAt = -Double.greatestFiniteMagnitude
+
+        // Keep mouse movement as an activity signal so the adaptive capture
+        // policy exits idle without waiting for a click or the periodic policy
+        // timer. Gate it before hopping to the main actor to avoid 60Hz Tasks.
         inputEventMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel, .mouseMoved]
-        ) { [weak self] _ in
+        ) { [weak self] event in
+            if event.type == .mouseMoved {
+                guard event.timestamp - lastMouseMoveForwardedAt >= inputActivityForwardingInterval else {
+                    return
+                }
+                lastMouseMoveForwardedAt = event.timestamp
+            }
+
             guard let self else { return }
             Task { @MainActor [self] in
                 self.handleUserActivity()
@@ -730,7 +743,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     private func secondsSinceLastUserEvent() -> TimeInterval {
-        let anyEventType = CGEventType(rawValue: UInt32.max)!
+        // `~0` is the sentinel "any event type" — wrapped in `?? .null` to
+        // avoid a future-Swift force-unwrap crash if the bridging tightens.
+        let anyEventType = CGEventType(rawValue: ~0) ?? .null
         return CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyEventType)
     }
 

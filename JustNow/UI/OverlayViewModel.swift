@@ -536,7 +536,7 @@ class OverlayViewModel {
     private func makeErrorToast(_ error: Error) -> OverlayToast {
         OverlayToast(
             icon: "exclamationmark.triangle.fill",
-            title: "Couldn't save screenshot",
+            title: "Couldn\u{2019}t save screenshot",
             detail: error.localizedDescription,
             style: .error,
             revealURL: nil
