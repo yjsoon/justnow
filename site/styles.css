@@ -110,6 +110,25 @@ img {
   display: block;
 }
 
+/* ---- Skip link (a11y) ---- */
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.5rem 1rem;
+  text-decoration: none;
+  border-radius: 0 0 4px 0;
+  z-index: 1000;
+  font-size: var(--text-sm);
+}
+
+.skip-link:focus {
+  left: 0;
+}
+
 /* ---- Page shell ---- */
 
 .page {
