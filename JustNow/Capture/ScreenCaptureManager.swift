@@ -39,6 +39,7 @@ class ScreenCaptureManager: NSObject {
     private var filter: SCContentFilter?
     private var config: SCStreamConfiguration?
     private var displayDimensions: (width: Int, height: Int)?
+    private var displayBackingScale: CGFloat = 1
     private var captureScale: Int = 2
 
     weak var delegate: ScreenCaptureDelegate?
@@ -92,6 +93,7 @@ class ScreenCaptureManager: NSObject {
         }
 
         let dimensions = (width: display.width, height: display.height)
+        displayBackingScale = Self.backingScale(for: targetDisplayID)
         let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
 
         let cfg = SCStreamConfiguration()
@@ -349,7 +351,33 @@ class ScreenCaptureManager: NSObject {
     }
 
     private func applyCaptureScale(to config: SCStreamConfiguration, dimensions: (width: Int, height: Int)) {
-        config.width = dimensions.width * captureScale
-        config.height = dimensions.height * captureScale
+        let output = ScreenCaptureSizing.outputDimensions(
+            displayDimensions: dimensions,
+            desiredScale: captureScale,
+            displayBackingScale: displayBackingScale
+        )
+        config.width = output.width
+        config.height = output.height
+    }
+
+    private static func backingScale(for displayID: CGDirectDisplayID) -> CGFloat {
+        if let screen = DisplayIdentity.screen(for: displayID) {
+            return max(1, screen.backingScaleFactor)
+        }
+        return 1
+    }
+}
+
+enum ScreenCaptureSizing {
+    static func outputDimensions(
+        displayDimensions: (width: Int, height: Int),
+        desiredScale: Int,
+        displayBackingScale: CGFloat
+    ) -> (width: Int, height: Int) {
+        let scale = min(CGFloat(max(1, desiredScale)), max(1, displayBackingScale))
+        return (
+            width: max(1, Int((CGFloat(displayDimensions.width) * scale).rounded())),
+            height: max(1, Int((CGFloat(displayDimensions.height) * scale).rounded()))
+        )
     }
 }

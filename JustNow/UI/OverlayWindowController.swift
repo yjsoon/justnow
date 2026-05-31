@@ -104,11 +104,12 @@ class OverlayWindowController: NSObject {
         window.ignoresMouseEvents = false
         window.acceptsMouseMovedEvents = true
 
+        let contentFrame = OverlayWindowLayout.contentFrame(forScreenFrame: screen.frame)
         let overlayView = OverlayView(viewModel: vm)
-            .frame(width: screen.frame.width, height: screen.frame.height)
+            .frame(width: contentFrame.width, height: contentFrame.height)
             .clipped()
         let hostingView = NSHostingView(rootView: overlayView)
-        hostingView.frame = screen.frame
+        hostingView.frame = contentFrame
         hostingView.autoresizingMask = [.width, .height]
         // On macOS 13+, NSHostingView defaults to growing with its SwiftUI
         // content's intrinsic size. For a fullscreen overlay we explicitly
@@ -286,4 +287,10 @@ class OverlayWindowController: NSObject {
 class OverlayWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+}
+
+enum OverlayWindowLayout {
+    static func contentFrame(forScreenFrame screenFrame: CGRect) -> CGRect {
+        CGRect(origin: .zero, size: screenFrame.size)
+    }
 }
