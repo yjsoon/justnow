@@ -6,6 +6,7 @@
 import SwiftUI
 import Sparkle
 import Foundation
+import AppKit
 
 struct SettingsView: View {
     @AppStorage(AppStorageKey.captureInterval) private var captureInterval: Double = AppStorageDefault.captureInterval
@@ -23,6 +24,7 @@ struct SettingsView: View {
     @AppStorage(AppStorageKey.textGrabSoundEnabled) private var textGrabSoundEnabled: Bool = AppStorageDefault.textGrabSoundEnabled
     @AppStorage(AppStorageKey.saveScreenshotSoundEnabled) private var saveScreenshotSoundEnabled: Bool = AppStorageDefault.saveScreenshotSoundEnabled
     @AppStorage(AppStorageKey.textGrabDebugPreviewEnabled) private var textGrabDebugPreviewEnabled: Bool = AppStorageDefault.textGrabDebugPreviewEnabled
+    @AppStorage(AppStorageKey.rewindDragAction) private var rewindDragAction: String = AppStorageDefault.rewindDragAction
     @AppStorage(AppStorageKey.showMenuBarIcon) private var showMenuBarIcon: Bool = AppStorageDefault.showMenuBarIcon
     @AppStorage(AppStorageKey.hasSeenMenuBarHideInfo) private var hasSeenMenuBarHideInfo: Bool = AppStorageDefault.hasSeenMenuBarHideInfo
     @AppStorage(AppStorageKey.screenshotSaveLocationOverride)
@@ -51,26 +53,30 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section {
-                Toggle("Launch on startup", isOn: launchAtLoginBinding)
-                    .disabled(!context.canConfigureLaunchAtLogin)
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Launch on startup", isOn: launchAtLoginBinding)
+                        .disabled(!context.canConfigureLaunchAtLogin)
 
-                Text("If macOS asks for approval, enable JustNow in System Settings > General > Login Items.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    Text("If macOS asks for approval, enable JustNow in System Settings > General > Login Items.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
-                Toggle("Show menu bar icon", isOn: $showMenuBarIcon)
-                    .onChange(of: showMenuBarIcon) { _, newValue in
-                        if !newValue && !hasSeenMenuBarHideInfo {
-                            showHideIconInfoAlert = true
-                            hasSeenMenuBarHideInfo = true
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Show menu bar icon", isOn: $showMenuBarIcon)
+                        .onChange(of: showMenuBarIcon) { _, newValue in
+                            if !newValue && !hasSeenMenuBarHideInfo {
+                                showHideIconInfoAlert = true
+                                hasSeenMenuBarHideInfo = true
+                            }
                         }
-                    }
 
-                Text("Hides the icon in the macOS menu bar. If you lose access, relaunch JustNow from Finder or Spotlight to reopen Settings, or toggle it back from the rewind overlay.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    Text("Hides the icon in the macOS menu bar. If you lose access, relaunch JustNow from Finder or Spotlight to reopen Settings, or toggle it back from the rewind overlay.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             } header: {
                 Text("General")
             }
@@ -124,13 +130,35 @@ struct SettingsView: View {
             }
 
             Section {
-                Toggle("Play copied-text sound", isOn: $textGrabSoundEnabled)
-                Toggle("Show text-grab debug preview", isOn: $textGrabDebugPreviewEnabled)
+                VStack(alignment: .leading, spacing: 8) {
+                    LabeledContent {
+                        Picker("", selection: $rewindDragAction) {
+                            ForEach(RewindDragAction.allCases) { action in
+                                Text(action.settingsLabel).tag(action.rawValue)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                    } label: {
+                        Text("Default drag action")
+                    }
 
-                Text("In rewind, drag over the frame to copy on-screen text from just that area. JustNow cleans up the OCR before it lands on the clipboard, and debug preview shows the exact crop sent into OCR.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    Text("Choose what happens when you drag over a rewind frame. Hold Command while dragging for the other action. Screenshots follow your screenshot save location settings.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Toggle("Play copied-text sound", isOn: $textGrabSoundEnabled)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Show text-grab debug preview", isOn: $textGrabDebugPreviewEnabled)
+
+                    Text("Copied text is cleaned up before it lands on the clipboard. Debug preview shows the exact crop sent into OCR.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             } header: {
                 Text("Rewind")
             }
@@ -220,8 +248,16 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Button("Clear All History", role: .destructive) {
-                    showClearConfirmation = true
+                HStack(spacing: 8) {
+                    Button("Open Storage Folder") {
+                        openStorageFolder()
+                    }
+
+                    Spacer()
+
+                    Button("Clear All History", role: .destructive) {
+                        showClearConfirmation = true
+                    }
                 }
             } header: {
                 Text("Storage")
@@ -371,6 +407,16 @@ struct SettingsView: View {
             storageSize = 0
             frameCount = 0
         }
+    }
+
+    private func openStorageFolder() {
+        let applicationSupportURL =
+            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory())
+                .appendingPathComponent("Library/Application Support", isDirectory: true)
+        let storageURL = applicationSupportURL.appendingPathComponent("JustNow", isDirectory: true)
+        try? FileManager.default.createDirectory(at: storageURL, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(storageURL)
     }
 
     private var frameBufferIdentity: ObjectIdentifier? {

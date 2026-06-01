@@ -144,20 +144,14 @@ class OverlayViewModel {
 
     /// Tracks whether ⌘ is currently held inside the overlay window. The
     /// modifier-flag monitor in OverlayWindowController writes here so the
-    /// instructions pill and selection drag handler can switch to
-    /// "screenshot region" mode without each component owning a monitor.
+    /// instructions pill and selection drag handler can switch between the
+    /// user's default drag action and the alternate action.
     var isCommandHeld: Bool = false
 
     /// Set true by the "Save Region…" menu item so the very next drag
-    /// performs a region screenshot without requiring ⌘. The drag handler
-    /// clears it after consuming, so this is one-shot.
+    /// performs a region screenshot regardless of the user's default drag
+    /// action. The drag handler clears it after consuming, so this is one-shot.
     var isRegionScreenshotArmed: Bool = false
-
-    /// Either path that should make the next drag perform a region
-    /// screenshot — live ⌘ hold or armed via the menu.
-    var isInRegionScreenshotMode: Bool {
-        isCommandHeld || isRegionScreenshotArmed
-    }
 
     var isSearchAvailable: Bool {
         FeatureFlags.isSearchEnabled
@@ -562,16 +556,15 @@ class OverlayViewModel {
         }
     }
 
-    /// Triggered by the "Save Region…" menu item: behave as if ⌘ is held
-    /// for the next drag, and briefly teach the ⌘-drag shortcut the first
-    /// couple of times the menu path is used.
+    /// Triggered by the "Save Region…" menu item: the next drag captures a region
+    /// screenshot regardless of the user's default drag action.
     func armRegionScreenshot() {
         isRegionScreenshotArmed = true
         let defaults = UserDefaults.standard
         let hintCount = defaults.integer(forKey: AppStorageKey.regionScreenshotShortcutHintCount)
         let title: String
         if hintCount < 2 {
-            title = "Drag to capture. You can also hold \u{2318} and drag."
+            title = "Drag to capture a screenshot region."
             defaults.set(hintCount + 1, forKey: AppStorageKey.regionScreenshotShortcutHintCount)
         } else {
             title = "Drag to capture."

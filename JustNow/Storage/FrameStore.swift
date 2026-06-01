@@ -209,7 +209,7 @@ actor FrameStore {
     /// Encode the in-memory cropped image as JPEG and write it to the user's
     /// chosen screenshots location, using the same filename pattern as
     /// `copyFrameToScreenshotsLocation` and the same `(n)`-suffix collision
-    /// handling. Used by ⌘-drag screenshots from the rewind overlay.
+    /// handling. Used by screenshot drags from the rewind overlay.
     func saveCroppedImageToScreenshotsLocation(image: CGImage, timestamp: Date) throws -> URL {
         guard let jpegData = ImageEncoder.jpegData(from: image, quality: ImageEncoder.fullImageQuality) else {
             throw FrameStoreError.imageEncodingFailed

@@ -154,6 +154,7 @@ struct TextGrabSelectionOverlay: View {
     let debugCaptureEnabled: Bool
     @Binding var bannerState: TextGrabBannerState
     @Binding var debugSnapshot: TextGrabDebugSnapshot?
+    @AppStorage(AppStorageKey.rewindDragAction) private var rewindDragActionRaw: String = AppStorageDefault.rewindDragAction
 
     @State private var selectionRect: CGRect?
     @State private var isProcessing = false
@@ -163,6 +164,10 @@ struct TextGrabSelectionOverlay: View {
     @State private var pointerLocation: CGPoint?
     @State private var displayedImageRectSnapshot: CGRect = .zero
     @State private var isCurrentDragCancelled = false
+
+    private var rewindDragAction: RewindDragAction {
+        RewindDragAction.storedValue(rewindDragActionRaw)
+    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -205,8 +210,17 @@ struct TextGrabSelectionOverlay: View {
                 displayedImageRectSnapshot = newDisplayedImageRect
                 reevaluateCursor(displayedImageRect: newDisplayedImageRect)
             }
+            .onChange(of: viewModel.isCommandHeld) { _, _ in
+                reevaluateCursor(displayedImageRect: displayedImageRect)
+            }
+            .onChange(of: viewModel.isRegionScreenshotArmed) { _, _ in
+                reevaluateCursor(displayedImageRect: displayedImageRect)
+            }
+            .onChange(of: rewindDragActionRaw) { _, _ in
+                reevaluateCursor(displayedImageRect: displayedImageRect)
+            }
         }
-            .onDisappear {
+        .onDisappear {
             selectionTask?.cancel()
             bannerResetTask?.cancel()
             viewModel.isTextGrabActive = false
@@ -243,8 +257,8 @@ struct TextGrabSelectionOverlay: View {
             .onEnded { value in
                 // Capture the armed flag and disarm now so every exit path
                 // (including the early returns below) leaves the menu-armed
-                // state cleared. Subsequent drags then revert to OCR unless
-                // ⌘ is held.
+                // state cleared. Subsequent drags then revert to the user's
+                // saved drag preference.
                 let wasArmed = viewModel.isRegionScreenshotArmed
                 viewModel.disarmRegionScreenshot()
 
@@ -274,7 +288,10 @@ struct TextGrabSelectionOverlay: View {
                 }
 
                 selectionRect = finalRect
-                let isRegionMode = NSEvent.modifierFlags.contains(.command) || wasArmed
+                let isRegionMode = rewindDragAction.performsScreenshot(
+                    commandHeld: NSEvent.modifierFlags.contains(.command),
+                    isArmed: wasArmed
+                )
                 if isRegionMode {
                     beginRegionScreenshot(for: finalRect, displayedImageRect: displayedImageRect)
                 } else {
@@ -283,7 +300,7 @@ struct TextGrabSelectionOverlay: View {
             }
     }
 
-    /// ⌘-drag (or menu-armed) variant: crop the displayed image to the
+    /// Screenshot-drag variant: crop the displayed image to the
     /// selection and hand it to the view model's screenshot save flow. We
     /// don't run OCR or touch the banner state so the toast (with
     /// reveal-in-Finder) is the only feedback, mirroring ⌘S on the full
@@ -407,7 +424,7 @@ struct TextGrabSelectionOverlay: View {
             pointerLocation = location
             updateScreenshotCursor(
                 isInsideImage: displayedImageRect.contains(location),
-                isEnabled: !isProcessing
+                isEnabled: !isProcessing && isScreenshotDragMode
             )
         case .ended:
             pointerLocation = nil
@@ -423,7 +440,14 @@ struct TextGrabSelectionOverlay: View {
 
         updateScreenshotCursor(
             isInsideImage: displayedImageRect.contains(pointerLocation),
-            isEnabled: !isProcessing
+            isEnabled: !isProcessing && isScreenshotDragMode
+        )
+    }
+
+    private var isScreenshotDragMode: Bool {
+        rewindDragAction.performsScreenshot(
+            commandHeld: viewModel.isCommandHeld,
+            isArmed: viewModel.isRegionScreenshotArmed
         )
     }
 
