@@ -7,7 +7,7 @@ import AppKit
 
 @MainActor
 final class SettingsWindowCoordinator: NSObject, NSWindowDelegate {
-    private static let defaultWindowSize = NSSize(width: 500, height: 680)
+    private static let defaultWindowSize = NSSize(width: 700, height: 600)
 
     private let makeContentView: @MainActor () -> NSView
     private let activateApp: @MainActor () -> Void

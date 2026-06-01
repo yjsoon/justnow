@@ -51,8 +51,62 @@ struct SettingsView: View {
     }
 
     var body: some View {
+        TabView {
+            generalSettingsTab
+            rewindSettingsTab
+            captureSettingsTab
+            shortcutsSettingsTab
+        }
+        .tabViewStyle(.tabBarOnly)
+        .frame(width: 660, height: 520)
+        .navigationTitle("JustNow Settings")
+        .task {
+            await updateStorageInfo()
+        }
+        .task(id: frameBufferIdentity) {
+            await updateStorageInfo()
+        }
+        .task(id: updaterIdentity) {
+            syncUpdaterState()
+        }
+        .task(id: launchAtLoginIdentity) {
+            syncLaunchAtLoginState()
+        }
+        .task(id: isSearchEnabled) {
+            guard isSearchEnabled else {
+                telemetrySnapshot = .empty
+                return
+            }
+            await refreshTelemetryLoop()
+        }
+        .alert("Clear History?", isPresented: $showClearConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Clear All", role: .destructive) {
+                Task {
+                    try? await context.frameBuffer?.clear()
+                    await updateStorageInfo()
+                }
+            }
+        } message: {
+            Text("This will delete all captured frames. This cannot be undone.")
+        }
+        .alert("Launch on startup", isPresented: launchAtLoginAlertIsPresented) {
+            Button("OK", role: .cancel) {
+                launchAtLoginAlertMessage = nil
+            }
+        } message: {
+            Text(launchAtLoginAlertMessage ?? "")
+        }
+        .alert("Menu bar icon hidden", isPresented: $showHideIconInfoAlert) {
+            Button("Got it", role: .cancel) { }
+        } message: {
+            Text("To bring it back, relaunch JustNow from Finder or Spotlight to reopen Settings, or switch it back on from the rewind overlay.")
+        }
+    }
+
+    private var generalSettingsTab: some View {
         Form {
-            Section {
+            Section("Launch") {
                 VStack(alignment: .leading, spacing: 6) {
                     Toggle("Launch on startup", isOn: launchAtLoginBinding)
                         .disabled(!context.canConfigureLaunchAtLogin)
@@ -77,59 +131,34 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-            } header: {
-                Text("General")
             }
 
-            Section {
-                shortcutRow("Open rewind") {
-                    KeyboardShortcutRecorder(
-                        keyCode: $shortcutKeyCode,
-                        modifiers: $shortcutModifiers
-                    )
-                    .frame(maxWidth: 240)
-                    .onChange(of: shortcutKeyCode) { _, _ in context.notifyShortcutChanged() }
-                    .onChange(of: shortcutModifiers) { _, _ in context.notifyShortcutChanged() }
+            Section("Software Update") {
+                Button("Check for Updates…") {
+                    context.checkForUpdates()
                 }
+                .disabled(!(context.updater?.canCheckForUpdates ?? false))
 
-                shortcutRow("Pause or resume recording") {
-                    KeyboardShortcutRecorder(
-                        keyCode: $capturePauseShortcutKeyCode,
-                        modifiers: $capturePauseShortcutModifiers
-                    )
-                    .frame(maxWidth: 240)
-                    .onChange(of: capturePauseShortcutKeyCode) { _, _ in context.notifyShortcutChanged() }
-                    .onChange(of: capturePauseShortcutModifiers) { _, _ in context.notifyShortcutChanged() }
-                }
+                Toggle("Check for updates automatically", isOn: automaticChecksBinding)
 
-                shortcutRow("Close rewind") {
-                    KeyboardShortcutRecorder(
-                        keyCode: $overlayDismissKeyCode,
-                        modifiers: $overlayDismissModifiers,
-                        allowsEscapeShortcut: true,
-                        placeholder: "Press key"
-                    )
-                    .frame(maxWidth: 240)
-                    .onChange(of: overlayDismissKeyCode) { _, _ in context.notifyShortcutChanged() }
-                    .onChange(of: overlayDismissModifiers) { _, _ in context.notifyShortcutChanged() }
-                }
+                Toggle("Download updates automatically", isOn: automaticDownloadsBinding)
+                    .disabled(!allowsAutomaticUpdates)
 
-                Text("These shortcuts work across macOS while JustNow is running. Keep each action on a distinct shortcut.")
+                Text("JustNow uses Sparkle to deliver signed updates from the public appcast at justnow.tk.sg.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-
-                if let shortcutConflictMessage {
-                    Text(shortcutConflictMessage)
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            } header: {
-                Text("Keyboard Shortcuts")
             }
+        }
+        .formStyle(.grouped)
+        .tabItem {
+            Text("General")
+        }
+    }
 
-            Section {
+    private var rewindSettingsTab: some View {
+        Form {
+            Section("Text and screenshots") {
                 VStack(alignment: .leading, spacing: 8) {
                     LabeledContent {
                         Picker("", selection: $rewindDragAction) {
@@ -159,22 +188,26 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-            } header: {
-                Text("Rewind")
             }
 
-            Section {
+            Section("Screenshot save location") {
                 ScreenshotSaveLocationSettingsSection(
                     overridePath: $screenshotSaveLocationOverride,
                     saveToFolder: $screenshotSaveToFolder,
                     saveToClipboard: $screenshotSaveToClipboard,
                     saveScreenshotSoundEnabled: $saveScreenshotSoundEnabled
                 )
-            } header: {
-                Text("Screenshot save location")
             }
+        }
+        .formStyle(.grouped)
+        .tabItem {
+            Text("Rewind")
+        }
+    }
 
-            Section {
+    private var captureSettingsTab: some View {
+        Form {
+            Section("Capture") {
                 LabeledContent {
                     HStack(spacing: 8) {
                         Slider(value: $captureInterval, in: 0.5...5.0, step: 0.5)
@@ -229,11 +262,17 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-            } header: {
-                Text("Capture")
             }
 
-            Section {
+            Section("Battery") {
+                Toggle("Reduce power use automatically", isOn: $reduceCaptureOnBattery)
+                Text("On battery / in Low Power Mode / under thermal pressure / when idle for a while: This setting makes JustNow capture less often, save lower-quality images, and slow background search indexing.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section("Storage") {
                 HStack {
                     Text("Frames stored")
                     Spacer()
@@ -259,22 +298,10 @@ struct SettingsView: View {
                         showClearConfirmation = true
                     }
                 }
-            } header: {
-                Text("Storage")
-            }
-
-            Section {
-                Toggle("Reduce power use automatically", isOn: $reduceCaptureOnBattery)
-                Text("On battery / in Low Power Mode / under thermal pressure / when idle for a while: This setting makes JustNow capture less often, save lower-quality images, and slow background search indexing.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } header: {
-                Text("Battery")
             }
 
             if isSearchEnabled {
-                Section {
+                Section("Search Diagnostics") {
                     DisclosureGroup(isExpanded: $isSearchDiagnosticsExpanded) {
                         VStack(spacing: 10) {
                             HStack {
@@ -325,74 +352,68 @@ struct SettingsView: View {
                         }
                         .padding(.top, 6)
                     } label: {
-                        Text("Search Diagnostics")
+                        Text("Local search telemetry")
                     }
                 }
             }
+        }
+        .formStyle(.grouped)
+        .tabItem {
+            Text("Capture")
+        }
+    }
 
-            Section {
-                Button("Check for Updates…") {
-                    context.checkForUpdates()
+    private var shortcutsSettingsTab: some View {
+        Form {
+            Section("Keyboard Shortcuts") {
+                shortcutRow("Open rewind") {
+                    KeyboardShortcutRecorder(
+                        keyCode: $shortcutKeyCode,
+                        modifiers: $shortcutModifiers
+                    )
+                    .frame(maxWidth: 240)
+                    .onChange(of: shortcutKeyCode) { _, _ in context.notifyShortcutChanged() }
+                    .onChange(of: shortcutModifiers) { _, _ in context.notifyShortcutChanged() }
                 }
-                .disabled(!(context.updater?.canCheckForUpdates ?? false))
 
-                Toggle("Check for updates automatically", isOn: automaticChecksBinding)
+                shortcutRow("Pause or resume recording") {
+                    KeyboardShortcutRecorder(
+                        keyCode: $capturePauseShortcutKeyCode,
+                        modifiers: $capturePauseShortcutModifiers
+                    )
+                    .frame(maxWidth: 240)
+                    .onChange(of: capturePauseShortcutKeyCode) { _, _ in context.notifyShortcutChanged() }
+                    .onChange(of: capturePauseShortcutModifiers) { _, _ in context.notifyShortcutChanged() }
+                }
 
-                Toggle("Download updates automatically", isOn: automaticDownloadsBinding)
-                    .disabled(!allowsAutomaticUpdates)
+                shortcutRow("Close rewind") {
+                    KeyboardShortcutRecorder(
+                        keyCode: $overlayDismissKeyCode,
+                        modifiers: $overlayDismissModifiers,
+                        allowsEscapeShortcut: true,
+                        placeholder: "Press key"
+                    )
+                    .frame(maxWidth: 240)
+                    .onChange(of: overlayDismissKeyCode) { _, _ in context.notifyShortcutChanged() }
+                    .onChange(of: overlayDismissModifiers) { _, _ in context.notifyShortcutChanged() }
+                }
 
-                Text("JustNow uses Sparkle to deliver signed updates from the public appcast at justnow.tk.sg.")
+                Text("These shortcuts work across macOS while JustNow is running. Keep each action on a distinct shortcut.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-            } header: {
-                Text("Software Update")
+
+                if let shortcutConflictMessage {
+                    Text(shortcutConflictMessage)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460, height: 560)
-        .navigationTitle("JustNow Settings")
-        .task {
-            await updateStorageInfo()
-        }
-        .task(id: frameBufferIdentity) {
-            await updateStorageInfo()
-        }
-        .task(id: updaterIdentity) {
-            syncUpdaterState()
-        }
-        .task(id: launchAtLoginIdentity) {
-            syncLaunchAtLoginState()
-        }
-        .task(id: isSearchEnabled) {
-            guard isSearchEnabled else {
-                telemetrySnapshot = .empty
-                return
-            }
-            await refreshTelemetryLoop()
-        }
-        .alert("Clear History?", isPresented: $showClearConfirmation) {
-            Button("Cancel", role: .cancel) { }
-            Button("Clear All", role: .destructive) {
-                Task {
-                    try? await context.frameBuffer?.clear()
-                    await updateStorageInfo()
-                }
-            }
-        } message: {
-            Text("This will delete all captured frames. This cannot be undone.")
-        }
-        .alert("Launch on startup", isPresented: launchAtLoginAlertIsPresented) {
-            Button("OK", role: .cancel) {
-                launchAtLoginAlertMessage = nil
-            }
-        } message: {
-            Text(launchAtLoginAlertMessage ?? "")
-        }
-        .alert("Menu bar icon hidden", isPresented: $showHideIconInfoAlert) {
-            Button("Got it", role: .cancel) { }
-        } message: {
-            Text("To bring it back, relaunch JustNow from Finder or Spotlight to reopen Settings, or switch it back on from the rewind overlay.")
+        .tabItem {
+            Text("Shortcuts")
         }
     }
 
