@@ -88,6 +88,7 @@ class OverlayWindowController: NSObject {
             onOpenSettings: onOpenSettings
         )
         self.viewModel = vm
+        vm.isCommandHeld = NSEvent.modifierFlags.contains(.command)
 
         let window = OverlayWindow(
             contentRect: screen.frame,
@@ -185,7 +186,7 @@ class OverlayWindowController: NSObject {
         }
 
         // Track ⌘ state so the instructions pill and drag handler can switch
-        // to "screenshot region" mode without each owning its own monitor.
+        // between the user's default drag action and the alternate action.
         flagsChangedMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             // Only publish when the bit actually flips — Observation invalidates
             // subscribers on every assignment, equal-value writes included.
