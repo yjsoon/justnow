@@ -11,10 +11,22 @@
   },
   "releases": [
     {
+      "tag": "v1.3.2",
+      "version": "1.3.2",
+      "published_at": "2026-06-01",
+      "status": "Current public build",
+      "notes": [
+        "Organised Settings into General, Rewind, Capture, and Shortcuts tabs.",
+        "Added a Rewind setting to choose whether plain drag grabs text or captures a screenshot.",
+        "Fixed secondary-display overlay sizing.",
+        "Hardened capture optimisation cleanup."
+      ]
+    },
+    {
       "tag": "v1.3.1",
       "version": "1.3.1",
       "published_at": "2026-05-24",
-      "status": "Current public build",
+      "status": "Previous release",
       "notes": [
         "Improve overlay search and capture startup by @yjsoon in https://github.com/yjsoon/justnow/pull/32",
         "[codex] Align macOS settings row layout by @yjsoon in https://github.com/yjsoon/justnow/pull/33"
