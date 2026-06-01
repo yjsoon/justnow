@@ -2,13 +2,16 @@ import SwiftUI
 
 struct InstructionsOverlay: View {
     var viewModel: OverlayViewModel
+    @AppStorage(AppStorageKey.rewindDragAction) private var rewindDragActionRaw: String = AppStorageDefault.rewindDragAction
 
     var body: some View {
-        // The "drag" affordance flips to "drag for screenshot" whenever
-        // we're in region-screenshot mode — either ⌘ is held, or the user
-        // armed it via the "Save Region…" menu item.
-        let dragLabel = viewModel.isInRegionScreenshotMode ? "Drag for screenshot" : "Drag to grab text"
-        let dragIcon = viewModel.isInRegionScreenshotMode ? "camera.viewfinder" : "text.viewfinder"
+        // The "drag" affordance follows the user's default drag action and flips while Command is held.
+        let isScreenshotMode = RewindDragAction.storedValue(rewindDragActionRaw).performsScreenshot(
+            commandHeld: viewModel.isCommandHeld,
+            isArmed: viewModel.isRegionScreenshotArmed
+        )
+        let dragLabel = isScreenshotMode ? "Drag for screenshot" : "Drag to grab text"
+        let dragIcon = isScreenshotMode ? "camera.viewfinder" : "text.viewfinder"
 
         ViewThatFits(in: .horizontal) {
             instructionPill(dragLabel: dragLabel, dragIcon: dragIcon, showsSearchShortcut: FeatureFlags.isSearchEnabled)

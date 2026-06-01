@@ -14,6 +14,7 @@ enum AppStorageKey {
     nonisolated static let textGrabSoundEnabled = "textGrabSoundEnabled"
     nonisolated static let saveScreenshotSoundEnabled = "saveScreenshotSoundEnabled"
     nonisolated static let textGrabDebugPreviewEnabled = "textGrabDebugPreviewEnabled"
+    nonisolated static let rewindDragAction = "rewindDragAction"
     nonisolated static let showMenuBarIcon = "showMenuBarIcon"
     nonisolated static let hasSeenMenuBarHideInfo = "hasSeenMenuBarHideInfo"
     nonisolated static let screenshotSaveLocationOverride = "screenshotSaveLocationOverride"
@@ -21,6 +22,39 @@ enum AppStorageKey {
     nonisolated static let screenshotSaveToClipboard = "screenshotSaveToClipboard"
     nonisolated static let hasSeenSaveQualityInfo = "hasSeenSaveQualityInfo"
     nonisolated static let regionScreenshotShortcutHintCount = "regionScreenshotShortcutHintCount"
+}
+
+enum RewindDragAction: String, CaseIterable, Identifiable {
+    case saveText
+    case saveScreenshot
+
+    nonisolated var id: String { rawValue }
+
+    nonisolated var settingsLabel: String {
+        switch self {
+        case .saveText:
+            "Grab Text"
+        case .saveScreenshot:
+            "Capture Screenshot"
+        }
+    }
+
+    nonisolated func performsScreenshot(commandHeld: Bool, isArmed: Bool = false) -> Bool {
+        if isArmed {
+            return true
+        }
+
+        switch self {
+        case .saveText:
+            return commandHeld
+        case .saveScreenshot:
+            return !commandHeld
+        }
+    }
+
+    nonisolated static func storedValue(_ rawValue: String) -> RewindDragAction {
+        RewindDragAction(rawValue: rawValue) ?? .saveText
+    }
 }
 
 enum AppStorageDefault {
@@ -37,6 +71,7 @@ enum AppStorageDefault {
     nonisolated static let textGrabSoundEnabled = true
     nonisolated static let saveScreenshotSoundEnabled = true
     nonisolated static let textGrabDebugPreviewEnabled = false
+    nonisolated static let rewindDragAction = RewindDragAction.saveText.rawValue
     nonisolated static let showMenuBarIcon = true
     nonisolated static let hasSeenMenuBarHideInfo = false
     nonisolated static let screenshotSaveLocationOverride = ""
