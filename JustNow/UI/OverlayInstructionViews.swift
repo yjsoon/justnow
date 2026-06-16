@@ -14,10 +14,10 @@ struct InstructionsOverlay: View {
         let dragIcon = isScreenshotMode ? "camera.viewfinder" : "text.viewfinder"
 
         ViewThatFits(in: .horizontal) {
-            instructionPill(dragLabel: dragLabel, dragIcon: dragIcon, showsSearchShortcut: FeatureFlags.isSearchEnabled)
-            instructionPill(dragLabel: shortened(dragLabel, to: 1), dragIcon: dragIcon, showsSearchShortcut: FeatureFlags.isSearchEnabled)
-            instructionPill(dragLabel: shortened(dragLabel, to: 2), dragIcon: dragIcon, showsSearchShortcut: FeatureFlags.isSearchEnabled)
-            instructionPill(dragLabel: "", dragIcon: dragIcon, showsSearchShortcut: FeatureFlags.isSearchEnabled)
+            instructionPill(dragLabel: dragLabel, dragIcon: dragIcon)
+            instructionPill(dragLabel: shortened(dragLabel, to: 1), dragIcon: dragIcon)
+            instructionPill(dragLabel: shortened(dragLabel, to: 2), dragIcon: dragIcon)
+            instructionPill(dragLabel: "", dragIcon: dragIcon)
         }
     }
 
@@ -33,7 +33,7 @@ struct InstructionsOverlay: View {
         }
     }
 
-    private func instructionPill(dragLabel: String, dragIcon: String, showsSearchShortcut: Bool) -> some View {
+    private func instructionPill(dragLabel: String, dragIcon: String) -> some View {
         HStack(spacing: 16) {
             Label("← →", systemImage: "arrow.left.arrow.right")
             if dragLabel.isEmpty {
@@ -44,9 +44,7 @@ struct InstructionsOverlay: View {
                 Label(dragLabel, systemImage: dragIcon)
             }
             Label("\u{2318}S", systemImage: "camera.viewfinder")
-            if showsSearchShortcut {
-                Label("/", systemImage: "magnifyingglass")
-            }
+            Label("/", systemImage: "magnifyingglass")
         }
         .labelStyle(CompactInstructionLabelStyle())
         .font(.system(size: 11, weight: .medium))

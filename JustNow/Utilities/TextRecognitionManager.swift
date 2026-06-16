@@ -18,13 +18,7 @@ enum TextRecognitionMode: Sendable {
 nonisolated enum TextRecognitionManager {
     private static let logger = Logger(subsystem: "sg.tk.JustNow", category: "TextRecognition")
 
-    /// Fast OCR used for background indexing.
-    @concurrent
-    @Sendable
-    static func extractText(from image: CGImage) async -> String {
-        await extractText(from: image, mode: .searchIndex)
-    }
-
+    /// Fast OCR used for background indexing and user-driven text grabs.
     @concurrent
     @Sendable
     static func extractText(from image: CGImage, mode: TextRecognitionMode) async -> String {
@@ -128,17 +122,6 @@ nonisolated enum TextRecognitionManager {
         }
 
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// Searches for text in a frame, returns true if found.
-    @concurrent
-    static func frameContainsText(_ searchText: String, in image: CGImage) async -> Bool {
-        let extractedText = await extractText(from: image)
-        let contains = extractedText.localizedCaseInsensitiveContains(searchText)
-        if contains {
-            Self.logger.info("Found '\(searchText)' in frame")
-        }
-        return contains
     }
 
     private static func collapseInlineWhitespace(_ text: String) -> String {

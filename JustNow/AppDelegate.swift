@@ -12,11 +12,6 @@ import os.log
 private let captureLogger = Logger(subsystem: "sg.tk.JustNow", category: "Capture")
 private let inputActivityForwardingInterval: TimeInterval = 1.0
 
-enum FeatureFlags {
-    /// Temporary kill switch while in-app search is hidden from release builds.
-    static let isSearchEnabled = true
-}
-
 enum RecentTimelineWindow: Double, CaseIterable, Identifiable {
     case oneMinute = 60
     case twoMinutes = 120
@@ -26,8 +21,6 @@ enum RecentTimelineWindow: Double, CaseIterable, Identifiable {
     static let defaultValue: Self = .fiveMinutes
 
     var id: Double { rawValue }
-
-    var timeInterval: TimeInterval { rawValue }
 
     var label: String {
         switch self {
@@ -159,7 +152,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
 
         setupStatusItem()
         updaterController.startUpdater()
-        setupHotKey()
+        registerHotKeys()
         setupCapture()
         setupTimers()
         setupObservers()
@@ -237,10 +230,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             )
         )
         statusItemController.setVisible(showMenuBarIcon)
-    }
-
-    private func setupHotKey() {
-        registerHotKeys()
     }
 
     private func keyboardShortcutsDidChange() {
@@ -644,7 +633,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             let rewindHistoryOption = RewindHistoryOption.resolved(from: self.rewindHistorySeconds)
             let availableDisplays = self.mergedDisplays(frameBuffer: frameBuffer)
             self.overlayController?.showOverlay(
-                recentTimelineWindow: recentTimelineWindow.timeInterval,
+                recentTimelineWindow: recentTimelineWindow.rawValue,
                 rewindHistoryOption: rewindHistoryOption,
                 activeDisplay: targetDisplay,
                 availableDisplays: availableDisplays
@@ -736,7 +725,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     private func currentCapturePolicy() -> CapturePolicy {
-        capturePolicyController.currentPolicy(
+        capturePolicyController.resolvePolicy(
             settings: currentCapturePolicySettings(),
             environment: currentCapturePolicyEnvironment()
         )
@@ -851,9 +840,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         statusItemController?.setPermissionHelpVisible(needsPermissionHelp)
     }
 
-    private func presentPermissionAlert(status: String, force: Bool = false) {
+    private func presentPermissionAlert(status: String) {
         updateCaptureStatus(status)
-        showPermissionAlert(force: force)
+        showPermissionAlert()
     }
 
     private func showPermissionAlert(force: Bool = false) {

@@ -72,13 +72,6 @@ final class CapturePolicyController {
         lastAppliedPolicy?.isIdle == true
     }
 
-    func currentPolicy(
-        settings: CapturePolicySettings,
-        environment: CapturePolicyEnvironment
-    ) -> CapturePolicy {
-        resolvePolicy(settings: settings, environment: environment)
-    }
-
     func applyIfNeeded(
         settings: CapturePolicySettings,
         environment: CapturePolicyEnvironment,

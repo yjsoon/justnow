@@ -13,10 +13,6 @@ struct SearchTelemetrySnapshot: Sendable {
     let p95OCRDuration: TimeInterval
     let averageIndexLag: TimeInterval
     let p95IndexLag: TimeInterval
-    let warmSearchP50: TimeInterval
-    let warmSearchCount: Int
-    let coldSearchP50: TimeInterval
-    let coldSearchCount: Int
 
     static let empty = SearchTelemetrySnapshot(
         queueDepth: 0,
@@ -25,11 +21,7 @@ struct SearchTelemetrySnapshot: Sendable {
         averageOCRDuration: 0,
         p95OCRDuration: 0,
         averageIndexLag: 0,
-        p95IndexLag: 0,
-        warmSearchP50: 0,
-        warmSearchCount: 0,
-        coldSearchP50: 0,
-        coldSearchCount: 0
+        p95IndexLag: 0
     )
 }
 
@@ -47,9 +39,6 @@ actor SearchTelemetry {
     private var ocrDurationSamples: [TimeInterval] = []
     private var indexLagSamples: [TimeInterval] = []
 
-    private var warmSearchDurations: [TimeInterval] = []
-    private var coldSearchDurations: [TimeInterval] = []
-
     private var lastSummaryLog: Date = .distantPast
 
     func snapshot() -> SearchTelemetrySnapshot {
@@ -63,11 +52,7 @@ actor SearchTelemetry {
             averageOCRDuration: average(ocrDurationSamples),
             p95OCRDuration: percentile(ocrDurationSamples, percentile: 0.95),
             averageIndexLag: average(indexLagSamples),
-            p95IndexLag: percentile(indexLagSamples, percentile: 0.95),
-            warmSearchP50: percentile(warmSearchDurations, percentile: 0.5),
-            warmSearchCount: warmSearchDurations.count,
-            coldSearchP50: percentile(coldSearchDurations, percentile: 0.5),
-            coldSearchCount: coldSearchDurations.count
+            p95IndexLag: percentile(indexLagSamples, percentile: 0.95)
         )
     }
 
@@ -87,40 +72,6 @@ actor SearchTelemetry {
         appendSample(max(indexLag, 0), to: &indexLagSamples)
 
         maybeLogSummary(now: now, reason: "index")
-    }
-
-    func recordSearch(
-        duration: TimeInterval,
-        wasCold: Bool,
-        totalFrames: Int,
-        uncachedFrames: Int,
-        matches: Int,
-        ocrRuns: Int,
-        loadFailures: Int
-    ) {
-        let safeDuration = max(duration, 0)
-
-        if wasCold {
-            appendSample(safeDuration, to: &coldSearchDurations)
-        } else {
-            appendSample(safeDuration, to: &warmSearchDurations)
-        }
-
-        let mode = wasCold ? "cold" : "warm"
-        print(
-            String(
-                format: "[SearchTelemetry] %@ search %.3fs (%d matches, %d/%d uncached, %d OCR runs, %d load failures)",
-                mode,
-                safeDuration,
-                matches,
-                uncachedFrames,
-                totalFrames,
-                ocrRuns,
-                loadFailures
-            )
-        )
-
-        maybeLogSummary(now: Date(), reason: "search")
     }
 
     private func appendSample(_ value: TimeInterval, to samples: inout [TimeInterval]) {
@@ -145,22 +96,15 @@ actor SearchTelemetry {
         let averageLag = average(indexLagSamples)
         let p95Lag = percentile(indexLagSamples, percentile: 0.95)
 
-        let warmP50 = percentile(warmSearchDurations, percentile: 0.5)
-        let coldP50 = percentile(coldSearchDurations, percentile: 0.5)
-
         print(
             String(
-                format: "[SearchTelemetry] summary[%@] queue=%d/%d ocr=%.2f/s lag(avg=%.1fs p95=%.1fs) warm(p50=%.3fs n=%d) cold(p50=%.3fs n=%d)",
+                format: "[SearchTelemetry] summary[%@] queue=%d/%d ocr=%.2f/s lag(avg=%.1fs p95=%.1fs)",
                 reason,
                 queueDepth,
                 queueCapacity,
                 ocrPerSecond,
                 averageLag,
-                p95Lag,
-                warmP50,
-                warmSearchDurations.count,
-                coldP50,
-                coldSearchDurations.count
+                p95Lag
             )
         )
     }

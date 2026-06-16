@@ -11,7 +11,6 @@ nonisolated struct RetentionTier: Sendable, Equatable {
 }
 
 nonisolated struct RetentionPolicy: Sendable, Equatable {
-    let maximumAge: TimeInterval
     let tiers: [RetentionTier]
 
     static let default24Hours = rewindHistory(RewindHistoryOption.defaultValue)
@@ -48,7 +47,7 @@ nonisolated struct RetentionPolicy: Sendable, Equatable {
             ]
         }
 
-        return RetentionPolicy(maximumAge: maximumAge, tiers: tiers)
+        return RetentionPolicy(tiers: tiers)
     }
 }
 
@@ -70,10 +69,6 @@ final class RetentionManager {
 
         for frame in frames {
             let age = currentTime.timeIntervalSince(frame.timestamp)
-
-            guard age <= policy.maximumAge else {
-                continue
-            }
 
             guard let tierIndex = policy.tiers.firstIndex(where: { age <= $0.maxAge }) else {
                 continue

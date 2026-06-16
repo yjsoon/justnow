@@ -11,7 +11,6 @@ struct KeyboardShortcutRecorder: View {
     @Binding var keyCode: Int
     @Binding var modifiers: Int
 
-    var allowsBareKeys: Bool = false
     var allowsEscapeShortcut: Bool = false
     var placeholder: String = "Click to set"
 
@@ -24,7 +23,6 @@ struct KeyboardShortcutRecorder: View {
                 keyCode: $keyCode,
                 modifiers: $modifiers,
                 isRecording: $isRecording,
-                allowsBareKeys: allowsBareKeys,
                 allowsEscapeShortcut: allowsEscapeShortcut,
                 placeholder: placeholder
             )
@@ -58,21 +56,18 @@ struct RecorderField: NSViewRepresentable {
     @Binding var modifiers: Int
     @Binding var isRecording: Bool
 
-    var allowsBareKeys: Bool
     var allowsEscapeShortcut: Bool
     var placeholder: String
 
     func makeNSView(context: Context) -> RecorderNSView {
         let view = RecorderNSView()
         view.delegate = context.coordinator
-        view.allowsBareKeys = allowsBareKeys
         view.allowsEscapeShortcut = allowsEscapeShortcut
         view.placeholder = placeholder
         return view
     }
 
     func updateNSView(_ nsView: RecorderNSView, context: Context) {
-        nsView.allowsBareKeys = allowsBareKeys
         nsView.allowsEscapeShortcut = allowsEscapeShortcut
         nsView.placeholder = placeholder
         nsView.updateDisplay(keyCode: keyCode, modifiers: modifiers, isRecording: isRecording)
@@ -116,7 +111,6 @@ protocol RecorderNSViewDelegate: AnyObject {
 class RecorderNSView: NSView {
     weak var delegate: RecorderNSViewDelegate?
 
-    var allowsBareKeys = false
     var allowsEscapeShortcut = false
     var placeholder = "Click to set"
 
@@ -181,8 +175,8 @@ class RecorderNSView: NSView {
         let isEscape = event.keyCode == UInt16(kVK_Escape)
         let hasModifierOrAllowedEscape = hasModifier || (isEscape && allowsEscapeShortcut)
 
-        // Require at least one modifier unless bare keys are explicitly allowed.
-        guard allowsBareKeys || hasModifierOrAllowedEscape else {
+        // Require at least one modifier (or the escape key when this recorder allows it).
+        guard hasModifierOrAllowedEscape else {
             return
         }
 

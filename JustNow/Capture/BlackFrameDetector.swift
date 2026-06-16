@@ -1,19 +1,13 @@
 import CoreGraphics
 
 struct BlackFrameDetector {
-    let gridSize: Int
-    let darkLumaThreshold: UInt8
-    let veryDarkLumaThreshold: UInt8
-    let maximumLumaRange: UInt8
-    let minimumDarkRatio: Double
+    static let screenOff = BlackFrameDetector()
 
-    static let screenOff = BlackFrameDetector(
-        gridSize: 8,
-        darkLumaThreshold: 5,
-        veryDarkLumaThreshold: 6,
-        maximumLumaRange: 3,
-        minimumDarkRatio: 0.95
-    )
+    private let gridSize = 8
+    private let darkLumaThreshold: UInt8 = 5
+    private let veryDarkLumaThreshold: UInt8 = 6
+    private let maximumLumaRange: UInt8 = 3
+    private let minimumDarkRatio = 0.95
 
     func isBlackFrame(_ image: CGImage) -> Bool {
         let width = image.width

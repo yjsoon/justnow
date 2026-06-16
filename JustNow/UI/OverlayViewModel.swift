@@ -35,32 +35,6 @@ enum SearchTimeScope: String, CaseIterable {
     case rewindHistory
     case all
 
-    var label: String {
-        switch self {
-        case .fiveMinutes:
-            return "Last 5m"
-        case .oneHour:
-            return "Last 1h"
-        case .rewindHistory:
-            return RewindHistoryOption.defaultValue.searchLabel
-        case .all:
-            return "All"
-        }
-    }
-
-    var compactLabel: String {
-        switch self {
-        case .fiveMinutes:
-            return "5m"
-        case .oneHour:
-            return "1h"
-        case .rewindHistory:
-            return RewindHistoryOption.defaultValue.compactSearchLabel
-        case .all:
-            return "All"
-        }
-    }
-
     func label(using option: RewindHistoryOption) -> String {
         switch self {
         case .fiveMinutes:
@@ -154,7 +128,7 @@ class OverlayViewModel {
     var isRegionScreenshotArmed: Bool = false
 
     var isSearchAvailable: Bool {
-        FeatureFlags.isSearchEnabled
+        true
     }
 
     var hasSearchQuery: Bool {
@@ -600,12 +574,6 @@ class OverlayViewModel {
             guard !Task.isCancelled else { return }
             saveToast = nil
         }
-    }
-
-    func dismissSaveToast() {
-        saveToastTask?.cancel()
-        saveToastTask = nil
-        saveToast = nil
     }
 
     func revealSavedFile(_ url: URL) {
