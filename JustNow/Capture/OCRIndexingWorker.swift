@@ -31,7 +31,7 @@ struct OCRIndexingWorkerDependencies: Sendable {
                         image = try await frameStore.loadFullImage(id: frame.id)
                     }
 
-                    let text = await TextRecognitionManager.extractText(from: image)
+                    let text = await TextRecognitionManager.extractText(from: image, mode: .searchIndex)
                     guard !Task.isCancelled else { return nil }
 
                     return OCRIndexedFrame(

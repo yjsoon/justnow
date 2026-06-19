@@ -10,7 +10,6 @@ final class PermisoOverlayWindowController: NSWindowController {
     private let windowSize = NSSize(width: 530, height: 109)
     private let launchAnimationDuration: TimeInterval = 0.72
     private let launchAnimationResponse: Double = 0.72
-    private let launchAnimationDampingFraction: Double = 1.0
     private let initialAlpha: CGFloat = 0.9
     private var launchDisplayLink: CADisplayLink?
     private var launchStartTime: CFTimeInterval = 0
@@ -125,18 +124,11 @@ final class PermisoOverlayWindowController: NSWindowController {
         launchDisplayLink = nil
     }
 
-    // Hopper shows the transition builder fed with 0.72 and 1.0; model it as a critically damped spring.
+    // Hopper shows the transition builder fed with 0.72; model it as a critically damped spring.
     private func springProgress(at elapsed: TimeInterval) -> CGFloat {
         let omega = (2 * Double.pi) / launchAnimationResponse
         let t = max(0, elapsed)
-        let progress: Double
-
-        if abs(launchAnimationDampingFraction - 1) < 0.0001 {
-            progress = 1 - exp(-omega * t) * (1 + (omega * t))
-        } else {
-            progress = min(1, t / launchAnimationDuration)
-        }
-
+        let progress = 1 - exp(-omega * t) * (1 + (omega * t))
         return min(max(progress, 0), 1)
     }
 

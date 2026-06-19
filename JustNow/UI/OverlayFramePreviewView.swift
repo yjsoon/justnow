@@ -181,15 +181,9 @@ struct FramePreviewView: View {
         }
     }
 
-    private func aspectRatio(of image: CGImage) -> CGFloat {
-        let width = max(1, CGFloat(image.width))
-        let height = max(1, CGFloat(image.height))
-        return width / height
-    }
-
     private func fittedSize(for image: CGImage, in available: CGSize) -> CGSize {
         guard available.width > 0, available.height > 0 else { return .zero }
-        let aspect = aspectRatio(of: image)
+        let aspect = max(1, CGFloat(image.width)) / max(1, CGFloat(image.height))
         if available.width / available.height > aspect {
             let height = available.height
             return CGSize(width: height * aspect, height: height)

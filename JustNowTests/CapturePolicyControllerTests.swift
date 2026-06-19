@@ -2,20 +2,10 @@ import Foundation
 import XCTest
 @testable import JustNow
 
-private enum CapturePolicyControllerTestLifetime {
-    static var retainedControllers: [CapturePolicyController] = []
-
-    static func retain(_ controller: CapturePolicyController) {
-        retainedControllers.append(controller)
-    }
-}
-
 @MainActor
 final class CapturePolicyControllerTests: XCTestCase {
     func testResolvePolicyUsesLowPowerProfileOnBattery() {
         let controller = CapturePolicyController()
-        CapturePolicyControllerTestLifetime.retain(controller)
-
         let policy = controller.resolvePolicy(
             settings: CapturePolicySettings(captureInterval: 2, reduceCaptureOnBattery: true),
             environment: CapturePolicyEnvironment(
@@ -47,8 +37,6 @@ final class CapturePolicyControllerTests: XCTestCase {
 
     func testResolvePolicyDisablesOCRAtCriticalBatteryCharge() {
         let controller = CapturePolicyController()
-        CapturePolicyControllerTestLifetime.retain(controller)
-
         let policy = controller.resolvePolicy(
             settings: CapturePolicySettings(captureInterval: 4, reduceCaptureOnBattery: true),
             environment: CapturePolicyEnvironment(
@@ -79,8 +67,6 @@ final class CapturePolicyControllerTests: XCTestCase {
 
     func testResolvePolicyCombinesIdleAndThermalConstraints() {
         let controller = CapturePolicyController()
-        CapturePolicyControllerTestLifetime.retain(controller)
-
         let policy = controller.resolvePolicy(
             settings: CapturePolicySettings(captureInterval: 2, reduceCaptureOnBattery: true),
             environment: CapturePolicyEnvironment(
@@ -113,7 +99,6 @@ final class CapturePolicyControllerTests: XCTestCase {
 
     func testApplyIfNeededSkipsDuplicatePolicyApplications() {
         let controller = CapturePolicyController()
-        CapturePolicyControllerTestLifetime.retain(controller)
         let settings = CapturePolicySettings(captureInterval: 1, reduceCaptureOnBattery: false)
         let environment = CapturePolicyEnvironment(
             isOnBattery: false,
@@ -156,7 +141,6 @@ final class CapturePolicyControllerTests: XCTestCase {
 
     func testNoteUserActivityOnlyRefreshesWhenComingBackFromIdle() {
         let controller = CapturePolicyController()
-        CapturePolicyControllerTestLifetime.retain(controller)
         let idleSettings = CapturePolicySettings(captureInterval: 1, reduceCaptureOnBattery: true)
         let idleEnvironment = CapturePolicyEnvironment(
             isOnBattery: false,

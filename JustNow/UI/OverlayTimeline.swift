@@ -64,10 +64,6 @@ struct TimelineSlider: View {
         )
     }
 
-    private var currentFrame: StoredFrame? {
-        displayedFrames[safe: viewModel.selectedIndex]
-    }
-
     var body: some View {
         VStack(spacing: 12) {
             TimeLabels(frames: displayedFrames)

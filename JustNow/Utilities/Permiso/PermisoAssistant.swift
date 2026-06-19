@@ -24,24 +24,12 @@ final class PermisoAssistant {
         panel: PermisoPanel,
         sourceFrameInScreen: CGRect? = nil
     ) {
-        present(
-            panel: panel,
-            hostApp: .current(),
-            sourceFrameInScreen: sourceFrameInScreen
-        )
-    }
-
-    func present(
-        panel: PermisoPanel,
-        hostApp: PermisoHostApp,
-        sourceFrameInScreen: CGRect? = nil
-    ) {
         dismiss()
 
         activePanel = panel
         pendingSourceFrameInScreen = sourceFrameInScreen
         didPresentCurrentOverlay = false
-        overlayController = PermisoOverlayWindowController(hostApp: hostApp, panel: panel) { [weak self] in
+        overlayController = PermisoOverlayWindowController(hostApp: .current(), panel: panel) { [weak self] in
             self?.dismiss()
         }
         NSWorkspace.shared.open(panel.settingsURL)

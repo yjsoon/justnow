@@ -18,29 +18,6 @@ final class OverlayBackdropPerformanceTests: XCTestCase {
         }
     }
 
-    func testBackdropFullResolutionPreparationPerformance() throws {
-        let image = try XCTUnwrap(makeTestImage(width: 3840, height: 2160))
-
-        measure(metrics: [XCTClockMetric()]) {
-            guard let context = CGContext(
-                data: nil,
-                width: image.width,
-                height: image.height,
-                bitsPerComponent: 8,
-                bytesPerRow: 0,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-            ) else {
-                XCTFail("Failed to create context")
-                return
-            }
-
-            context.interpolationQuality = .medium
-            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-            XCTAssertNotNil(context.makeImage())
-        }
-    }
-
     private func makeTestImage(width: Int, height: Int) -> CGImage? {
         guard let context = CGContext(
             data: nil,

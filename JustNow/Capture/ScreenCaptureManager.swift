@@ -26,10 +26,6 @@ protocol ScreenCaptureDelegate: AnyObject {
     func captureManagerDidStop(_ manager: ScreenCaptureManager)
 }
 
-extension ScreenCaptureDelegate {
-    func captureManagerDidStop(_ manager: ScreenCaptureManager) {}
-}
-
 /// Uses SCScreenshotManager for one-shot captures instead of SCStream.
 /// This avoids the persistent purple "sharing" indicator in the menu bar.
 @MainActor

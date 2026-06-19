@@ -4,6 +4,13 @@ struct SearchBarView: View {
     var viewModel: OverlayViewModel
     @FocusState private var isFocused: Bool
 
+    private var indexPercent: Int {
+        let status = viewModel.searchIndexStatus
+        return status.totalFrames > 0
+            ? Int(round(Double(status.indexedFrames) / Double(status.totalFrames) * 100))
+            : 100
+    }
+
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: "magnifyingglass")
@@ -24,10 +31,6 @@ struct SearchBarView: View {
             if viewModel.isSearchLoading {
                 SearchingStatusBadge()
             } else if !viewModel.searchResults.isEmpty {
-                let status = viewModel.searchIndexStatus
-                let indexPercent = status.totalFrames > 0
-                    ? Int(round(Double(status.indexedFrames) / Double(status.totalFrames) * 100))
-                    : 100
                 if indexPercent < 100 {
                     Text("\(viewModel.searchResults.count) found · \(indexPercent)% indexed")
                         .font(.caption)
@@ -38,10 +41,6 @@ struct SearchBarView: View {
                         .foregroundStyle(.white.opacity(0.6))
                 }
             } else {
-                let status = viewModel.searchIndexStatus
-                let indexPercent = status.totalFrames > 0
-                    ? Int(round(Double(status.indexedFrames) / Double(status.totalFrames) * 100))
-                    : 100
                 if indexPercent < 100 {
                     Text("\(indexPercent)% indexed")
                         .font(.caption)

@@ -46,10 +46,6 @@ struct SettingsView: View {
     @State private var launchAtLoginEnabled = false
     @State private var launchAtLoginAlertMessage: String?
 
-    private var isSearchEnabled: Bool {
-        FeatureFlags.isSearchEnabled
-    }
-
     var body: some View {
         TabView {
             generalSettingsTab
@@ -72,11 +68,7 @@ struct SettingsView: View {
         .task(id: launchAtLoginIdentity) {
             syncLaunchAtLoginState()
         }
-        .task(id: isSearchEnabled) {
-            guard isSearchEnabled else {
-                telemetrySnapshot = .empty
-                return
-            }
+        .task {
             await refreshTelemetryLoop()
         }
         .alert("Clear History?", isPresented: $showClearConfirmation) {
@@ -300,60 +292,44 @@ struct SettingsView: View {
                 }
             }
 
-            if isSearchEnabled {
-                Section("Search Diagnostics") {
-                    DisclosureGroup(isExpanded: $isSearchDiagnosticsExpanded) {
-                        VStack(spacing: 10) {
-                            HStack {
-                                Text("Index queue")
-                                Spacer()
-                                Text("\(telemetrySnapshot.queueDepth) / \(telemetrySnapshot.queueCapacity)")
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            HStack {
-                                Text("OCR throughput")
-                                Spacer()
-                                Text("\(formatRate(telemetrySnapshot.ocrPerSecond))")
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            HStack {
-                                Text("OCR duration (avg/p95)")
-                                Spacer()
-                                Text("\(formatSeconds(telemetrySnapshot.averageOCRDuration)) / \(formatSeconds(telemetrySnapshot.p95OCRDuration))")
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            HStack {
-                                Text("Index lag (avg/p95)")
-                                Spacer()
-                                Text("\(formatSeconds(telemetrySnapshot.averageIndexLag)) / \(formatSeconds(telemetrySnapshot.p95IndexLag))")
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            HStack {
-                                Text("Warm search p50")
-                                Spacer()
-                                Text("\(formatSeconds(telemetrySnapshot.warmSearchP50)) · n=\(telemetrySnapshot.warmSearchCount)")
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            HStack {
-                                Text("Cold search p50")
-                                Spacer()
-                                Text("\(formatSeconds(telemetrySnapshot.coldSearchP50)) · n=\(telemetrySnapshot.coldSearchCount)")
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Text("These numbers update every 2 seconds from local telemetry.")
-                                .font(.caption)
+            Section("Search Diagnostics") {
+                DisclosureGroup(isExpanded: $isSearchDiagnosticsExpanded) {
+                    VStack(spacing: 10) {
+                        HStack {
+                            Text("Index queue")
+                            Spacer()
+                            Text("\(telemetrySnapshot.queueDepth) / \(telemetrySnapshot.queueCapacity)")
                                 .foregroundStyle(.secondary)
                         }
-                        .padding(.top, 6)
-                    } label: {
-                        Text("Local search telemetry")
+
+                        HStack {
+                            Text("OCR throughput")
+                            Spacer()
+                            Text("\(formatRate(telemetrySnapshot.ocrPerSecond))")
+                                .foregroundStyle(.secondary)
+                        }
+
+                        HStack {
+                            Text("OCR duration (avg/p95)")
+                            Spacer()
+                            Text("\(formatSeconds(telemetrySnapshot.averageOCRDuration)) / \(formatSeconds(telemetrySnapshot.p95OCRDuration))")
+                                .foregroundStyle(.secondary)
+                        }
+
+                        HStack {
+                            Text("Index lag (avg/p95)")
+                            Spacer()
+                            Text("\(formatSeconds(telemetrySnapshot.averageIndexLag)) / \(formatSeconds(telemetrySnapshot.p95IndexLag))")
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Text("These numbers update every 2 seconds from local telemetry.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
+                    .padding(.top, 6)
+                } label: {
+                    Text("Local search telemetry")
                 }
             }
         }

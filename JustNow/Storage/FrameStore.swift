@@ -17,19 +17,9 @@ enum FrameStoreError: Error {
 
 nonisolated struct FrameSaveOptions: Sendable, Equatable {
     let quality: CGFloat
-    let thumbnailQuality: CGFloat
-    let generateThumbnail: Bool
 
-    static let standard = FrameSaveOptions(
-        quality: ImageEncoder.fullImageQuality,
-        thumbnailQuality: ImageEncoder.thumbnailQuality,
-        generateThumbnail: false
-    )
-    static let lowPower = FrameSaveOptions(
-        quality: ImageEncoder.lowPowerFullImageQuality,
-        thumbnailQuality: ImageEncoder.lowPowerThumbnailQuality,
-        generateThumbnail: false
-    )
+    static let standard = FrameSaveOptions(quality: ImageEncoder.fullImageQuality)
+    static let lowPower = FrameSaveOptions(quality: ImageEncoder.lowPowerFullImageQuality)
 }
 
 actor FrameStore {
@@ -110,22 +100,14 @@ actor FrameStore {
         let thumbnailFilename = "\(id.uuidString)_thumb.jpg"
 
         let fullPath = framesURL.appendingPathComponent(filename)
-        let thumbPath = framesURL.appendingPathComponent(thumbnailFilename)
 
         // Encode full image
         guard let fullData = ImageEncoder.jpegData(from: cgImage, quality: options.quality) else {
             throw FrameStoreError.imageEncodingFailed
         }
 
-        // Write files
+        // Write full image; thumbnails are generated lazily on first load.
         try fullData.write(to: fullPath)
-        if options.generateThumbnail {
-            guard let thumbnail = ImageEncoder.generateThumbnail(from: cgImage),
-                  let thumbData = ImageEncoder.jpegData(from: thumbnail, quality: options.thumbnailQuality) else {
-                throw FrameStoreError.imageEncodingFailed
-            }
-            try thumbData.write(to: thumbPath)
-        }
 
         let metadata = FrameMetadata(
             id: id,

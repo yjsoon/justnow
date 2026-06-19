@@ -54,10 +54,6 @@ struct SearchIndexStatus: Sendable, Equatable {
     let indexedFrames: Int
     let queuedFrames: Int
 
-    var pendingFrames: Int {
-        max(totalFrames - indexedFrames, 0)
-    }
-
     static let empty = SearchIndexStatus(totalFrames: 0, indexedFrames: 0, queuedFrames: 0)
 }
 
@@ -78,14 +74,6 @@ private struct PendingIngest {
     let displayID: UUID?
     let displayName: String?
     let syncContinuation: CheckedContinuation<SyncIngestResult, Never>?
-}
-
-private final class CachedCGImageBox {
-    let image: CGImage
-
-    init(_ image: CGImage) {
-        self.image = image
-    }
 }
 
 @MainActor
@@ -125,9 +113,9 @@ class FrameBuffer {
     var isPruningPaused: Bool = false
 
     // Thumbnail cache for quick access
-    private let thumbnailCache = NSCache<NSUUID, CachedCGImageBox>()
-    private let fullImageCache = NSCache<NSUUID, CachedCGImageBox>()
-    private var inFlightFullImageLoads: [UUID: Task<CachedCGImageBox, Error>] = [:]
+    private let thumbnailCache = NSCache<NSUUID, CGImage>()
+    private let fullImageCache = NSCache<NSUUID, CGImage>()
+    private var inFlightFullImageLoads: [UUID: Task<CGImage, Error>] = [:]
 
     private static let fullImageCacheByteBudget: Int = 256 * 1024 * 1024
     private static let thumbnailCacheByteBudget: Int = 16 * 1024 * 1024
@@ -321,11 +309,6 @@ class FrameBuffer {
         return filtered
     }
 
-    func getRecentFrames(within seconds: TimeInterval) -> [StoredFrame] {
-        let cutoff = Date().addingTimeInterval(-seconds)
-        return frames.filter { $0.timestamp >= cutoff }
-    }
-
     /// Displays that have at least one frame in the buffer. Ordered by most
     /// recent capture first so the overlay can surface active displays before
     /// ones that have gone quiet.
@@ -360,13 +343,13 @@ class FrameBuffer {
 
     /// Load full-resolution image from disk
     func getFullImage(for frame: StoredFrame) async throws -> CGImage {
-        try await loadFullImageBox(for: frame).image
+        try await loadFullImage(for: frame)
     }
 
     func prefetchFullImages(for frames: [StoredFrame]) async {
         for frame in frames {
             guard !Task.isCancelled else { return }
-            _ = try? await loadFullImageBox(for: frame)
+            _ = try? await loadFullImage(for: frame)
         }
     }
 
@@ -417,14 +400,14 @@ class FrameBuffer {
         let key = frame.id as NSUUID
 
         if let cached = thumbnailCache.object(forKey: key) {
-            return cached.image
+            return cached
         }
 
         guard let cgImage = await frameStore.loadThumbnail(id: frame.id) else {
             return nil
         }
 
-        thumbnailCache.setObject(CachedCGImageBox(cgImage), forKey: key, cost: Self.byteCost(of: cgImage))
+        thumbnailCache.setObject(cgImage, forKey: key, cost: Self.byteCost(of: cgImage))
         return cgImage
     }
 
@@ -496,7 +479,6 @@ class FrameBuffer {
             await ingestProcessorTask.value
         }
         await frameStore.flushManifest()
-        await textCache.save()
     }
 
     // MARK: - Private
@@ -550,7 +532,7 @@ class FrameBuffer {
         continuation.resume(returning: .cancelled)
     }
 
-    private func loadFullImageBox(for frame: StoredFrame) async throws -> CachedCGImageBox {
+    private func loadFullImage(for frame: StoredFrame) async throws -> CGImage {
         let key = frame.id as NSUUID
         if let cached = fullImageCache.object(forKey: key) {
             return cached
@@ -562,16 +544,15 @@ class FrameBuffer {
 
         let store = frameStore
         let loadTask = Task(priority: .userInitiated) {
-            let image = try await store.loadFullImage(id: frame.id)
-            return CachedCGImageBox(image)
+            try await store.loadFullImage(id: frame.id)
         }
         inFlightFullImageLoads[frame.id] = loadTask
 
         do {
-            let cachedImage = try await loadTask.value
-            fullImageCache.setObject(cachedImage, forKey: key, cost: Self.byteCost(of: cachedImage.image))
+            let image = try await loadTask.value
+            fullImageCache.setObject(image, forKey: key, cost: Self.byteCost(of: image))
             inFlightFullImageLoads.removeValue(forKey: frame.id)
-            return cachedImage
+            return image
         } catch {
             inFlightFullImageLoads.removeValue(forKey: frame.id)
             throw error
@@ -791,7 +772,7 @@ class FrameBuffer {
         guard ocrFrameQueue.enqueue(frame) else { return }
 
         applyOCRQueuePolicy(policy)
-        updateOCRIndexQueueState()
+        recordQueueDepthTelemetry()
         startBackgroundOCRIndexingIfNeeded()
     }
 
@@ -807,11 +788,6 @@ class FrameBuffer {
 
         ocrFrameQueue.enqueue(contentsOf: eligibleFrames)
         applyOCRQueuePolicy(policy)
-        updateOCRIndexQueueState()
-    }
-
-    /// Keep telemetry current without dropping retained frames from the indexing backlog.
-    private func updateOCRIndexQueueState() {
         recordQueueDepthTelemetry()
     }
 

@@ -54,19 +54,6 @@ actor TextCache {
         }
     }
 
-    /// Get cached text for a frame, returns nil if not cached
-    func getText(for frameID: UUID) -> String? {
-        try? withPreparedStatement("SELECT text FROM frame_text WHERE frame_id = ? LIMIT 1;") { statement in
-            guard bindFrameID(frameID, to: statement),
-                  sqlite3_step(statement) == SQLITE_ROW,
-                  let cText = sqlite3_column_text(statement, 0) else {
-                return nil
-            }
-
-            return String(cString: cText)
-        }
-    }
-
     func getSearchLayout(for frameID: UUID) -> SearchTextLayout? {
         try? withPreparedStatement(
             "SELECT layout_json FROM frame_search_layout WHERE frame_id = ? LIMIT 1;"
@@ -171,30 +158,6 @@ actor TextCache {
 
             return sqlite3_step(statement) == SQLITE_ROW
         }) ?? false
-    }
-
-    /// Return IDs that already have indexed text
-    func cachedFrameIDs(in frameIDs: [UUID]) -> Set<UUID> {
-        guard !frameIDs.isEmpty else { return [] }
-
-        var cached: Set<UUID> = []
-        for chunk in chunked(frameIDs, size: Self.inClauseChunkSize) {
-            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
-            let sql = "SELECT frame_id FROM frame_text WHERE frame_id IN (\(placeholders));"
-            try? withPreparedStatement(sql) { statement in
-                guard bindFrameIDs(chunk, to: statement) else { return }
-
-                while sqlite3_step(statement) == SQLITE_ROW {
-                    guard let cText = sqlite3_column_text(statement, 0) else { continue }
-                    let raw = String(cString: cText)
-                    if let id = UUID(uuidString: raw) {
-                        cached.insert(id)
-                    }
-                }
-            }
-        }
-
-        return cached
     }
 
     /// Search indexed OCR text and return matching frame IDs ordered by recency.
@@ -310,11 +273,6 @@ actor TextCache {
         }
 
         return fallbackIDs
-    }
-
-    /// Save cache to disk (call periodically or on app termination)
-    func save() {
-        // No-op: SQLite writes are committed transactionally.
     }
 
     /// Remove cached text for frames that no longer exist
