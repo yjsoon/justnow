@@ -11,10 +11,19 @@
   },
   "releases": [
     {
+      "tag": "v1.3.3",
+      "version": "1.3.3",
+      "published_at": "2026-06-19",
+      "status": "Current public build",
+      "notes": [
+        "refactor: remove over-engineering found by ponytail-audit by @yjsoon in https://github.com/yjsoon/justnow/pull/37"
+      ]
+    },
+    {
       "tag": "v1.3.2",
       "version": "1.3.2",
       "published_at": "2026-06-01",
-      "status": "Current public build",
+      "status": "Previous release",
       "notes": [
         "Organised Settings into General, Rewind, Capture, and Shortcuts tabs.",
         "Added a Rewind setting to choose whether plain drag grabs text or captures a screenshot.",
