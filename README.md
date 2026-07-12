@@ -60,6 +60,14 @@ You can adjust:
 - hide the menu bar item
 - open, pause or resume, and close shortcuts
 
+## Privacy
+
+JustNow has no telemetry: your screen history, indexed text, and settings never leave your Mac.
+
+To help debug capture issues, JustNow keeps a small local diagnostics log at `~/Library/Logs/JustNow/`. It records capture lifecycle events only (starts, stops, errors, sleep/lock transitions) — never screen content or recognised text — is capped at about 1 MB, and is never transmitted anywhere. You can delete it at any time.
+
+The only network requests JustNow makes are update checks via Sparkle.
+
 ## Building From Source
 
 For a normal local install:
