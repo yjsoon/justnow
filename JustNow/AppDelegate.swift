@@ -150,6 +150,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !isRunningUnderXCTest else { return }
 
+        DiagnosticsLog.shared.logSessionStart()
         setupStatusItem()
         updaterController.startUpdater()
         registerHotKeys()
@@ -178,6 +179,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !isTerminationFlushInProgress else { return .terminateLater }
 
+        // A session that ends without this line means the OS killed the app.
+        DiagnosticsLog.shared.log("App", "Termination requested; flushing capture and caches")
         isTerminationFlushInProgress = true
         overlayPresentationTask?.cancel()
         setupCaptureTask?.cancel()
@@ -321,6 +324,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     private func startCaptureForLaunchState() async {
         switch resolveLaunchPermissionState() {
         case .granted:
+            // Launching into a locked screen (e.g. a remote reinstall) would fail
+            // with noDisplay and raise a spurious error alert; wait for unlock.
+            guard !CaptureSystemState.isScreenLocked() else {
+                DiagnosticsLog.shared.log("Capture", "Launch capture deferred: screen is locked; resuming on unlock")
+                updateCaptureStatus("Screen Locked")
+                return
+            }
             await startCaptureForGrantedLaunchPermission()
         case .requestedThisLaunch:
             // Intro alert first — clicking "Open System Settings" fires the Permiso
@@ -347,6 +357,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         } catch CaptureError.permissionDenied {
             presentPermissionAlert(status: "No Permission")
         } catch {
+            DiagnosticsLog.shared.log(
+                "Capture",
+                "Launch capture start failed: \(DiagnosticsLogFormat.describe(error)); \(CaptureSystemState.summary())"
+            )
             updateCaptureStatus("Error")
             showErrorAlert(error)
         }
@@ -461,30 +475,64 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             name: NSWorkspace.sessionDidBecomeActiveNotification,
             object: nil
         )
+
+        // Screen lock/unlock: SCScreenshotManager fails with a spurious "user
+        // declined TCCs" error while the screen is locked, and none of the
+        // notifications above fire for a plain lock — so capture must pause
+        // here or the failure counter hard-stops it within seconds.
+        let distributed = DistributedNotificationCenter.default()
+        distributed.addObserver(
+            self,
+            selector: #selector(handleScreenLocked),
+            name: Notification.Name("com.apple.screenIsLocked"),
+            object: nil
+        )
+        distributed.addObserver(
+            self,
+            selector: #selector(handleScreenUnlocked),
+            name: Notification.Name("com.apple.screenIsUnlocked"),
+            object: nil
+        )
     }
 
     @objc private func handleSleep() {
+        DiagnosticsLog.shared.log("Power", "System will sleep")
         captureEventController.handleSleep()
     }
 
     @objc private func handleWake() {
+        DiagnosticsLog.shared.log("Power", "System woke; \(CaptureSystemState.summary())")
         captureEventController.handleWake()
     }
 
     @objc private func handleScreenSleep() {
+        DiagnosticsLog.shared.log("Power", "Screens slept")
         captureEventController.handleScreenSleep()
     }
 
     @objc private func handleScreenWake() {
+        DiagnosticsLog.shared.log("Power", "Screens woke; \(CaptureSystemState.summary())")
         captureEventController.handleScreenWake()
     }
 
     @objc private func handleSessionResignActive() {
+        DiagnosticsLog.shared.log("Power", "Login session resigned active")
         captureEventController.handleSessionResignActive()
     }
 
     @objc private func handleSessionBecomeActive() {
+        DiagnosticsLog.shared.log("Power", "Login session became active; \(CaptureSystemState.summary())")
         captureEventController.handleSessionBecomeActive()
+    }
+
+    @objc private func handleScreenLocked() {
+        DiagnosticsLog.shared.log("Power", "Screen locked")
+        captureEventController.handleScreenLock()
+    }
+
+    @objc private func handleScreenUnlocked() {
+        DiagnosticsLog.shared.log("Power", "Screen unlocked; \(CaptureSystemState.summary())")
+        captureEventController.handleScreenUnlock()
     }
 
     private func startCaptureIfAllowed(successMessage: String, failurePrefix: String, failureStatus: String) async -> Bool {
@@ -513,7 +561,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             presentPermissionAlert(status: "No Permission")
             return false
         } catch {
-            captureLogger.error("\(failurePrefix, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            let detail = DiagnosticsLogFormat.describe(error)
+            captureLogger.error("\(failurePrefix, privacy: .public): \(detail, privacy: .public)")
+            DiagnosticsLog.shared.log("Capture", "\(failurePrefix): \(detail); \(CaptureSystemState.summary())")
             updateCaptureStatus(failureStatus)
             return false
         }
@@ -848,6 +898,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     private func showPermissionAlert(force: Bool = false) {
         guard screenRecordingPermission.consumePermissionAlertPresentation(force: force) else { return }
 
+        DiagnosticsLog.shared.log(
+            "Permission",
+            "Presenting Screen Recording permission alert; \(CaptureSystemState.summary())"
+        )
+
         let alert = NSAlert()
         alert.messageText = "Screen Recording Permission Required"
         alert.informativeText = """
@@ -879,6 +934,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
 
     private func showPermissionRestartAlert() {
         guard screenRecordingPermission.consumeRestartAlertPresentation() else { return }
+
+        DiagnosticsLog.shared.log(
+            "Permission",
+            "Presenting restart-required alert after permission grant; \(CaptureSystemState.summary())"
+        )
 
         let alert = NSAlert()
         alert.messageText = "Restart JustNow to Start Capture"

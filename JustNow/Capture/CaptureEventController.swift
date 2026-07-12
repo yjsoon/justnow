@@ -45,6 +45,7 @@ final class CaptureEventController {
         self.updatePauseMenu = updatePauseMenu
         self.logger = logger ?? { message in
             captureLogger.info("\(message, privacy: .public)")
+            DiagnosticsLog.shared.log("Capture", message)
         }
     }
 
@@ -93,6 +94,21 @@ final class CaptureEventController {
         scheduleResume(reason: "screen wake")
     }
 
+    func handleScreenLock() {
+        cancelPendingStart()
+        scheduleStop(
+            CaptureStopRequest(
+                status: "Screen Locked",
+                logMessage: "Capture paused because the screen locked"
+            )
+        )
+    }
+
+    func handleScreenUnlock() {
+        enableBlackFrameFilter(5)
+        scheduleResume(reason: "screen unlock")
+    }
+
     func handleSessionResignActive() {
         let current = context()
         let shouldResumeCaptureAfterSession =
@@ -107,7 +123,12 @@ final class CaptureEventController {
         cancelPendingStart()
 
         guard shouldStopCapture else { return }
-        scheduleStop(CaptureStopRequest(status: "Session Inactive"))
+        scheduleStop(
+            CaptureStopRequest(
+                status: "Session Inactive",
+                logMessage: "Capture paused because the login session resigned active"
+            )
+        )
     }
 
     func handleSessionBecomeActive() {
@@ -121,6 +142,9 @@ final class CaptureEventController {
         guard lifecycle.shouldRestartAfterUnexpectedStop(isOverlayVisible: context().isOverlayVisible) else { return }
         logger("Capture stopped unexpectedly, attempting restart...")
         endForegroundActivity()
+        // A transient OS failure (e.g. macOS beta TCC blips while the screen is
+        // locked) can outlive the first restart attempt; retry once more with a
+        // longer delay before giving up and stranding capture in "Stopped".
         scheduleStart(
             CaptureStartRequest(
                 status: "Restarting...",
@@ -129,6 +153,14 @@ final class CaptureEventController {
                     successMessage: "Capture restarted successfully",
                     failurePrefix: "Failed to restart capture",
                     failureStatus: "Stopped"
+                ),
+                retry: CaptureStartRetryPolicy(
+                    delay: .seconds(15),
+                    attempt: CaptureStartAttempt(
+                        successMessage: "Capture restarted on delayed retry",
+                        failurePrefix: "Delayed restart retry also failed",
+                        failureStatus: "Stopped"
+                    )
                 )
             )
         )
@@ -146,7 +178,12 @@ final class CaptureEventController {
 
         if isUserPaused {
             cancelPendingStart()
-            scheduleStop(CaptureStopRequest(status: "Paused (User)"))
+            scheduleStop(
+                CaptureStopRequest(
+                    status: "Paused (User)",
+                    logMessage: "Capture paused by user"
+                )
+            )
             return
         }
 
@@ -176,7 +213,12 @@ final class CaptureEventController {
         cancelPendingStart()
 
         guard shouldStopCapture else { return }
-        scheduleStop(CaptureStopRequest(status: "Paused (Overlay)"))
+        scheduleStop(
+            CaptureStopRequest(
+                status: "Paused (Overlay)",
+                logMessage: "Capture paused while overlay is visible"
+            )
+        )
     }
 
     private func resumeCaptureAfterOverlay() {

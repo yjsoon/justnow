@@ -82,6 +82,49 @@ final class CaptureEventControllerTests: XCTestCase {
         )
     }
 
+    func testHandleScreenLockCancelsPendingStartAndSchedulesStop() {
+        let recorder = CaptureEventControllerRecorder(
+            context: CaptureEventContext(
+                hasCaptureManager: true,
+                isCapturing: true,
+                isSetupCaptureInProgress: false,
+                hasPendingStart: true,
+                isOverlayVisible: false
+            )
+        )
+        let controller = recorder.makeController()
+
+        controller.handleScreenLock()
+
+        XCTAssertEqual(
+            recorder.events,
+            [
+                "cancelPendingStart",
+                "stop:Screen Locked"
+            ]
+        )
+    }
+
+    func testHandleScreenUnlockSchedulesResumeWithRetry() {
+        let recorder = CaptureEventControllerRecorder(
+            context: CaptureEventContext(
+                hasCaptureManager: true,
+                isCapturing: false,
+                isSetupCaptureInProgress: false,
+                hasPendingStart: false,
+                isOverlayVisible: false
+            )
+        )
+        let controller = recorder.makeController()
+
+        controller.handleScreenUnlock()
+
+        XCTAssertEqual(recorder.events, ["filter:5.0", "start:Resuming..."])
+        XCTAssertEqual(recorder.startRequests.count, 1)
+        XCTAssertEqual(recorder.startRequests[0].attempt.successMessage, "Capture resumed after screen unlock")
+        XCTAssertEqual(recorder.startRequests[0].retry?.delay, .seconds(3))
+    }
+
     func testHandleUnexpectedStopRestartsAndEndsForegroundActivity() {
         let recorder = CaptureEventControllerRecorder(
             context: CaptureEventContext(
