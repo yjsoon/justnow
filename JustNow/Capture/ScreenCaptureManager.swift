@@ -79,6 +79,10 @@ class ScreenCaptureManager: NSObject {
         // Permission requests are handled by the app launch flow so we do not
         // trigger a second overlapping prompt while starting capture.
         guard Self.hasScreenRecordingPermission() else {
+            DiagnosticsLog.shared.log(
+                "Capture",
+                "Start blocked for display \(targetDisplayID): screen recording preflight returned denied; \(CaptureSystemState.summary())"
+            )
             throw CaptureError.permissionDenied
         }
 
@@ -333,10 +337,19 @@ class ScreenCaptureManager: NSObject {
 
         consecutiveCaptureFailures += 1
         let failureCount = consecutiveCaptureFailures
-        captureLogger.error("Screenshot capture failed (\(failureCount, privacy: .public)/\(self.maximumConsecutiveCaptureFailures, privacy: .public)): \(error.localizedDescription, privacy: .public)")
+        let detail = DiagnosticsLogFormat.describe(error)
+        captureLogger.error("Screenshot capture failed (\(failureCount, privacy: .public)/\(self.maximumConsecutiveCaptureFailures, privacy: .public)): \(detail, privacy: .public)")
+        DiagnosticsLog.shared.log(
+            "Capture",
+            "Screenshot capture failed (\(failureCount)/\(maximumConsecutiveCaptureFailures)) for display \(targetDisplayID): \(detail); \(CaptureSystemState.summary())"
+        )
 
         guard failureCount >= maximumConsecutiveCaptureFailures else { return }
 
+        DiagnosticsLog.shared.log(
+            "Capture",
+            "Hard-stopping capture for display \(targetDisplayID) after \(failureCount) consecutive failures"
+        )
         _ = stopCaptureLoop()
         delegate?.captureManagerDidStop(self)
     }

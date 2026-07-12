@@ -155,6 +155,7 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
             if let entry = managed.removeValue(forKey: id) {
                 await entry.manager.stopCapture()
                 captureLogger.info("Capture stopped for removed display: \(entry.info.name, privacy: .public)")
+                DiagnosticsLog.shared.log("Capture", "Capture stopped for removed display: \(entry.info.name)")
             }
         }
 
@@ -170,8 +171,14 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
                 do {
                     try await manager.startCapture()
                     captureLogger.info("Capture started for display: \(info.name, privacy: .public)")
+                    DiagnosticsLog.shared.log("Capture", "Capture started for display: \(info.name)")
                 } catch {
-                    captureLogger.error("Failed to start capture for \(info.name, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    let detail = DiagnosticsLogFormat.describe(error)
+                    captureLogger.error("Failed to start capture for \(info.name, privacy: .public): \(detail, privacy: .public)")
+                    DiagnosticsLog.shared.log(
+                        "Capture",
+                        "Failed to start capture for \(info.name): \(detail); \(CaptureSystemState.summary())"
+                    )
                     managed.removeValue(forKey: id)
                     if error is CaptureError, case CaptureError.permissionDenied = error {
                         throw error

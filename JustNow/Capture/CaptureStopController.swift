@@ -31,6 +31,7 @@ final class CaptureStopController {
         self.endForegroundActivity = endForegroundActivity
         self.logger = logger ?? { message in
             captureLogger.info("\(message, privacy: .public)")
+            DiagnosticsLog.shared.log("Capture", message)
         }
     }
 
