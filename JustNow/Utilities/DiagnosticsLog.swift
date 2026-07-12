@@ -8,7 +8,9 @@ import Foundation
 
 /// Pure formatting and rotation decisions for the diagnostics log.
 enum DiagnosticsLogFormat {
-    static let maximumFileSize = 2 * 1024 * 1024
+    /// Keeps the log plus its one rotated predecessor around 1 MB combined —
+    /// months of lifecycle events, and small enough to attach to a bug report.
+    static let maximumFileSize = 512 * 1024
 
     static func line(timestamp: String, category: String, message: String) -> String {
         "\(timestamp) [\(category)] \(message)\n"
