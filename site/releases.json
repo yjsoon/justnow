@@ -11,10 +11,21 @@
   },
   "releases": [
     {
+      "tag": "v1.3.4",
+      "version": "1.3.4",
+      "published_at": "2026-07-13",
+      "status": "Current public build",
+      "notes": [
+        "Capture now pauses when the screen locks instead of stopping outright, and resumes on unlock",
+        "Added a persistent diagnostics log for capture failures at `~/Library/Logs/JustNow/diagnostics.log` (capped at 512 KB per file)",
+        "Documented JustNow's privacy stance and the local diagnostics log in the README"
+      ]
+    },
+    {
       "tag": "v1.3.3",
       "version": "1.3.3",
       "published_at": "2026-06-19",
-      "status": "Current public build",
+      "status": "Previous release",
       "notes": [
         "refactor: remove over-engineering found by ponytail-audit by @yjsoon in https://github.com/yjsoon/justnow/pull/37"
       ]
