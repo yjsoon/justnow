@@ -98,8 +98,26 @@ final class RetentionManagerTests: XCTestCase {
             [
                 RetentionTier(maxAge: 15 * 60, minimumSpacing: 0),
                 RetentionTier(maxAge: 30 * 60, minimumSpacing: 1),
-                RetentionTier(maxAge: 2 * 60 * 60, minimumSpacing: 5),
+                RetentionTier(maxAge: 60 * 60, minimumSpacing: 5),
                 RetentionTier(maxAge: 24 * 60 * 60, minimumSpacing: 30),
+            ]
+        )
+    }
+
+    func testTwoHourWindowReachesArchiveFalloff() {
+        let policy = RetentionPolicy.rewindHistory(
+            .twoHours,
+            captureInterval: 0.25,
+            fullDetailWindow: 15 * 60
+        )
+
+        XCTAssertEqual(
+            policy.tiers,
+            [
+                RetentionTier(maxAge: 15 * 60, minimumSpacing: 0),
+                RetentionTier(maxAge: 30 * 60, minimumSpacing: 1),
+                RetentionTier(maxAge: 60 * 60, minimumSpacing: 5),
+                RetentionTier(maxAge: 2 * 60 * 60, minimumSpacing: 20),
             ]
         )
     }

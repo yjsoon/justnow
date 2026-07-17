@@ -29,7 +29,7 @@ nonisolated struct RetentionPolicy: Sendable, Equatable {
         let captureCadence = CaptureIntervalSetting.resolved(from: captureInterval)
         let detailEnd = min(max(fullDetailWindow, captureCadence), historyEnd)
         let firstFalloffEnd = min(detailEnd * 2, historyEnd)
-        let secondFalloffEnd = min(max(2 * 60 * 60, firstFalloffEnd), historyEnd)
+        let secondFalloffEnd = min(max(60 * 60, firstFalloffEnd), historyEnd)
 
         let detailSpacing: TimeInterval = 0
         // Retention density must not depend on the current capture setting:
