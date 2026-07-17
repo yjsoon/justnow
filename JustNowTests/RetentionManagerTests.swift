@@ -120,14 +120,20 @@ final class RetentionManagerTests: XCTestCase {
         )
     }
 
-    func testSlowerCaptureIntervalKeepsFalloffMonotonic() {
-        let policy = RetentionPolicy.rewindHistory(
+    func testCaptureIntervalChangesDoNotRecompactExistingFalloffTiers() {
+        let fastPolicy = RetentionPolicy.rewindHistory(
+            .twentyFourHours,
+            captureInterval: 0.25,
+            fullDetailWindow: 15 * 60
+        )
+        let slowPolicy = RetentionPolicy.rewindHistory(
             .twentyFourHours,
             captureInterval: 5,
             fullDetailWindow: 15 * 60
         )
 
-        XCTAssertEqual(policy.tiers.map(\.minimumSpacing), [0, 20, 20, 30])
+        XCTAssertEqual(fastPolicy.tiers, slowPolicy.tiers)
+        XCTAssertEqual(slowPolicy.tiers.map(\.minimumSpacing), [0, 1, 5, 30])
     }
 
     func testFullDetailTierKeepsFramesCloserThanCaptureCadence() {

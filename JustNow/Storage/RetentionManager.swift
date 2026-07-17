@@ -32,8 +32,10 @@ nonisolated struct RetentionPolicy: Sendable, Equatable {
         let secondFalloffEnd = min(max(2 * 60 * 60, firstFalloffEnd), historyEnd)
 
         let detailSpacing: TimeInterval = 0
-        let firstFalloffSpacing = max(captureCadence * 4, 1)
-        let secondFalloffSpacing = max(firstFalloffSpacing, 5)
+        // Retention density must not depend on the current capture setting:
+        // changing future cadence must never recompact existing history.
+        let firstFalloffSpacing: TimeInterval = 1
+        let secondFalloffSpacing: TimeInterval = 5
 
         let archiveSpacing: TimeInterval
         switch option {
