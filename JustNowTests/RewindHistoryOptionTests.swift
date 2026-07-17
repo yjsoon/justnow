@@ -17,7 +17,7 @@ final class RewindHistoryOptionTests: XCTestCase {
     }
 
     /// RetentionManager assigns each frame to the first tier whose maxAge
-    /// covers it, so tiers must be strictly ascending with positive spacing,
+    /// covers it, so tiers must be strictly ascending with non-negative spacing,
     /// and the deepest tier must reach the full retained duration — otherwise
     /// retained frames would be silently pruned as "beyond all tiers".
     func testEveryOptionProducesWellFormedRetentionTiers() throws {
@@ -32,8 +32,12 @@ final class RewindHistoryOptionTests: XCTestCase {
                     "\(option) tiers must be strictly ascending"
                 )
             }
-            for tier in tiers {
-                XCTAssertGreaterThan(tier.minimumSpacing, 0, "\(option) has non-positive spacing")
+            for (index, tier) in tiers.enumerated() {
+                if index == 0 {
+                    XCTAssertEqual(tier.minimumSpacing, 0, "\(option) must keep full detail")
+                } else {
+                    XCTAssertGreaterThan(tier.minimumSpacing, 0, "\(option) has non-positive falloff spacing")
+                }
             }
 
             let deepest = try XCTUnwrap(tiers.last)

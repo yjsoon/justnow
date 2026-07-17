@@ -117,6 +117,7 @@ final class CapturePolicyController {
         settings: CapturePolicySettings,
         environment: CapturePolicyEnvironment
     ) -> CapturePolicy {
+        let baseInterval = CaptureIntervalSetting.resolved(from: settings.captureInterval)
         let adaptiveEnabled = settings.reduceCaptureOnBattery
         let onBattery = adaptiveEnabled && environment.isOnBattery
         let lowPowerMode = adaptiveEnabled && environment.isLowPowerModeEnabled
@@ -125,10 +126,10 @@ final class CapturePolicyController {
         let thermalState = environment.thermalState
         let isThermalConstrained = adaptiveEnabled && (thermalState == .serious || thermalState == .critical)
 
-        var interval = settings.captureInterval
+        var interval = baseInterval
         var scale = 2
         var saveOptions = FrameSaveOptions.standard
-        var duplicatePolicy = DuplicateFramePolicy.exact(atMostEvery: settings.captureInterval)
+        var duplicatePolicy = DuplicateFramePolicy.exact(atMostEvery: baseInterval)
         var ocrIndexEnabled = true
         var ocrIndexInterval = ocrIndexBaseInterval
         var ocrIndexQueueDepth = ocrIndexBaseQueueDepth

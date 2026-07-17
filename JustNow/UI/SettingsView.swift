@@ -202,12 +202,13 @@ struct SettingsView: View {
             Section("Capture") {
                 LabeledContent {
                     HStack(spacing: 8) {
-                        Slider(value: $captureInterval, in: 0.5...5.0, step: 0.5)
+                        Slider(value: resolvedCaptureInterval, in: CaptureIntervalSetting.allowedRange, step: 0.25)
                             .frame(width: 180)
 
-                        Text("\(captureInterval.formatted(.number.precision(.fractionLength(1))))s")
+                        Text(captureIntervalLabel)
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
+                            .frame(minWidth: 96, alignment: .trailing)
                     }
                 } label: {
                     Text("Capture interval")
@@ -226,7 +227,7 @@ struct SettingsView: View {
                         Text("Rewind history")
                     }
 
-                    Text("Recent history stays at full detail. Older history is compacted automatically.")
+                    Text("Recent history keeps every stored frame. Older history gradually uses fewer frames so longer rewind windows stay manageable.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -234,22 +235,19 @@ struct SettingsView: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     LabeledContent {
-                        Picker(selection: $recentTimelineWindowSeconds) {
+                        Picker("", selection: $recentTimelineWindowSeconds) {
                             ForEach(RecentTimelineWindow.allCases) { window in
                                 Text(window.label).tag(window.rawValue)
                             }
-                        } label: {
-                            EmptyView()
                         }
-                        .pickerStyle(.segmented)
+                        .pickerStyle(.menu)
                         .labelsHidden()
                         .accessibilityLabel("Full-detail window")
-                        .frame(width: 220)
                     } label: {
                         Text("Full-detail window")
                     }
 
-                    Text("Keep every stored frame in this most recent window, then collapse visually similar older history.")
+                    Text("Choose how long scrolling keeps every stored frame before the gradual falloff begins.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -391,6 +389,24 @@ struct SettingsView: View {
         .tabItem {
             Text("Shortcuts")
         }
+    }
+
+    private var captureIntervalLabel: String {
+        let resolvedInterval = CaptureIntervalSetting.resolved(from: captureInterval)
+        let seconds = resolvedInterval.formatted(
+            .number.precision(.fractionLength(0...2))
+        )
+        let framesPerSecond = (1 / resolvedInterval).formatted(
+            .number.precision(.fractionLength(0...1))
+        )
+        return "\(seconds)s · up to \(framesPerSecond) fps"
+    }
+
+    private var resolvedCaptureInterval: Binding<Double> {
+        Binding(
+            get: { CaptureIntervalSetting.resolved(from: captureInterval) },
+            set: { captureInterval = CaptureIntervalSetting.resolved(from: $0) }
+        )
     }
 
     private func updateStorageInfo() async {

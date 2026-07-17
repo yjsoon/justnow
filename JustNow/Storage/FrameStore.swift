@@ -23,6 +23,8 @@ nonisolated struct FrameSaveOptions: Sendable, Equatable {
 }
 
 actor FrameStore {
+    private nonisolated static let legacyManifestDateFormatter = ISO8601DateFormatter()
+
     private let fileManager = FileManager.default
     private let storageURL: URL
     private let framesURL: URL
@@ -35,7 +37,10 @@ actor FrameStore {
     private var manifestSaveTask: Task<Void, Never>?
     private let manifestEncoder: JSONEncoder = {
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        // Numeric seconds retain sub-second capture timestamps. The previous
+        // ISO-8601 strategy rounded them to whole seconds, collapsing several
+        // 4 fps frames onto the same timestamp after every relaunch.
+        encoder.dateEncodingStrategy = .secondsSince1970
         return encoder
     }()
 
@@ -60,7 +65,7 @@ actor FrameStore {
         // Load or create manifest
         if fileManager.fileExists(atPath: manifestURL.path) {
             let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
+            decoder.dateDecodingStrategy = .custom(Self.decodeManifestDate)
             let data = try? Data(contentsOf: manifestURL)
             if let data, let decoded = try? decoder.decode(FrameManifest.self, from: data) {
                 manifest = decoded
@@ -126,6 +131,24 @@ actor FrameStore {
             index[frame.id] = offset
         }
         return index
+    }
+
+    private static func decodeManifestDate(from decoder: Decoder) throws -> Date {
+        let container = try decoder.singleValueContainer()
+        if let timestamp = try? container.decode(TimeInterval.self) {
+            return Date(timeIntervalSince1970: timestamp)
+        }
+
+        // Backwards compatibility for manifests written with the old
+        // JSONEncoder ISO-8601 date strategy.
+        let encodedDate = try container.decode(String.self)
+        guard let date = legacyManifestDateFormatter.date(from: encodedDate) else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Invalid manifest date: \(encodedDate)"
+            )
+        }
+        return date
     }
 
     private func rebuildManifestIndex() {

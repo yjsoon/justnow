@@ -25,6 +25,13 @@ final class FrameBufferTests: XCTestCase {
         )
     }
 
+    func testStandardDuplicatePolicyMatchesDefaultCaptureInterval() {
+        XCTAssertEqual(
+            DuplicateFramePolicy.standard,
+            .exact(atMostEvery: AppStorageDefault.captureInterval)
+        )
+    }
+
     func testAddFrameSyncStoresFrame() async throws {
         let buffer = try await makeBuffer()
         let image = try makeStructuredImage(seed: 1)

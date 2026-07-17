@@ -22,11 +22,11 @@ struct DuplicateFramePolicy: Sendable, Equatable {
     let hashThreshold: Int
     let minimumSpacing: TimeInterval
 
-    static let standard = DuplicateFramePolicy.exact(atMostEvery: 0.5)
+    static let standard = DuplicateFramePolicy.exact(atMostEvery: AppStorageDefault.captureInterval)
     static let lowPower = DuplicateFramePolicy(hashThreshold: 1, minimumSpacing: 5)
 
     static func exact(atMostEvery interval: TimeInterval) -> DuplicateFramePolicy {
-        let clampedInterval = max(interval, 0.5)
+        let clampedInterval = max(interval, 0.25)
         return DuplicateFramePolicy(hashThreshold: 0, minimumSpacing: clampedInterval)
     }
 }

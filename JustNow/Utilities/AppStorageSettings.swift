@@ -58,7 +58,7 @@ enum RewindDragAction: String, CaseIterable, Identifiable {
 }
 
 enum AppStorageDefault {
-    nonisolated static let captureInterval = 0.5
+    nonisolated static let captureInterval = 0.25
     nonisolated static let rewindHistorySeconds = RewindHistoryOption.defaultValue.rawValue
     nonisolated static let recentTimelineWindowSeconds = RecentTimelineWindow.defaultValue.rawValue
     nonisolated static let reduceCaptureOnBattery = true
@@ -78,4 +78,13 @@ enum AppStorageDefault {
     nonisolated static let screenshotSaveToFolder = true
     nonisolated static let screenshotSaveToClipboard = false
     nonisolated static let hasSeenSaveQualityInfo = false
+}
+
+nonisolated enum CaptureIntervalSetting {
+    static let allowedRange = 0.25...5.0
+
+    static func resolved(from value: Double) -> Double {
+        guard value.isFinite else { return AppStorageDefault.captureInterval }
+        return min(max(value, allowedRange.lowerBound), allowedRange.upperBound)
+    }
 }
