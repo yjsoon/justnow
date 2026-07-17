@@ -22,6 +22,7 @@ enum AppStorageKey {
     nonisolated static let screenshotSaveToClipboard = "screenshotSaveToClipboard"
     nonisolated static let hasSeenSaveQualityInfo = "hasSeenSaveQualityInfo"
     nonisolated static let regionScreenshotShortcutHintCount = "regionScreenshotShortcutHintCount"
+    nonisolated static let settingsMigrationVersion = "settingsMigrationVersion"
 }
 
 enum RewindDragAction: String, CaseIterable, Identifiable {
@@ -86,5 +87,38 @@ nonisolated enum CaptureIntervalSetting {
     static func resolved(from value: Double) -> Double {
         guard value.isFinite else { return AppStorageDefault.captureInterval }
         return min(max(value, allowedRange.lowerBound), allowedRange.upperBound)
+    }
+}
+
+nonisolated enum AppSettingsMigration {
+    private static let currentVersion = 1
+    private static let legacyCaptureInterval = 0.5
+    private static let legacyRecentTimelineWindowSeconds = 300.0
+
+    static func isExistingInstall(
+        persistentDomain: [String: Any]?,
+        storageDirectoryExists: Bool
+    ) -> Bool {
+        storageDirectoryExists || persistentDomain?.isEmpty == false
+    }
+
+    static func migrateIfNeeded(defaults: UserDefaults, existingInstall: Bool) {
+        guard defaults.integer(forKey: AppStorageKey.settingsMigrationVersion) < currentVersion else {
+            return
+        }
+
+        if existingInstall {
+            if defaults.object(forKey: AppStorageKey.captureInterval) == nil {
+                defaults.set(legacyCaptureInterval, forKey: AppStorageKey.captureInterval)
+            }
+            if defaults.object(forKey: AppStorageKey.recentTimelineWindowSeconds) == nil {
+                defaults.set(
+                    legacyRecentTimelineWindowSeconds,
+                    forKey: AppStorageKey.recentTimelineWindowSeconds
+                )
+            }
+        }
+
+        defaults.set(currentVersion, forKey: AppStorageKey.settingsMigrationVersion)
     }
 }

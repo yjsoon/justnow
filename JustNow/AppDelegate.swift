@@ -156,6 +156,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !isRunningUnderXCTest else { return }
 
+        migrateLegacyDefaultSettingsIfNeeded()
         DiagnosticsLog.shared.logSessionStart()
         setupStatusItem()
         updaterController.startUpdater()
@@ -225,6 +226,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     // MARK: - Setup
+
+    private func migrateLegacyDefaultSettingsIfNeeded() {
+        let defaults = UserDefaults.standard
+        let persistentDomain = Bundle.main.bundleIdentifier.flatMap {
+            defaults.persistentDomain(forName: $0)
+        }
+        let storageDirectoryExists = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first.map {
+            FileManager.default.fileExists(
+                atPath: $0.appendingPathComponent("JustNow", isDirectory: true).path
+            )
+        } ?? false
+
+        AppSettingsMigration.migrateIfNeeded(
+            defaults: defaults,
+            existingInstall: AppSettingsMigration.isExistingInstall(
+                persistentDomain: persistentDomain,
+                storageDirectoryExists: storageDirectoryExists
+            )
+        )
+    }
 
     private func setupStatusItem() {
         statusItemController = StatusItemController(
