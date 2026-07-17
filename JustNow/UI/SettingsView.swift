@@ -202,7 +202,7 @@ struct SettingsView: View {
             Section("Capture") {
                 LabeledContent {
                     HStack(spacing: 8) {
-                        Slider(value: $captureInterval, in: 0.25...5.0, step: 0.25)
+                        Slider(value: resolvedCaptureInterval, in: CaptureIntervalSetting.allowedRange, step: 0.25)
                             .frame(width: 180)
 
                         Text(captureIntervalLabel)
@@ -227,7 +227,7 @@ struct SettingsView: View {
                         Text("Rewind history")
                     }
 
-                    Text("Recent history keeps every captured change. Older history gradually uses fewer frames so longer rewind windows stay lightweight.")
+                    Text("Recent history keeps every stored frame. Older history gradually uses fewer frames so longer rewind windows stay manageable.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -249,7 +249,7 @@ struct SettingsView: View {
                         Text("Full-detail window")
                     }
 
-                    Text("Choose how long scrolling stays at the selected capture speed before the gradual falloff begins.")
+                    Text("Choose how long scrolling keeps every stored frame before the gradual falloff begins.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -394,13 +394,21 @@ struct SettingsView: View {
     }
 
     private var captureIntervalLabel: String {
-        let seconds = captureInterval.formatted(
+        let resolvedInterval = CaptureIntervalSetting.resolved(from: captureInterval)
+        let seconds = resolvedInterval.formatted(
             .number.precision(.fractionLength(0...2))
         )
-        let framesPerSecond = (1 / captureInterval).formatted(
+        let framesPerSecond = (1 / resolvedInterval).formatted(
             .number.precision(.fractionLength(0...1))
         )
-        return "\(seconds)s · \(framesPerSecond) fps"
+        return "\(seconds)s · up to \(framesPerSecond) fps"
+    }
+
+    private var resolvedCaptureInterval: Binding<Double> {
+        Binding(
+            get: { CaptureIntervalSetting.resolved(from: captureInterval) },
+            set: { captureInterval = CaptureIntervalSetting.resolved(from: $0) }
+        )
     }
 
     private func updateStorageInfo() async {

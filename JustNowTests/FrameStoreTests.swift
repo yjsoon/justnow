@@ -102,6 +102,57 @@ final class FrameStoreTests: XCTestCase {
         XCTAssertEqual(metadata.first?.displayName, "Test Display")
     }
 
+    func testManifestPreservesSubSecondTimestamps() async throws {
+        let timestamp = Date(timeIntervalSince1970: 2_000.125)
+        do {
+            let store = try FrameStore(directory: directory)
+            _ = try await store.saveFrame(
+                makeImage(),
+                timestamp: timestamp,
+                hash: 7,
+                displayID: nil,
+                displayName: nil
+            )
+            await store.flushManifest()
+        }
+
+        let reopened = try FrameStore(directory: directory)
+        let persistedMetadata = await reopened.getAllMetadata()
+        let persistedTimestamp = try XCTUnwrap(persistedMetadata.first?.timestamp)
+
+        XCTAssertEqual(persistedTimestamp.timeIntervalSince1970, timestamp.timeIntervalSince1970, accuracy: 0.000_001)
+    }
+
+    func testManifestLoadsLegacyISO8601Dates() async throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let legacyTimestamp = Date(timeIntervalSince1970: 2_000)
+        let legacyManifest = FrameManifest(
+            frames: [
+                FrameMetadata(
+                    id: UUID(),
+                    timestamp: legacyTimestamp,
+                    hash: 7,
+                    filename: "legacy.jpg",
+                    thumbnailFilename: "legacy_thumb.jpg",
+                    fileSize: 1,
+                    displayID: nil,
+                    displayName: nil
+                )
+            ],
+            lastModified: legacyTimestamp
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(legacyManifest).write(
+            to: directory.appendingPathComponent("manifest.json")
+        )
+
+        let reopened = try FrameStore(directory: directory)
+        let metadata = await reopened.getAllMetadata()
+
+        XCTAssertEqual(metadata.first?.timestamp, legacyTimestamp)
+    }
+
     /// A corrupted manifest must not brick the store on every launch. It is
     /// quarantined together with the frames directory and the store starts
     /// empty, so the old JPEGs survive for manual recovery out of reach of

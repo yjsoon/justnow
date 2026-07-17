@@ -26,12 +26,13 @@ nonisolated struct RetentionPolicy: Sendable, Equatable {
     ) -> RetentionPolicy {
         let maximumAge = option.retainedDuration
         let historyEnd = min(option.duration, maximumAge)
-        let detailEnd = min(max(fullDetailWindow, captureInterval), historyEnd)
+        let captureCadence = CaptureIntervalSetting.resolved(from: captureInterval)
+        let detailEnd = min(max(fullDetailWindow, captureCadence), historyEnd)
         let firstFalloffEnd = min(detailEnd * 2, historyEnd)
         let secondFalloffEnd = min(max(2 * 60 * 60, firstFalloffEnd), historyEnd)
 
-        let detailSpacing = max(captureInterval, 0.25)
-        let firstFalloffSpacing = max(detailSpacing * 4, 1)
+        let detailSpacing: TimeInterval = 0
+        let firstFalloffSpacing = max(captureCadence * 4, 1)
         let secondFalloffSpacing = max(firstFalloffSpacing, 5)
 
         let archiveSpacing: TimeInterval
@@ -63,6 +64,11 @@ nonisolated struct RetentionPolicy: Sendable, Equatable {
 
 @MainActor
 final class RetentionManager {
+    private struct SpacingBucket: Hashable {
+        let tierIndex: Int
+        let displayID: UUID?
+    }
+
     private var policy: RetentionPolicy
 
     init(policy: RetentionPolicy = .default24Hours) {
@@ -75,7 +81,7 @@ final class RetentionManager {
 
     func framesToPrune(frames: [StoredFrame], currentTime: Date) -> Set<UUID> {
         var toKeep = Set<UUID>()
-        var lastKeptTime: [Int: Date] = [:]
+        var lastKeptTime: [SpacingBucket: Date] = [:]
 
         for frame in frames {
             let age = currentTime.timeIntervalSince(frame.timestamp)
@@ -85,14 +91,15 @@ final class RetentionManager {
             }
 
             let tier = policy.tiers[tierIndex]
-            if let lastTime = lastKeptTime[tierIndex] {
+            let bucket = SpacingBucket(tierIndex: tierIndex, displayID: frame.displayID)
+            if let lastTime = lastKeptTime[bucket] {
                 if frame.timestamp.timeIntervalSince(lastTime) >= tier.minimumSpacing {
                     toKeep.insert(frame.id)
-                    lastKeptTime[tierIndex] = frame.timestamp
+                    lastKeptTime[bucket] = frame.timestamp
                 }
             } else {
                 toKeep.insert(frame.id)
-                lastKeptTime[tierIndex] = frame.timestamp
+                lastKeptTime[bucket] = frame.timestamp
             }
         }
 

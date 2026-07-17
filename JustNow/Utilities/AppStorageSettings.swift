@@ -79,3 +79,12 @@ enum AppStorageDefault {
     nonisolated static let screenshotSaveToClipboard = false
     nonisolated static let hasSeenSaveQualityInfo = false
 }
+
+nonisolated enum CaptureIntervalSetting {
+    static let allowedRange = 0.25...5.0
+
+    static func resolved(from value: Double) -> Double {
+        guard value.isFinite else { return AppStorageDefault.captureInterval }
+        return min(max(value, allowedRange.lowerBound), allowedRange.upperBound)
+    }
+}

@@ -848,7 +848,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
 
     private func currentCapturePolicySettings() -> CapturePolicySettings {
         CapturePolicySettings(
-            captureInterval: captureInterval,
+            captureInterval: CaptureIntervalSetting.resolved(from: captureInterval),
             reduceCaptureOnBattery: reduceCaptureOnBattery
         )
     }
