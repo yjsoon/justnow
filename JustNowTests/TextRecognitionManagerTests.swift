@@ -37,5 +37,8 @@ final class TextRecognitionManagerTests: XCTestCase {
 
     func testNormaliseClipboardTextHandlesEmptyAndWhitespaceInput() {
         XCTAssertEqual(TextRecognitionManager.normaliseClipboardText(""), "")
+        XCTAssertEqual(TextRecognitionManager.normaliseClipboardText("   "), "")
+        XCTAssertEqual(TextRecognitionManager.normaliseClipboardText("\t\t"), "")
+        XCTAssertEqual(TextRecognitionManager.normaliseClipboardText(" \n\t\r\n \r "), "")
     }
 }
