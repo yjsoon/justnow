@@ -185,7 +185,12 @@ final class TextGrabGeometryTests: XCTestCase {
             displayedImageRect: displayed
         )
 
-        XCTAssertEqual(overflowing, CGRect(x: 80, y: 0, width: 20, height: 20))
+        // Component-wise with tolerance: 1 - 0.8 is not exact in binary
+        // floating point, so the clamped width is 19.999… rather than 20.
+        XCTAssertEqual(overflowing.minX, 80, accuracy: 0.000_1)
+        XCTAssertEqual(overflowing.minY, 0, accuracy: 0.000_1)
+        XCTAssertEqual(overflowing.width, 20, accuracy: 0.000_1)
+        XCTAssertEqual(overflowing.height, 20, accuracy: 0.000_1)
         XCTAssertTrue(displayed.contains(overflowing))
 
         let negativeOrigin = TextGrabGeometry.displayedRect(
