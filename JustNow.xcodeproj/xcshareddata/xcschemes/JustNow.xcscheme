@@ -13,7 +13,7 @@
             buildForArchiving = "YES"
             buildForAnalyzing = "YES">
             <BuildableReference
-               BuildableState = "YES"
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "AF3F00E72F094EE1000F5208"
                BuildableName = "JustNow.app"
                BlueprintName = "JustNow"
@@ -30,10 +30,9 @@
       shouldAutocreateTestPlan = "YES">
       <Testables>
          <TestableReference
-            skipped = "NO"
-            parallelizable = "NO">
+            skipped = "NO">
             <BuildableReference
-               BuildableState = "YES"
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "C04E57042F70000100000001"
                BuildableName = "JustNowTests.xctest"
                BlueprintName = "JustNowTests"
@@ -55,7 +54,7 @@
       <BuildableProductRunnable
          runnableDebuggingMode = "0">
          <BuildableReference
-            BuildableState = "YES"
+            BuildableIdentifier = "primary"
             BlueprintIdentifier = "AF3F00E72F094EE1000F5208"
             BuildableName = "JustNow.app"
             BlueprintName = "JustNow"
@@ -72,7 +71,7 @@
       <BuildableProductRunnable
          runnableDebuggingMode = "0">
          <BuildableReference
-            BuildableState = "YES"
+            BuildableIdentifier = "primary"
             BlueprintIdentifier = "AF3F00E72F094EE1000F5208"
             BuildableName = "JustNow.app"
             BlueprintName = "JustNow"
