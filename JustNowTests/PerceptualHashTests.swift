@@ -21,18 +21,25 @@ final class PerceptualHashTests: XCTestCase {
         XCTAssertNotEqual(greyHash, 0)
     }
 
-    /// Uniform frames all collapse to the same hash regardless of brightness,
-    /// so consecutive solid-colour captures dedupe against each other. The
-    /// time-based minimum spacing in DuplicateFramePolicy still stores
-    /// occasional frames of a static screen.
-    func testUniformFramesShareOneHashSoTheyDedupeAgainstEachOther() async throws {
+    /// Visually distinct solid frames (e.g. a dark-to-light slide transition)
+    /// must produce hashes far enough apart that dedupe keeps both, while
+    /// repeated captures of the same solid colour still share one hash so a
+    /// static solid-colour screen dedupes.
+    func testDistinctBrightnessUniformFramesDoNotDedupeAgainstEachOther() async throws {
         let black = try XCTUnwrap(TestImageFactory.makeSolidImage(width: 16, height: 16, level: 0))
         let white = try XCTUnwrap(TestImageFactory.makeSolidImage(width: 16, height: 16, level: 255))
+        let blackAgain = try XCTUnwrap(TestImageFactory.makeSolidImage(width: 16, height: 16, level: 0))
 
         let blackHash = await PerceptualHash.compute(from: black)
         let whiteHash = await PerceptualHash.compute(from: white)
+        let blackAgainHash = await PerceptualHash.compute(from: blackAgain)
 
-        XCTAssertEqual(PerceptualHash.hammingDistance(blackHash, whiteHash), 0)
+        XCTAssertNotEqual(blackHash, 0)
+        XCTAssertNotEqual(whiteHash, 0)
+        XCTAssertNotEqual(blackHash, whiteHash)
+        // Must clear the largest hamming threshold in use (timeline's 3)
+        XCTAssertGreaterThan(PerceptualHash.hammingDistance(blackHash, whiteHash), 3)
+        XCTAssertEqual(blackHash, blackAgainHash)
     }
 
     func testHashIsDeterministicForIdenticalContent() async throws {
