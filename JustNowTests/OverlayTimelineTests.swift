@@ -136,6 +136,25 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertEqual(formatRelativeTime(now.addingTimeInterval(-7_199), now: now), "1h 59m 59s ago")
     }
 
+    func testFormatRelativeTimeCalendarBranchesUseInjectedNow() throws {
+        // Midday avoids timezone day-boundary effects; assert structural
+        // properties rather than locale-dependent clock strings.
+        let now = try XCTUnwrap(
+            Calendar.current.date(from: DateComponents(year: 2024, month: 6, day: 15, hour: 12))
+        )
+
+        let today = formatRelativeTime(now.addingTimeInterval(-3 * 3_600), now: now)
+        XCTAssertFalse(today.contains("ago"))
+        XCTAssertFalse(today.contains("Yesterday"))
+
+        let yesterday = formatRelativeTime(now.addingTimeInterval(-24 * 3_600), now: now)
+        XCTAssertTrue(yesterday.hasPrefix("Yesterday"))
+
+        let dayLabel = formatRelativeTime(now.addingTimeInterval(-3 * 86_400), now: now)
+        XCTAssertFalse(dayLabel.contains("ago"))
+        XCTAssertFalse(dayLabel.contains("Yesterday"))
+    }
+
     private func makeFrames(offsets: [TimeInterval], now: Date) -> [StoredFrame] {
         offsets.map { offset in
             StoredFrame(

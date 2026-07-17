@@ -171,10 +171,13 @@ func formatRelativeTime(_ date: Date, now: Date = Date()) -> String {
 
     let calendar = Calendar.current
 
-    if calendar.isDateInToday(date) {
+    // Compare against the injected now rather than the wall clock so the
+    // day-boundary branches agree with the seconds/daysAgo maths above.
+    if calendar.isDate(date, inSameDayAs: now) {
         return date.formatted(clockTimeFormat)
     }
-    if calendar.isDateInYesterday(date) {
+    if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
+       calendar.isDate(date, inSameDayAs: yesterday) {
         return "Yesterday \(date.formatted(clockTimeFormat))"
     }
 
