@@ -57,31 +57,58 @@ actor FrameStore {
         framesURL = storageURL.appendingPathComponent("frames", isDirectory: true)
         manifestURL = storageURL.appendingPathComponent("manifest.json")
 
-        // Create directories
-        try fileManager.createDirectory(at: framesURL, withIntermediateDirectories: true)
-
         // Load or create manifest
         if fileManager.fileExists(atPath: manifestURL.path) {
-            let data = try Data(contentsOf: manifestURL)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
-            if let decoded = try? decoder.decode(FrameManifest.self, from: data) {
+            let data = try? Data(contentsOf: manifestURL)
+            if let data, let decoded = try? decoder.decode(FrameManifest.self, from: data) {
                 manifest = decoded
             } else {
-                // A corrupted manifest must not brick capture on every
-                // subsequent launch. Quarantine it for diagnosis and start
-                // fresh; `cleanupOrphans` deliberately refuses to delete
-                // frame files while the manifest is empty, so the on-disk
-                // JPEGs survive for manual recovery.
-                let quarantineURL = storageURL.appendingPathComponent("manifest.json.corrupt")
-                try? fileManager.removeItem(at: quarantineURL)
-                try? fileManager.moveItem(at: manifestURL, to: quarantineURL)
+                // An unreadable or undecodable manifest must not brick
+                // capture on every subsequent launch. Quarantine it together
+                // with the frames directory so the on-disk JPEGs survive for
+                // manual recovery — once new captures repopulate the fresh
+                // manifest, orphan cleanup would otherwise reap every
+                // pre-corruption JPEG on the next launch.
+                Self.quarantineCorruptStore(
+                    fileManager: fileManager,
+                    storageURL: storageURL,
+                    manifestURL: manifestURL,
+                    framesURL: framesURL,
+                    reason: data == nil ? "unreadable" : "undecodable"
+                )
                 manifest = FrameManifest()
             }
         } else {
             manifest = FrameManifest()
         }
+
+        // Created after the manifest check so a quarantine can move the old
+        // frames directory aside intact before an empty one takes its place.
+        try fileManager.createDirectory(at: framesURL, withIntermediateDirectories: true)
         manifestIndex = Self.makeManifestIndex(from: manifest.frames)
+    }
+
+    /// Moves the corrupt manifest and the frames directory to `.corrupt`
+    /// siblings, keeping the JPEGs out of reach of orphan cleanup.
+    private static func quarantineCorruptStore(
+        fileManager: FileManager,
+        storageURL: URL,
+        manifestURL: URL,
+        framesURL: URL,
+        reason: String
+    ) {
+        let manifestQuarantineURL = storageURL.appendingPathComponent("manifest.json.corrupt")
+        let framesQuarantineURL = storageURL.appendingPathComponent("frames.corrupt", isDirectory: true)
+        try? fileManager.removeItem(at: manifestQuarantineURL)
+        try? fileManager.removeItem(at: framesQuarantineURL)
+        try? fileManager.moveItem(at: manifestURL, to: manifestQuarantineURL)
+        try? fileManager.moveItem(at: framesURL, to: framesQuarantineURL)
+        DiagnosticsLog.shared.log(
+            "Storage",
+            "Quarantined corrupt manifest and frames to \(storageURL.path) (manifest \(reason))"
+        )
     }
 
     private static func makeManifestIndex(from frames: [FrameMetadata]) -> [UUID: Int] {
@@ -297,9 +324,10 @@ actor FrameStore {
             return
         }
 
-        // Refuse to wipe on-disk frames when the manifest looks suspiciously
-        // empty — protects against a corrupted or missing manifest forcing
-        // every captured JPEG to be deleted as an "orphan".
+        // Defence in depth: refuse to wipe on-disk frames when the manifest
+        // looks suspiciously empty. The corrupt-manifest path already moves
+        // the old frames directory aside, so pre-quarantine JPEGs are never
+        // visible here; this guard covers a lost manifest with frames intact.
         if manifest.frames.isEmpty && !files.isEmpty {
             return
         }

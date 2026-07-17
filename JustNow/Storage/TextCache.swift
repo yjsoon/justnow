@@ -279,6 +279,12 @@ actor TextCache {
 
     /// Remove cached text for frames that no longer exist
     func prune(keepingFrameIDs validIDs: Set<UUID>) {
+        // An empty valid set is almost always an upstream failure (e.g. a
+        // quarantined manifest), not a request to wipe the whole index —
+        // wholesale wipes must go through `clear()`. Stale entries merely
+        // linger until the next prune with a non-empty set.
+        guard !validIDs.isEmpty else { return }
+
         do {
             let allIDs = try allCachedFrameIDs()
             let staleIDs = allIDs.filter { !validIDs.contains($0) }

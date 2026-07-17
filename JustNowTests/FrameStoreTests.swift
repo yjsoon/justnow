@@ -103,19 +103,18 @@ final class FrameStoreTests: XCTestCase {
     }
 
     /// A corrupted manifest must not brick the store on every launch. It is
-    /// quarantined and the store starts empty, while frame JPEGs stay on disk
-    /// (cleanupOrphans refuses to delete files against an empty manifest).
+    /// quarantined together with the frames directory and the store starts
+    /// empty, so the old JPEGs survive for manual recovery out of reach of
+    /// orphan cleanup.
     func testCorruptedManifestIsQuarantinedInsteadOfFailingInit() async throws {
-        let framePath: String
+        let quarantinedFilename: String
         do {
             let store = try FrameStore(directory: directory)
             let metadata = try await store.saveFrame(
                 makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
             )
             await store.flushManifest()
-            framePath = directory
-                .appendingPathComponent("frames", isDirectory: true)
-                .appendingPathComponent(metadata.filename).path
+            quarantinedFilename = metadata.filename
         }
 
         let manifestURL = directory.appendingPathComponent("manifest.json")
@@ -131,11 +130,101 @@ final class FrameStoreTests: XCTestCase {
             )
         )
 
+        let quarantinedFramePath = directory
+            .appendingPathComponent("frames.corrupt", isDirectory: true)
+            .appendingPathComponent(quarantinedFilename).path
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: quarantinedFramePath),
+            "Pre-corruption JPEGs must move aside for manual recovery"
+        )
+
+        let framesDirectory = directory.appendingPathComponent("frames", isDirectory: true)
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: framesDirectory.path, isDirectory: &isDirectory))
+        XCTAssertTrue(isDirectory.boolValue)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: framesDirectory.path), [])
+
         try await store.cleanupOrphans()
         XCTAssertTrue(
-            FileManager.default.fileExists(atPath: framePath),
-            "Orphan cleanup must not delete frames while the manifest is suspiciously empty"
+            FileManager.default.fileExists(atPath: quarantinedFramePath),
+            "Orphan cleanup must never reach into the quarantine directory"
         )
+    }
+
+    /// The recovery guarantee must survive beyond the quarantine launch: once
+    /// new captures repopulate the fresh manifest, a later launch's orphan
+    /// cleanup must not reap the quarantined pre-corruption JPEGs.
+    func testQuarantinedFramesSurviveCleanupAfterNewCapturesAreStored() async throws {
+        let quarantinedFilename: String
+        do {
+            let store = try FrameStore(directory: directory)
+            let metadata = try await store.saveFrame(
+                makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+            )
+            await store.flushManifest()
+            quarantinedFilename = metadata.filename
+        }
+
+        try Data("{not valid json".utf8).write(
+            to: directory.appendingPathComponent("manifest.json")
+        )
+
+        do {
+            let store = try FrameStore(directory: directory)
+            _ = try await store.saveFrame(
+                makeImage(), timestamp: Date(), hash: 2, displayID: nil, displayName: nil
+            )
+            await store.flushManifest()
+        }
+
+        let reopened = try FrameStore(directory: directory)
+        try await reopened.cleanupOrphans()
+
+        let remaining = await reopened.getAllMetadata()
+        XCTAssertEqual(remaining.count, 1)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: directory
+                    .appendingPathComponent("frames.corrupt", isDirectory: true)
+                    .appendingPathComponent(quarantinedFilename).path
+            ),
+            "Quarantined JPEGs must survive cleanup on subsequent launches"
+        )
+    }
+
+    /// A manifest that exists but cannot be read (permissions, I/O error)
+    /// must take the same quarantine path as one that fails to decode,
+    /// rather than bricking capture on every launch.
+    func testUnreadableManifestIsQuarantinedInsteadOfFailingInit() async throws {
+        try XCTSkipIf(geteuid() == 0, "Root bypasses POSIX permission checks")
+
+        do {
+            let store = try FrameStore(directory: directory)
+            _ = try await store.saveFrame(
+                makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+            )
+            await store.flushManifest()
+        }
+
+        let manifestURL = directory.appendingPathComponent("manifest.json")
+        let quarantineURL = directory.appendingPathComponent("manifest.json.corrupt")
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o000], ofItemAtPath: manifestURL.path
+        )
+        addTeardownBlock {
+            for path in [manifestURL.path, quarantineURL.path]
+            where FileManager.default.fileExists(atPath: path) {
+                try? FileManager.default.setAttributes(
+                    [.posixPermissions: 0o644], ofItemAtPath: path
+                )
+            }
+        }
+
+        let store = try FrameStore(directory: directory)
+        let metadata = await store.getAllMetadata()
+
+        XCTAssertTrue(metadata.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: quarantineURL.path))
     }
 
     func testCleanupOrphansRemovesUnknownFilesWhenManifestHasEntries() async throws {

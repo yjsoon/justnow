@@ -205,6 +205,33 @@ final class FrameBufferTests: XCTestCase {
         XCTAssertEqual(buffer.frames(withIDs: frames.map(\.id)).map(\.id), frames.map(\.id))
     }
 
+    /// A corrupt manifest starts the buffer empty; the init-time text-cache
+    /// prune must not treat that empty frame set as licence to wipe the whole
+    /// OCR index.
+    func testCorruptManifestDoesNotWipeTextCacheOnInit() async throws {
+        let frameID: UUID
+        do {
+            let buffer = try await makeBuffer()
+            await buffer.addFrameSync(try makeStructuredImage(seed: 1), timestamp: Date(), display: nil)
+            let frame = try XCTUnwrap(buffer.getFrames().first)
+            frameID = frame.id
+            _ = await buffer.cacheOCRTextIfCurrent("hello world", for: frame)
+            await buffer.flushCaches()
+        }
+
+        try Data("{not valid json".utf8).write(
+            to: directory.appendingPathComponent("manifest.json")
+        )
+
+        let reopened = try await makeBuffer()
+
+        XCTAssertEqual(reopened.frameCount, 0)
+        let cachedCount = await reopened.textCache.count
+        XCTAssertEqual(cachedCount, 1)
+        let hasText = await reopened.textCache.hasCachedText(for: frameID)
+        XCTAssertTrue(hasText)
+    }
+
     /// Deterministic pattern per seed with strong structural differences so
     /// perceptual hashes are far apart between seeds.
     private func makeStructuredImage(seed: Int) throws -> CGImage {
