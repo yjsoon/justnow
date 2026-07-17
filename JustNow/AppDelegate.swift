@@ -237,7 +237,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             in: .userDomainMask
         ).first.map {
             FileManager.default.fileExists(
-                atPath: $0.appendingPathComponent("JustNow", isDirectory: true).path
+                atPath: $0.appendingPathComponent("JustNow", isDirectory: true)
+                    .path(percentEncoded: false)
             )
         } ?? false
 
