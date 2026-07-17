@@ -127,10 +127,14 @@ class FrameBuffer {
     }
 
     // OCR text cache for faster subsequent searches
-    let textCache = TextCache()
+    let textCache: TextCache
 
-    init(retentionPolicy: RetentionPolicy) async throws {
-        self.frameStore = try FrameStore()
+    /// `storageDirectory` is injectable so tests can point frame persistence
+    /// and the OCR cache at a temporary directory. Production uses the
+    /// default Application Support location.
+    init(retentionPolicy: RetentionPolicy, storageDirectory: URL? = nil) async throws {
+        self.frameStore = try FrameStore(directory: storageDirectory)
+        self.textCache = TextCache(directory: storageDirectory)
         self.retentionManager = RetentionManager(policy: retentionPolicy)
         // A single 5K BGRA frame is ~58 MB decoded. `countLimit` lets 24 of
         // those pin ~1.4 GB; switch to byte budgets so the cache evicts under

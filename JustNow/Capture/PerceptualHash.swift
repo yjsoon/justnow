@@ -54,6 +54,18 @@ nonisolated struct PerceptualHash {
             }
         }
 
+        // Uniform frames set no bits, but 0 is the "no hash" legacy sentinel
+        // that dedupe and timeline filtering treat as always-keep. Synthesise
+        // a brightness-bucketed fallback instead: 1..16 low bits depending on
+        // mean (black = 0x1, white = 0xFFFF), so identical solids still share
+        // a hash and dedupe, while solids differ by one bit per bucket of
+        // brightness separation (black vs white: 15), so visually distinct
+        // solids clear every hamming threshold in use.
+        if hash == 0 {
+            let bits = UInt64(mean / 16) + 1
+            hash = (1 << bits) - 1
+        }
+
         return hash
     }
 

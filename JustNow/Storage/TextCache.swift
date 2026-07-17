@@ -21,10 +21,12 @@ actor TextCache {
     private static let inClauseChunkSize = 400
     private static let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-    init() {
+    /// `directory` is injectable so tests can run against a temporary
+    /// location instead of the live Application Support store.
+    init(directory: URL? = nil) {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support")
-        let appDir = appSupport.appendingPathComponent("JustNow", isDirectory: true)
+        let appDir = directory ?? appSupport.appendingPathComponent("JustNow", isDirectory: true)
         self.databaseURL = appDir.appendingPathComponent("text_cache.sqlite")
         self.legacyCacheURL = appDir.appendingPathComponent("text_cache.json")
 
@@ -40,7 +42,7 @@ actor TextCache {
                 await self?.migrateLegacyCacheIfNeeded()
             }
         } catch {
-            Self.logger.error("Failed to initialise text cache: \(error.localizedDescription)")
+            Self.logger.error("Failed to initialise text cache: \(String(describing: error))")
             if let db {
                 sqlite3_close(db)
                 self.db = nil
@@ -277,6 +279,12 @@ actor TextCache {
 
     /// Remove cached text for frames that no longer exist
     func prune(keepingFrameIDs validIDs: Set<UUID>) {
+        // An empty valid set is almost always an upstream failure (e.g. a
+        // quarantined manifest), not a request to wipe the whole index —
+        // wholesale wipes must go through `clear()`. Stale entries merely
+        // linger until the next prune with a non-empty set.
+        guard !validIDs.isEmpty else { return }
+
         do {
             let allIDs = try allCachedFrameIDs()
             let staleIDs = allIDs.filter { !validIDs.contains($0) }
@@ -318,6 +326,11 @@ actor TextCache {
               let connection else {
             throw sqliteError(message: "Failed to open text cache database", on: connection)
         }
+
+        // A closing connection checkpoints the WAL under an exclusive lock;
+        // without a busy timeout, opening a new connection during that window
+        // fails instantly and permanently disables the cache for the session.
+        sqlite3_busy_timeout(connection, 2000)
 
         try execute("PRAGMA journal_mode=WAL;", on: connection)
         try execute("PRAGMA synchronous=NORMAL;", on: connection)

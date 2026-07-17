@@ -1,0 +1,52 @@
+name: Unit Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: unit-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Xcode version and scheme list
+        run: |
+          xcodebuild -version
+          xcodebuild -list -project JustNow.xcodeproj
+
+      - name: Run unit tests
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project JustNow.xcodeproj \
+            -scheme JustNow \
+            -destination 'platform=macOS' \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            2>&1 | tee xcodebuild.log
+        shell: bash
+
+      - name: Summarize results
+        if: always()
+        run: |
+          echo "=== Compiler errors (if any) ==="
+          grep -E "error:|fatal error" xcodebuild.log | head -50 || true
+          echo "=== Test case results ==="
+          grep -E "Test case '.*' (passed|failed)|Test Suite .* (passed|failed)" xcodebuild.log | tail -120 || true
+          echo "=== Failure details ==="
+          grep -B 1 -A 4 "failed - \|error: -\[" xcodebuild.log | head -200 || true
+        shell: bash
