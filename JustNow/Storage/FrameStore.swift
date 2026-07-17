@@ -90,6 +90,14 @@ actor FrameStore {
         manifestIndex = Self.makeManifestIndex(from: manifest.frames)
     }
 
+    static func manifestQuarantineURL(in storageURL: URL) -> URL {
+        storageURL.appendingPathComponent("manifest.json.corrupt")
+    }
+
+    static func framesQuarantineURL(in storageURL: URL) -> URL {
+        storageURL.appendingPathComponent("frames.corrupt", isDirectory: true)
+    }
+
     /// Moves the corrupt manifest and the frames directory to `.corrupt`
     /// siblings, keeping the JPEGs out of reach of orphan cleanup.
     private static func quarantineCorruptStore(
@@ -99,8 +107,8 @@ actor FrameStore {
         framesURL: URL,
         reason: String
     ) {
-        let manifestQuarantineURL = storageURL.appendingPathComponent("manifest.json.corrupt")
-        let framesQuarantineURL = storageURL.appendingPathComponent("frames.corrupt", isDirectory: true)
+        let manifestQuarantineURL = Self.manifestQuarantineURL(in: storageURL)
+        let framesQuarantineURL = Self.framesQuarantineURL(in: storageURL)
         try? fileManager.removeItem(at: manifestQuarantineURL)
         try? fileManager.removeItem(at: framesQuarantineURL)
         try? fileManager.moveItem(at: manifestURL, to: manifestQuarantineURL)
@@ -311,6 +319,11 @@ actor FrameStore {
             try? fileManager.removeItem(at: fullPath)
             try? fileManager.removeItem(at: thumbPath)
         }
+
+        // Clearing history must also take any quarantined pre-corruption
+        // store with it — the user asked for everything to be deleted.
+        try? fileManager.removeItem(at: Self.manifestQuarantineURL(in: storageURL))
+        try? fileManager.removeItem(at: Self.framesQuarantineURL(in: storageURL))
 
         manifest.frames.removeAll()
         manifestIndex.removeAll(keepingCapacity: true)

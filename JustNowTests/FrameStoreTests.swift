@@ -192,6 +192,41 @@ final class FrameStoreTests: XCTestCase {
         )
     }
 
+    /// Clear All History promises to delete every captured frame, so it must
+    /// also remove any quarantined pre-corruption store, not just the active
+    /// manifest and frames directory.
+    func testClearRemovesQuarantinedStore() async throws {
+        do {
+            let store = try FrameStore(directory: directory)
+            _ = try await store.saveFrame(
+                makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+            )
+            await store.flushManifest()
+        }
+
+        try Data("{not valid json".utf8).write(
+            to: directory.appendingPathComponent("manifest.json")
+        )
+
+        let store = try FrameStore(directory: directory)
+        let manifestQuarantinePath = directory.appendingPathComponent("manifest.json.corrupt").path
+        let framesQuarantinePath = directory
+            .appendingPathComponent("frames.corrupt", isDirectory: true).path
+        XCTAssertTrue(FileManager.default.fileExists(atPath: manifestQuarantinePath))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: framesQuarantinePath))
+
+        try await store.clear()
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: manifestQuarantinePath),
+            "Clearing history must delete the quarantined manifest"
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: framesQuarantinePath),
+            "Clearing history must delete the quarantined frames"
+        )
+    }
+
     /// A manifest that exists but cannot be read (permissions, I/O error)
     /// must take the same quarantine path as one that fails to decode,
     /// rather than bricking capture on every launch.
