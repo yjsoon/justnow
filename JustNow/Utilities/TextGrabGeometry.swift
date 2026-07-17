@@ -87,17 +87,20 @@ enum TextGrabGeometry {
         forNormalisedImageRect normalisedRect: CGRect,
         displayedImageRect: CGRect
     ) -> CGRect {
-        // Clamp origin into the unit square first, then clamp the size so the
-        // rect's far edge cannot exceed 1. Vision can emit boxes that poke
-        // slightly outside [0, 1]; without the second clamp a rect like
-        // (0.8, 0.8, 0.5, 0.5) would map outside the displayed image.
-        let clampedX = min(max(normalisedRect.minX, 0), 1)
-        let clampedY = min(max(normalisedRect.minY, 0), 1)
+        // Clamp each edge into the unit square independently so boxes that
+        // poke outside [0, 1] are trimmed rather than shifted. Vision can emit
+        // such boxes; clamping the origin and then the size would slide a
+        // negative-origin rect into the image, highlighting text the
+        // recognition never saw.
+        let clampedMinX = min(max(normalisedRect.minX, 0), 1)
+        let clampedMaxX = min(max(normalisedRect.maxX, 0), 1)
+        let clampedMinY = min(max(normalisedRect.minY, 0), 1)
+        let clampedMaxY = min(max(normalisedRect.maxY, 0), 1)
         let clampedRect = CGRect(
-            x: clampedX,
-            y: clampedY,
-            width: min(max(normalisedRect.width, 0), 1 - clampedX),
-            height: min(max(normalisedRect.height, 0), 1 - clampedY)
+            x: clampedMinX,
+            y: clampedMinY,
+            width: max(0, clampedMaxX - clampedMinX),
+            height: max(0, clampedMaxY - clampedMinY)
         )
 
         return CGRect(

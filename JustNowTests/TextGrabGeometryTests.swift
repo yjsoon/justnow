@@ -174,9 +174,9 @@ final class TextGrabGeometryTests: XCTestCase {
         XCTAssertEqual(displayedRect, CGRect(x: 35, y: 70, width: 25, height: 50))
     }
 
-    /// Regression: Vision can emit boxes whose far edge pokes past 1.0. The
-    /// size must be clamped against the (already clamped) origin so the
-    /// mapped rect stays inside the displayed image.
+    /// Regression: Vision can emit boxes that poke outside the unit square.
+    /// Each edge must be clamped independently so the box is trimmed to the
+    /// visible portion rather than shifted into the displayed image.
     func testDisplayedRectClampsBoxesThatOverflowTheUnitSquare() {
         let displayed = CGRect(x: 0, y: 0, width: 100, height: 100)
 
@@ -198,8 +198,19 @@ final class TextGrabGeometryTests: XCTestCase {
             displayedImageRect: displayed
         )
 
-        XCTAssertEqual(negativeOrigin, CGRect(x: 0, y: 50, width: 50, height: 50))
+        // Trimmed to the visible quarter, not shifted: only [0, 0.25] of the
+        // box overlaps the unit square. 0.25 is exact in binary floating
+        // point, so exact equality holds.
+        XCTAssertEqual(negativeOrigin, CGRect(x: 0, y: 75, width: 25, height: 25))
         XCTAssertTrue(displayed.contains(negativeOrigin))
+
+        let fullyOutside = TextGrabGeometry.displayedRect(
+            forNormalisedImageRect: CGRect(x: 1.2, y: 1.2, width: 0.3, height: 0.3),
+            displayedImageRect: displayed
+        )
+
+        XCTAssertEqual(fullyOutside.width, 0)
+        XCTAssertEqual(fullyOutside.height, 0)
     }
 
     func testPaddedDisplayedRectAddsFivePointsAndClampsToImageBounds() {
