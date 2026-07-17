@@ -94,12 +94,10 @@ final class RetentionManager {
 
             let tier = policy.tiers[tierIndex]
             let bucket = SpacingBucket(tierIndex: tierIndex, displayID: frame.displayID)
-            if let lastTime = lastKeptTime[bucket] {
-                if frame.timestamp.timeIntervalSince(lastTime) >= tier.minimumSpacing {
-                    toKeep.insert(frame.id)
-                    lastKeptTime[bucket] = frame.timestamp
-                }
-            } else {
+            let shouldKeep = lastKeptTime[bucket].map {
+                frame.timestamp.timeIntervalSince($0) >= tier.minimumSpacing
+            } ?? true
+            if shouldKeep {
                 toKeep.insert(frame.id)
                 lastKeptTime[bucket] = frame.timestamp
             }

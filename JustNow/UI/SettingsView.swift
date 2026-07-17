@@ -235,12 +235,10 @@ struct SettingsView: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     LabeledContent {
-                        Picker(selection: $recentTimelineWindowSeconds) {
+                        Picker("", selection: $recentTimelineWindowSeconds) {
                             ForEach(RecentTimelineWindow.allCases) { window in
                                 Text(window.label).tag(window.rawValue)
                             }
-                        } label: {
-                            EmptyView()
                         }
                         .pickerStyle(.menu)
                         .labelsHidden()

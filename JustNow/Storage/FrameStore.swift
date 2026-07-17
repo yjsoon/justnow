@@ -23,6 +23,8 @@ nonisolated struct FrameSaveOptions: Sendable, Equatable {
 }
 
 actor FrameStore {
+    private nonisolated static let legacyManifestDateFormatter = ISO8601DateFormatter()
+
     private let fileManager = FileManager.default
     private let storageURL: URL
     private let framesURL: URL
@@ -140,8 +142,7 @@ actor FrameStore {
         // Backwards compatibility for manifests written with the old
         // JSONEncoder ISO-8601 date strategy.
         let encodedDate = try container.decode(String.self)
-        let formatter = ISO8601DateFormatter()
-        guard let date = formatter.date(from: encodedDate) else {
+        guard let date = legacyManifestDateFormatter.date(from: encodedDate) else {
             throw DecodingError.dataCorruptedError(
                 in: container,
                 debugDescription: "Invalid manifest date: \(encodedDate)"
