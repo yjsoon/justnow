@@ -86,6 +86,50 @@ final class RetentionManagerTests: XCTestCase {
         XCTAssertEqual(manager.framesToPrune(frames: frames, currentTime: now), [frames[0].id])
     }
 
+    func testHighFidelityDefaultFallsOffProgressively() {
+        let policy = RetentionPolicy.rewindHistory(
+            .twentyFourHours,
+            captureInterval: 0.25,
+            fullDetailWindow: 15 * 60
+        )
+
+        XCTAssertEqual(
+            policy.tiers,
+            [
+                RetentionTier(maxAge: 15 * 60, minimumSpacing: 0.25),
+                RetentionTier(maxAge: 30 * 60, minimumSpacing: 1),
+                RetentionTier(maxAge: 2 * 60 * 60, minimumSpacing: 5),
+                RetentionTier(maxAge: 24 * 60 * 60, minimumSpacing: 30),
+            ]
+        )
+    }
+
+    func testThirtyMinuteFullDetailWindowDoesNotCreateEmptyTiers() {
+        let policy = RetentionPolicy.rewindHistory(
+            .thirtyMinutes,
+            captureInterval: 0.25,
+            fullDetailWindow: 30 * 60
+        )
+
+        XCTAssertEqual(
+            policy.tiers,
+            [
+                RetentionTier(maxAge: 30 * 60, minimumSpacing: 0.25),
+                RetentionTier(maxAge: 60 * 60, minimumSpacing: 30),
+            ]
+        )
+    }
+
+    func testSlowerCaptureIntervalKeepsFalloffMonotonic() {
+        let policy = RetentionPolicy.rewindHistory(
+            .twentyFourHours,
+            captureInterval: 5,
+            fullDetailWindow: 15 * 60
+        )
+
+        XCTAssertEqual(policy.tiers.map(\.minimumSpacing), [5, 20, 20, 30])
+    }
+
     private func makeFrames(agesAscendingOldestFirst ages: [TimeInterval]) -> [StoredFrame] {
         ages.map { age in
             StoredFrame(

@@ -12,13 +12,15 @@ import os.log
 private let captureLogger = Logger(subsystem: "sg.tk.JustNow", category: "Capture")
 private let inputActivityForwardingInterval: TimeInterval = 1.0
 
-enum RecentTimelineWindow: Double, CaseIterable, Identifiable {
+nonisolated enum RecentTimelineWindow: Double, CaseIterable, Identifiable {
     case oneMinute = 60
     case twoMinutes = 120
     case fiveMinutes = 300
     case tenMinutes = 600
+    case fifteenMinutes = 900
+    case thirtyMinutes = 1800
 
-    static let defaultValue: Self = .fiveMinutes
+    static let defaultValue: Self = .fifteenMinutes
 
     var id: Double { rawValue }
 
@@ -32,6 +34,10 @@ enum RecentTimelineWindow: Double, CaseIterable, Identifiable {
             return "5 min"
         case .tenMinutes:
             return "10 min"
+        case .fifteenMinutes:
+            return "15 min"
+        case .thirtyMinutes:
+            return "30 min"
         }
     }
 
@@ -771,7 +777,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     private func currentRetentionPolicy() -> RetentionPolicy {
-        RewindHistoryOption.resolved(from: rewindHistorySeconds).retentionPolicy
+        RetentionPolicy.rewindHistory(
+            RewindHistoryOption.resolved(from: rewindHistorySeconds),
+            captureInterval: captureInterval,
+            fullDetailWindow: RecentTimelineWindow.resolved(from: recentTimelineWindowSeconds).rawValue
+        )
     }
 
     private func currentCapturePolicy() -> CapturePolicy {

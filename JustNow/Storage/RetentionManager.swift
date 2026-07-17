@@ -13,39 +13,49 @@ nonisolated struct RetentionTier: Sendable, Equatable {
 nonisolated struct RetentionPolicy: Sendable, Equatable {
     let tiers: [RetentionTier]
 
-    static let default24Hours = rewindHistory(RewindHistoryOption.defaultValue)
+    static let default24Hours = rewindHistory(
+        RewindHistoryOption.defaultValue,
+        captureInterval: AppStorageDefault.captureInterval,
+        fullDetailWindow: RecentTimelineWindow.defaultValue.rawValue
+    )
 
-    static func rewindHistory(_ option: RewindHistoryOption) -> RetentionPolicy {
+    static func rewindHistory(
+        _ option: RewindHistoryOption,
+        captureInterval: TimeInterval = AppStorageDefault.captureInterval,
+        fullDetailWindow: TimeInterval = RecentTimelineWindow.defaultValue.rawValue
+    ) -> RetentionPolicy {
         let maximumAge = option.retainedDuration
+        let historyEnd = min(option.duration, maximumAge)
+        let detailEnd = min(max(fullDetailWindow, captureInterval), historyEnd)
+        let firstFalloffEnd = min(detailEnd * 2, historyEnd)
+        let secondFalloffEnd = min(max(2 * 60 * 60, firstFalloffEnd), historyEnd)
 
-        let tiers: [RetentionTier]
+        let detailSpacing = max(captureInterval, 0.25)
+        let firstFalloffSpacing = max(detailSpacing * 4, 1)
+        let secondFalloffSpacing = max(firstFalloffSpacing, 5)
+
+        let archiveSpacing: TimeInterval
         switch option {
         case .thirtyMinutes:
-            tiers = [
-                RetentionTier(maxAge: 5 * 60, minimumSpacing: 0.5),
-                RetentionTier(maxAge: 15 * 60, minimumSpacing: 5),
-                RetentionTier(maxAge: option.duration, minimumSpacing: 15),
-                RetentionTier(maxAge: maximumAge, minimumSpacing: 30),
-            ]
+            archiveSpacing = 30
         case .twoHours:
-            tiers = [
-                RetentionTier(maxAge: 5 * 60, minimumSpacing: 0.5),
-                RetentionTier(maxAge: 15 * 60, minimumSpacing: 5),
-                RetentionTier(maxAge: maximumAge, minimumSpacing: 20),
-            ]
+            archiveSpacing = 20
         case .eightHours:
-            tiers = [
-                RetentionTier(maxAge: 5 * 60, minimumSpacing: 0.5),
-                RetentionTier(maxAge: 15 * 60, minimumSpacing: 5),
-                RetentionTier(maxAge: maximumAge, minimumSpacing: 25),
-            ]
+            archiveSpacing = 25
         case .twentyFourHours:
-            tiers = [
-                RetentionTier(maxAge: 5 * 60, minimumSpacing: 0.5),
-                RetentionTier(maxAge: 15 * 60, minimumSpacing: 5),
-                RetentionTier(maxAge: maximumAge, minimumSpacing: 30),
-            ]
+            archiveSpacing = 30
         }
+
+        var tiers: [RetentionTier] = []
+        func appendTier(maxAge: TimeInterval, minimumSpacing: TimeInterval) {
+            guard maxAge > (tiers.last?.maxAge ?? 0) else { return }
+            tiers.append(RetentionTier(maxAge: maxAge, minimumSpacing: minimumSpacing))
+        }
+
+        appendTier(maxAge: detailEnd, minimumSpacing: detailSpacing)
+        appendTier(maxAge: firstFalloffEnd, minimumSpacing: firstFalloffSpacing)
+        appendTier(maxAge: secondFalloffEnd, minimumSpacing: secondFalloffSpacing)
+        appendTier(maxAge: maximumAge, minimumSpacing: max(secondFalloffSpacing, archiveSpacing))
 
         return RetentionPolicy(tiers: tiers)
     }

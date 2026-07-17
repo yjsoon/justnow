@@ -4,6 +4,23 @@ import XCTest
 
 @MainActor
 final class CapturePolicyControllerTests: XCTestCase {
+    func testQuarterSecondCaptureKeepsQuarterSecondChanges() {
+        let controller = CapturePolicyController()
+        let policy = controller.resolvePolicy(
+            settings: CapturePolicySettings(captureInterval: 0.25, reduceCaptureOnBattery: false),
+            environment: CapturePolicyEnvironment(
+                isOnBattery: false,
+                isLowPowerModeEnabled: false,
+                batteryChargeFraction: nil,
+                idleDuration: 0,
+                thermalState: .nominal
+            )
+        )
+
+        XCTAssertEqual(policy.interval, 0.25)
+        XCTAssertEqual(policy.duplicatePolicy, .exact(atMostEvery: 0.25))
+    }
+
     func testResolvePolicyUsesLowPowerProfileOnBattery() {
         let controller = CapturePolicyController()
         let policy = controller.resolvePolicy(
