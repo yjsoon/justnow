@@ -3,7 +3,10 @@ name: Unit Tests
 on:
   push:
     branches:
-      - "claude/**"
+      - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 concurrency:
