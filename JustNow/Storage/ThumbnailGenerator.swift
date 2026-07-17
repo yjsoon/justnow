@@ -22,8 +22,10 @@ nonisolated enum ImageEncoder {
         // should be stored as-is rather than inflated to 200pt.
         let scale = min(1, thumbnailMaxSize / max(width, height))
 
-        let newWidth = Int(width * scale)
-        let newHeight = Int(height * scale)
+        // Extreme aspect ratios must not truncate a dimension to 0,
+        // which would make CGContext creation fail.
+        let newWidth = max(1, Int(width * scale))
+        let newHeight = max(1, Int(height * scale))
 
         guard let context = CGContext(
             data: nil,

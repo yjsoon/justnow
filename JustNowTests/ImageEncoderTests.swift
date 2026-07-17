@@ -24,6 +24,20 @@ final class ImageEncoderTests: XCTestCase {
         XCTAssertEqual(thumbnail.height, Int(ImageEncoder.thumbnailMaxSize) / 2)
     }
 
+    /// Regression: extreme aspect ratios used to truncate the short dimension
+    /// to 0, making CGContext creation fail and the thumbnail come back nil.
+    func testGenerateThumbnailHandlesExtremeAspectRatios() throws {
+        let wide = try XCTUnwrap(TestImageFactory.makeSolidImage(width: 4000, height: 10, level: 90))
+        let wideThumbnail = try XCTUnwrap(ImageEncoder.generateThumbnail(from: wide))
+        XCTAssertEqual(wideThumbnail.width, 200)
+        XCTAssertEqual(wideThumbnail.height, 1)
+
+        let tall = try XCTUnwrap(TestImageFactory.makeSolidImage(width: 10, height: 4000, level: 90))
+        let tallThumbnail = try XCTUnwrap(ImageEncoder.generateThumbnail(from: tall))
+        XCTAssertEqual(tallThumbnail.width, 1)
+        XCTAssertEqual(tallThumbnail.height, 200)
+    }
+
     func testJPEGRoundTripPreservesDimensions() throws {
         let image = try XCTUnwrap(TestImageFactory.makeSolidImage(width: 10, height: 6, level: 120))
 
