@@ -150,8 +150,11 @@ struct TimeLabels: View {
     }
 }
 
-func formatRelativeTime(_ date: Date) -> String {
-    let seconds = Int(Date().timeIntervalSince(date))
+func formatRelativeTime(_ date: Date, now: Date = Date()) -> String {
+    // Clamp to zero so a frame timestamp slightly ahead of the wall clock
+    // (clock adjustments, cross-machine manifests) reads "0s ago" instead of
+    // a negative age.
+    let seconds = max(0, Int(now.timeIntervalSince(date)))
 
     if seconds < 60 {
         return "\(seconds)s ago"
@@ -175,7 +178,7 @@ func formatRelativeTime(_ date: Date) -> String {
         return "Yesterday \(date.formatted(clockTimeFormat))"
     }
 
-    let daysAgo = calendar.dateComponents([.day], from: date, to: Date()).day ?? 0
+    let daysAgo = calendar.dateComponents([.day], from: date, to: now).day ?? 0
     if daysAgo < 7 {
         return date.formatted(dayLabelTimeFormat)
     }

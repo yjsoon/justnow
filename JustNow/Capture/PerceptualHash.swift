@@ -46,10 +46,15 @@ nonisolated struct PerceptualHash {
 
         guard !Task.isCancelled else { return 0 }
 
-        // Build hash: 1 if pixel > mean, else 0
+        // Build hash: 1 if pixel >= mean, else 0. Using >= (not >) guarantees a
+        // non-zero hash for every decodable image (the maximum pixel is always
+        // >= the mean), which keeps 0 reserved as the "no hash" legacy sentinel
+        // that dedupe and timeline filtering treat as always-keep. A uniform
+        // frame hashing to 0 would otherwise bypass duplicate detection
+        // entirely and store every capture of a static solid-colour screen.
         var hash: UInt64 = 0
         for (index, pixel) in pixelData.enumerated() {
-            if pixel > mean {
+            if pixel >= mean {
                 hash |= (1 << index)
             }
         }

@@ -21,10 +21,12 @@ actor TextCache {
     private static let inClauseChunkSize = 400
     private static let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-    init() {
+    /// `directory` is injectable so tests can run against a temporary
+    /// location instead of the live Application Support store.
+    init(directory: URL? = nil) {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support")
-        let appDir = appSupport.appendingPathComponent("JustNow", isDirectory: true)
+        let appDir = directory ?? appSupport.appendingPathComponent("JustNow", isDirectory: true)
         self.databaseURL = appDir.appendingPathComponent("text_cache.sqlite")
         self.legacyCacheURL = appDir.appendingPathComponent("text_cache.json")
 

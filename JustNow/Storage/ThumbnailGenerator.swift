@@ -17,7 +17,10 @@ nonisolated enum ImageEncoder {
     static func generateThumbnail(from cgImage: CGImage) -> CGImage? {
         let width = CGFloat(cgImage.width)
         let height = CGFloat(cgImage.height)
-        let scale = thumbnailMaxSize / max(width, height)
+        guard width > 0, height > 0 else { return nil }
+        // Never upscale: a source already smaller than the thumbnail cap
+        // should be stored as-is rather than inflated to 200pt.
+        let scale = min(1, thumbnailMaxSize / max(width, height))
 
         let newWidth = Int(width * scale)
         let newHeight = Int(height * scale)

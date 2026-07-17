@@ -90,6 +90,39 @@ final class ScreenshotSaveLocationTests: XCTestCase {
         XCTAssertEqual(resolved.path, override)
     }
 
+    func testExpandsTildeInOverridePath() {
+        let homeRelative = "~/Screenshots/JustNow"
+        let expanded = (homeRelative as NSString).expandingTildeInPath
+
+        let inputs = ScreenshotSaveLocationInputs(
+            overridePath: homeRelative,
+            systemLocationRaw: nil,
+            desktopURL: desktop
+        )
+
+        let resolved = ScreenshotSaveLocation.resolve(
+            inputs: inputs,
+            directoryExists: onlyExisting([expanded, desktop.path])
+        )
+
+        XCTAssertEqual(resolved.path, expanded)
+    }
+
+    func testEmptySystemLocationStringIsTreatedAsUnset() {
+        let inputs = ScreenshotSaveLocationInputs(
+            overridePath: "",
+            systemLocationRaw: "",
+            desktopURL: desktop
+        )
+
+        let resolved = ScreenshotSaveLocation.resolve(
+            inputs: inputs,
+            directoryExists: { _ in true }
+        )
+
+        XCTAssertEqual(resolved, desktop)
+    }
+
     func testWhitespaceOnlyOverrideIsTreatedAsUnset() {
         let inputs = ScreenshotSaveLocationInputs(
             overridePath: "   ",

@@ -1,0 +1,239 @@
+import CoreGraphics
+import Foundation
+import XCTest
+@testable import JustNow
+
+final class FrameStoreTests: XCTestCase {
+    private var directory: URL!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FrameStoreTests-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: directory)
+        try super.tearDownWithError()
+    }
+
+    func testSaveAndLoadRoundTrip() async throws {
+        let store = try FrameStore(directory: directory)
+        let image = try makeImage()
+
+        let metadata = try await store.saveFrame(
+            image,
+            timestamp: Date(timeIntervalSince1970: 1_000),
+            hash: 42,
+            displayID: nil,
+            displayName: nil
+        )
+
+        let loaded = try await store.loadFullImage(id: metadata.id)
+        XCTAssertEqual(loaded.width, image.width)
+        XCTAssertEqual(loaded.height, image.height)
+
+        let allMetadata = await store.getAllMetadata()
+        XCTAssertEqual(allMetadata.map(\.id), [metadata.id])
+        XCTAssertGreaterThan(metadata.fileSize, 0)
+
+        let totalSize = await store.totalStorageSize()
+        XCTAssertEqual(totalSize, metadata.fileSize)
+    }
+
+    func testLoadUnknownFrameThrowsFileNotFound() async throws {
+        let store = try FrameStore(directory: directory)
+        let unknownID = UUID()
+
+        do {
+            _ = try await store.loadFullImage(id: unknownID)
+            XCTFail("Expected fileNotFound")
+        } catch let FrameStoreError.fileNotFound(id) {
+            XCTAssertEqual(id, unknownID)
+        }
+    }
+
+    func testPruneRemovesMetadataAndFiles() async throws {
+        let store = try FrameStore(directory: directory)
+        let keep = try await store.saveFrame(
+            makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+        )
+        let drop = try await store.saveFrame(
+            makeImage(), timestamp: Date(), hash: 2, displayID: nil, displayName: nil
+        )
+
+        try await store.pruneFrames(ids: [drop.id])
+
+        let remaining = await store.getAllMetadata()
+        XCTAssertEqual(remaining.map(\.id), [keep.id])
+
+        let framesDirectory = directory.appendingPathComponent("frames", isDirectory: true)
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: framesDirectory.appendingPathComponent(drop.filename).path
+            )
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: framesDirectory.appendingPathComponent(keep.filename).path
+            )
+        )
+    }
+
+    func testManifestPersistsAcrossReinitialisation() async throws {
+        let saved: FrameMetadata
+        do {
+            let store = try FrameStore(directory: directory)
+            saved = try await store.saveFrame(
+                makeImage(),
+                timestamp: Date(timeIntervalSince1970: 2_000),
+                hash: 7,
+                displayID: UUID(),
+                displayName: "Test Display"
+            )
+            await store.flushManifest()
+        }
+
+        let reopened = try FrameStore(directory: directory)
+        let metadata = await reopened.getAllMetadata()
+
+        XCTAssertEqual(metadata.map(\.id), [saved.id])
+        XCTAssertEqual(metadata.first?.hash, 7)
+        XCTAssertEqual(metadata.first?.displayName, "Test Display")
+    }
+
+    /// A corrupted manifest must not brick the store on every launch. It is
+    /// quarantined and the store starts empty, while frame JPEGs stay on disk
+    /// (cleanupOrphans refuses to delete files against an empty manifest).
+    func testCorruptedManifestIsQuarantinedInsteadOfFailingInit() async throws {
+        let framePath: String
+        do {
+            let store = try FrameStore(directory: directory)
+            let metadata = try await store.saveFrame(
+                makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+            )
+            await store.flushManifest()
+            framePath = directory
+                .appendingPathComponent("frames", isDirectory: true)
+                .appendingPathComponent(metadata.filename).path
+        }
+
+        let manifestURL = directory.appendingPathComponent("manifest.json")
+        try Data("{not valid json".utf8).write(to: manifestURL)
+
+        let store = try FrameStore(directory: directory)
+        let metadata = await store.getAllMetadata()
+
+        XCTAssertTrue(metadata.isEmpty)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: directory.appendingPathComponent("manifest.json.corrupt").path
+            )
+        )
+
+        try await store.cleanupOrphans()
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: framePath),
+            "Orphan cleanup must not delete frames while the manifest is suspiciously empty"
+        )
+    }
+
+    func testCleanupOrphansRemovesUnknownFilesWhenManifestHasEntries() async throws {
+        let store = try FrameStore(directory: directory)
+        let metadata = try await store.saveFrame(
+            makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+        )
+
+        let framesDirectory = directory.appendingPathComponent("frames", isDirectory: true)
+        let strayURL = framesDirectory.appendingPathComponent("stray.jpg")
+        try Data("stray".utf8).write(to: strayURL)
+
+        try await store.cleanupOrphans()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: strayURL.path))
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: framesDirectory.appendingPathComponent(metadata.filename).path
+            )
+        )
+    }
+
+    func testCleanupOrphansDropsManifestEntriesForMissingFiles() async throws {
+        let store = try FrameStore(directory: directory)
+        let metadata = try await store.saveFrame(
+            makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+        )
+
+        let framesDirectory = directory.appendingPathComponent("frames", isDirectory: true)
+        try FileManager.default.removeItem(
+            at: framesDirectory.appendingPathComponent(metadata.filename)
+        )
+
+        try await store.cleanupOrphans()
+
+        let remaining = await store.getAllMetadata()
+        XCTAssertTrue(remaining.isEmpty)
+
+        // The removed entry must also be unreachable through the ID index.
+        do {
+            _ = try await store.loadFullImage(id: metadata.id)
+            XCTFail("Expected fileNotFound after cleanup")
+        } catch FrameStoreError.fileNotFound {
+        }
+    }
+
+    func testClearRemovesAllFramesAndFiles() async throws {
+        let store = try FrameStore(directory: directory)
+        _ = try await store.saveFrame(
+            makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+        )
+        _ = try await store.saveFrame(
+            makeImage(), timestamp: Date(), hash: 2, displayID: nil, displayName: nil
+        )
+
+        try await store.clear()
+
+        let metadata = await store.getAllMetadata()
+        XCTAssertTrue(metadata.isEmpty)
+
+        let totalSize = await store.totalStorageSize()
+        XCTAssertEqual(totalSize, 0)
+
+        let framesDirectory = directory.appendingPathComponent("frames", isDirectory: true)
+        let files = try FileManager.default.contentsOfDirectory(atPath: framesDirectory.path)
+        XCTAssertTrue(files.isEmpty)
+    }
+
+    func testThumbnailIsGeneratedLazilyAndCachedToDisk() async throws {
+        let store = try FrameStore(directory: directory)
+        let metadata = try await store.saveFrame(
+            makeImage(width: 400, height: 300),
+            timestamp: Date(),
+            hash: 1,
+            displayID: nil,
+            displayName: nil
+        )
+
+        let thumbnail = await store.loadThumbnail(id: metadata.id)
+
+        XCTAssertNotNil(thumbnail)
+        XCTAssertLessThanOrEqual(
+            max(thumbnail?.width ?? 0, thumbnail?.height ?? 0),
+            Int(ImageEncoder.thumbnailMaxSize)
+        )
+        let framesDirectory = directory.appendingPathComponent("frames", isDirectory: true)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: framesDirectory.appendingPathComponent(metadata.thumbnailFilename).path
+            )
+        )
+    }
+
+    private func makeImage(width: Int = 8, height: Int = 8) throws -> CGImage {
+        try XCTUnwrap(
+            TestImageFactory.makeImage(width: width, height: height) { x, y in
+                (UInt8((x * 31) % 256), UInt8((y * 17) % 256), 128)
+            }
+        )
+    }
+}

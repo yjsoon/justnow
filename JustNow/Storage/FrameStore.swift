@@ -42,13 +42,18 @@ actor FrameStore {
     private static let manifestSaveDelay: Duration = .seconds(5)
     private static let manifestSaveImmediateThreshold = 25
 
-    init() throws {
+    static func defaultStorageDirectory() throws -> URL {
         // ~/Library/Application Support/JustNow/
-        guard let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             throw FrameStoreError.directoryCreationFailed
         }
+        return appSupport.appendingPathComponent("JustNow", isDirectory: true)
+    }
 
-        storageURL = appSupport.appendingPathComponent("JustNow", isDirectory: true)
+    /// `directory` is injectable so tests can run against a temporary
+    /// location instead of the live Application Support store.
+    init(directory: URL? = nil) throws {
+        storageURL = try directory ?? Self.defaultStorageDirectory()
         framesURL = storageURL.appendingPathComponent("frames", isDirectory: true)
         manifestURL = storageURL.appendingPathComponent("manifest.json")
 
@@ -60,7 +65,19 @@ actor FrameStore {
             let data = try Data(contentsOf: manifestURL)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
-            manifest = try decoder.decode(FrameManifest.self, from: data)
+            if let decoded = try? decoder.decode(FrameManifest.self, from: data) {
+                manifest = decoded
+            } else {
+                // A corrupted manifest must not brick capture on every
+                // subsequent launch. Quarantine it for diagnosis and start
+                // fresh; `cleanupOrphans` deliberately refuses to delete
+                // frame files while the manifest is empty, so the on-disk
+                // JPEGs survive for manual recovery.
+                let quarantineURL = storageURL.appendingPathComponent("manifest.json.corrupt")
+                try? fileManager.removeItem(at: quarantineURL)
+                try? fileManager.moveItem(at: manifestURL, to: quarantineURL)
+                manifest = FrameManifest()
+            }
         } else {
             manifest = FrameManifest()
         }

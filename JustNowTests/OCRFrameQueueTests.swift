@@ -93,6 +93,76 @@ final class OCRFrameQueueTests: XCTestCase {
         XCTAssertTrue(queue.isEmpty)
     }
 
+    func testDequeuedFrameCanBeReenqueued() {
+        let frame = makeFrame(secondsAgo: 1)
+        var queue = OCRFrameQueue()
+
+        XCTAssertTrue(queue.enqueue(frame))
+        XCTAssertEqual(queue.dequeue(limit: 1).map(\.id), [frame.id])
+        XCTAssertTrue(queue.enqueue(frame), "Dequeued IDs must be enqueueable again")
+        XCTAssertEqual(queue.count, 1)
+    }
+
+    func testDequeueOnEmptyQueueReturnsNothing() {
+        var queue = OCRFrameQueue()
+
+        XCTAssertTrue(queue.dequeue(limit: 5).isEmpty)
+        XCTAssertTrue(queue.isEmpty)
+    }
+
+    func testRemoveUnknownIDsLeavesQueueUntouched() {
+        let frames = [
+            makeFrame(secondsAgo: 2),
+            makeFrame(secondsAgo: 1)
+        ]
+        var queue = OCRFrameQueue()
+        queue.enqueue(contentsOf: frames)
+
+        queue.remove(ids: [UUID(), UUID()])
+
+        XCTAssertEqual(queue.count, 2)
+        XCTAssertEqual(queue.dequeue(limit: 2).map(\.id), [frames[1].id, frames[0].id])
+    }
+
+    func testTrimToNewestWithNonPositiveDepthClearsTheQueue() {
+        var queue = OCRFrameQueue()
+        queue.enqueue(contentsOf: [makeFrame(secondsAgo: 2), makeFrame(secondsAgo: 1)])
+
+        queue.trimToNewest(maxDepth: -1)
+
+        XCTAssertTrue(queue.isEmpty)
+        XCTAssertEqual(queue.count, 0)
+    }
+
+    func testDiscardOlderThanKeepsFrameExactlyAtBoundary() {
+        let boundary = Date().addingTimeInterval(-5)
+        let atBoundary = StoredFrame(
+            id: UUID(), timestamp: boundary, hash: 0, displayID: nil, displayName: nil
+        )
+        let older = StoredFrame(
+            id: UUID(),
+            timestamp: boundary.addingTimeInterval(-0.001),
+            hash: 0,
+            displayID: nil,
+            displayName: nil
+        )
+        var queue = OCRFrameQueue()
+        queue.enqueue(contentsOf: [older, atBoundary])
+
+        queue.discardOlderThan(boundary)
+
+        XCTAssertEqual(queue.dequeue(limit: 2).map(\.id), [atBoundary.id])
+    }
+
+    func testEnqueueContentsOfSkipsDuplicateIDs() {
+        let frame = makeFrame(secondsAgo: 1)
+        var queue = OCRFrameQueue()
+
+        queue.enqueue(contentsOf: [frame, frame, frame])
+
+        XCTAssertEqual(queue.count, 1)
+    }
+
     private func makeFrame(secondsAgo: TimeInterval) -> StoredFrame {
         StoredFrame(
             id: UUID(),
