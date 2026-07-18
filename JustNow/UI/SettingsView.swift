@@ -269,9 +269,7 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                HStack {
-                    Text("Frame storage used")
-                    Spacer()
+                LabeledContent("Frame storage used") {
                     Text(formatBytes(storageSize))
                         .foregroundStyle(.secondary)
                 }

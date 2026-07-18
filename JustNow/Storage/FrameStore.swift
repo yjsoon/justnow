@@ -394,7 +394,7 @@ actor FrameStore {
     func storageStatistics() -> FrameStorageStatistics {
         let storedBytes = manifest.frames.reduce(0) { $0 + $1.fileSize }
         var samples: [UUID?: (storedBytes: Int64, frameCount: Int)] = [:]
-        for frame in manifest.frames.reversed() {
+        for frame in manifest.frames.sorted(by: { $0.timestamp > $1.timestamp }) {
             let existing = samples[frame.displayID] ?? (storedBytes: 0, frameCount: 0)
             guard existing.frameCount < Self.projectionSampleLimitPerDisplay else { continue }
             samples[frame.displayID] = (

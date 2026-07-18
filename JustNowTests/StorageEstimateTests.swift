@@ -114,6 +114,21 @@ final class StorageEstimateTests: XCTestCase {
         )
     }
 
+    func testFalloffSpacingRoundsUpToWholeCaptureSteps() {
+        let policy = RetentionPolicy(tiers: [
+            RetentionTier(maxAge: 10, minimumSpacing: 0),
+            RetentionTier(maxAge: 29, minimumSpacing: 5)
+        ])
+
+        XCTAssertEqual(
+            StorageEstimate.projectedFrameCountPerDisplay(
+                policy: policy,
+                captureInterval: 4.75
+            ),
+            5
+        )
+    }
+
     func testEstimateWaitsForEnoughSavedFrames() {
         let policy = RetentionPolicy(tiers: [
             RetentionTier(maxAge: 10, minimumSpacing: 1)

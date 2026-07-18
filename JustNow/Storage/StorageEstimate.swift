@@ -13,7 +13,8 @@ nonisolated enum StorageEstimate {
 
         for (index, tier) in policy.tiers.enumerated() {
             let duration = max(0, tier.maxAge - previousMaxAge)
-            let effectiveSpacing = max(captureCadence, tier.minimumSpacing)
+            let captureSteps = max(1, ceil(tier.minimumSpacing / captureCadence))
+            let effectiveSpacing = captureSteps * captureCadence
             if index == 0 {
                 frameCount = floor(duration / effectiveSpacing) + 1
             } else {
