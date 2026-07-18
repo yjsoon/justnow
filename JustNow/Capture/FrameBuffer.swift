@@ -455,6 +455,10 @@ class FrameBuffer {
         await frameStore.totalStorageSize()
     }
 
+    func storageStatistics() async -> FrameStorageStatistics {
+        await frameStore.storageStatistics()
+    }
+
     func updateSaveOptions(_ options: FrameSaveOptions, duplicatePolicy: DuplicateFramePolicy) {
         saveOptions = options
         self.duplicatePolicy = duplicatePolicy

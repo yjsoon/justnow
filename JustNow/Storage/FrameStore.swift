@@ -23,6 +23,7 @@ nonisolated struct FrameSaveOptions: Sendable, Equatable {
 }
 
 actor FrameStore {
+    private static let projectionSampleLimitPerDisplay = 50
     private nonisolated static let legacyManifestDateFormatter = ISO8601DateFormatter()
 
     private let fileManager = FileManager.default
@@ -390,8 +391,32 @@ actor FrameStore {
         performManifestSave()
     }
 
+    func storageStatistics() -> FrameStorageStatistics {
+        let storedBytes = manifest.frames.reduce(0) { $0 + $1.fileSize }
+        var samples: [UUID?: (storedBytes: Int64, frameCount: Int)] = [:]
+        for frame in manifest.frames.reversed() {
+            let existing = samples[frame.displayID] ?? (storedBytes: 0, frameCount: 0)
+            guard existing.frameCount < Self.projectionSampleLimitPerDisplay else { continue }
+            samples[frame.displayID] = (
+                storedBytes: existing.storedBytes + frame.fileSize,
+                frameCount: existing.frameCount + 1
+            )
+        }
+        return FrameStorageStatistics(
+            storedBytes: storedBytes,
+            frameCount: manifest.frames.count,
+            projectionSamples: samples.map { displayID, sample in
+                FrameStorageSample(
+                    displayID: displayID,
+                    storedBytes: sample.storedBytes,
+                    frameCount: sample.frameCount
+                )
+            }
+        )
+    }
+
     func totalStorageSize() -> Int64 {
-        manifest.frames.reduce(0) { $0 + $1.fileSize }
+        storageStatistics().storedBytes
     }
 
     func flushManifest() {

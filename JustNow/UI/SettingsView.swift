@@ -37,6 +37,8 @@ struct SettingsView: View {
 
     @State private var storageSize: Int64 = 0
     @State private var frameCount: Int = 0
+    @State private var projectionSamples: [FrameStorageSample] = []
+    @State private var connectedDisplayIDs: [UUID] = []
     @State private var showClearConfirmation = false
     @State private var telemetrySnapshot: SearchTelemetrySnapshot = .empty
     @State private var isSearchDiagnosticsExpanded = false
@@ -56,9 +58,6 @@ struct SettingsView: View {
         .tabViewStyle(.tabBarOnly)
         .frame(width: 660, height: 520)
         .navigationTitle("JustNow Settings")
-        .task {
-            await updateStorageInfo()
-        }
         .task(id: frameBufferIdentity) {
             await updateStorageInfo()
         }
@@ -69,7 +68,7 @@ struct SettingsView: View {
             syncLaunchAtLoginState()
         }
         .task {
-            await refreshTelemetryLoop()
+            await refreshSettingsLoop()
         }
         .alert("Clear History?", isPresented: $showClearConfirmation) {
             Button("Cancel", role: .cancel) { }
@@ -271,11 +270,26 @@ struct SettingsView: View {
                 }
 
                 HStack {
-                    Text("Storage used")
+                    Text("Frame storage used")
                     Spacer()
                     Text(formatBytes(storageSize))
                         .foregroundStyle(.secondary)
                 }
+
+                LabeledContent("Projected frame storage") {
+                    if let projectedStorage {
+                        Text("≈\(formatBytes(projectedStorage)) total")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Waiting for samples")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Text(storageEstimateDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 8) {
                     Button("Open Storage Folder") {
@@ -409,16 +423,46 @@ struct SettingsView: View {
         )
     }
 
+    private var projectedStorage: Int64? {
+        StorageEstimate.projectedBytes(
+            policy: .rewindHistory(
+                RewindHistoryOption.resolved(from: rewindHistorySeconds),
+                captureInterval: captureInterval,
+                fullDetailWindow: RecentTimelineWindow.resolved(
+                    from: recentTimelineWindowSeconds
+                ).rawValue
+            ),
+            captureInterval: captureInterval,
+            samples: projectionSamples,
+            connectedDisplayIDs: connectedDisplayIDs
+        )
+    }
+
+    private var storageEstimateDescription: String {
+        if projectedStorage == nil {
+            return "An estimate appears after JustNow saves \(StorageEstimate.minimumSampleFrameCount) frames."
+        }
+        let displayCount = connectedDisplayIDs.count
+        let displayLabel = displayCount == 1 ? "1 display" : "\(displayCount) displays"
+        return "Projected total for \(displayLabel) once your current settings have been in use for the full history window. Actual frame storage varies with screen activity, display resolution, and power saving."
+    }
+
     private func updateStorageInfo() async {
         if let buffer = context.frameBuffer {
             let bufferIdentity = ObjectIdentifier(buffer)
-            let totalStorageSize = await buffer.totalStorageSize()
+            let statistics = await buffer.storageStatistics()
             guard !Task.isCancelled, context.frameBuffer.map(ObjectIdentifier.init) == bufferIdentity else { return }
-            storageSize = totalStorageSize
-            frameCount = buffer.frameCount
+            storageSize = statistics.storedBytes
+            frameCount = statistics.frameCount
+            projectionSamples = statistics.projectionSamples
+            connectedDisplayIDs = NSScreen.screens.compactMap { screen in
+                DisplayIdentity.displayID(for: screen).map { DisplayIdentity.info(for: $0).id }
+            }
         } else {
             storageSize = 0
             frameCount = 0
+            projectionSamples = []
+            connectedDisplayIDs = []
         }
     }
 
@@ -444,9 +488,10 @@ struct SettingsView: View {
         context.launchAtLoginManager.map(ObjectIdentifier.init)
     }
 
-    private func refreshTelemetryLoop() async {
+    private func refreshSettingsLoop() async {
         while !Task.isCancelled {
             let snapshot = await SearchTelemetry.shared.snapshot()
+            await updateStorageInfo()
             guard !Task.isCancelled else { return }
             telemetrySnapshot = snapshot
             try? await Task.sleep(for: .seconds(2))

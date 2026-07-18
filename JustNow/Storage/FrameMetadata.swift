@@ -25,3 +25,17 @@ nonisolated struct FrameManifest: Codable, Sendable {
     var frames: [FrameMetadata] = []
     var lastModified: Date = Date()
 }
+
+nonisolated struct FrameStorageStatistics: Sendable, Equatable {
+    let storedBytes: Int64
+    let frameCount: Int
+    let projectionSamples: [FrameStorageSample]
+
+    static let empty = FrameStorageStatistics(storedBytes: 0, frameCount: 0, projectionSamples: [])
+}
+
+nonisolated struct FrameStorageSample: Sendable, Equatable {
+    let displayID: UUID?
+    let storedBytes: Int64
+    let frameCount: Int
+}
