@@ -262,9 +262,7 @@ struct SettingsView: View {
             }
 
             Section("Storage") {
-                HStack {
-                    Text("Frames stored")
-                    Spacer()
+                LabeledContent("Frames stored") {
                     Text("\(frameCount)")
                         .foregroundStyle(.secondary)
                 }
