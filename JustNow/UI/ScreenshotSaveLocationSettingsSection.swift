@@ -57,13 +57,6 @@ struct ScreenshotSaveLocationSettingsSection: View {
                         saveToClipboard = true
                     }
                 }
-            Toggle("Copy to clipboard", isOn: $saveToClipboard)
-                .onChange(of: saveToClipboard) { _, newValue in
-                    if !newValue && !saveToFolder {
-                        saveToFolder = true
-                    }
-                }
-            Toggle("Play sound when saving screenshot", isOn: $saveScreenshotSoundEnabled)
 
             if saveToFolder {
                 VStack(alignment: .leading, spacing: 12) {
@@ -104,6 +97,14 @@ struct ScreenshotSaveLocationSettingsSection: View {
                     }
                 }
             }
+
+            Toggle("Copy to clipboard", isOn: $saveToClipboard)
+                .onChange(of: saveToClipboard) { _, newValue in
+                    if !newValue && !saveToFolder {
+                        saveToFolder = true
+                    }
+                }
+            Toggle("Play sound when saving screenshot", isOn: $saveScreenshotSoundEnabled)
 
             Text(captionText)
                 .font(.caption)
