@@ -41,6 +41,67 @@ final class FrameStoreTests: XCTestCase {
         XCTAssertEqual(totalSize, metadata.fileSize)
     }
 
+    func testStorageStatisticsAggregateManifestSnapshot() async throws {
+        let store = try FrameStore(directory: directory)
+        let firstDisplayID = UUID()
+        let secondDisplayID = UUID()
+        let first = try await store.saveFrame(
+            makeImage(), timestamp: Date(), hash: 1,
+            displayID: firstDisplayID, displayName: "Built-in Display"
+        )
+        let second = try await store.saveFrame(
+            makeImage(), timestamp: Date(), hash: 2,
+            displayID: secondDisplayID, displayName: "External Display"
+        )
+        let legacy = try await store.saveFrame(
+            makeImage(), timestamp: Date(), hash: 3,
+            displayID: nil, displayName: nil
+        )
+
+        let statistics = await store.storageStatistics()
+
+        XCTAssertEqual(statistics.storedBytes, first.fileSize + second.fileSize + legacy.fileSize)
+        XCTAssertEqual(statistics.frameCount, 3)
+        XCTAssertEqual(
+            Set(statistics.projectionSamples.map(\.displayID)),
+            Set<UUID?>([firstDisplayID, secondDisplayID, nil])
+        )
+        XCTAssertEqual(statistics.projectionSamples.reduce(0) { $0 + $1.frameCount }, 3)
+    }
+
+    func testStorageStatisticsSamplesNewestFramesByTimestamp() async throws {
+        let store = try FrameStore(directory: directory)
+        let displayID = UUID()
+        let baseDate = Date(timeIntervalSince1970: 1_000)
+        var expectedSampleBytes: Int64 = 0
+
+        for offset in 1...50 {
+            let metadata = try await store.saveFrame(
+                makeImage(),
+                timestamp: baseDate.addingTimeInterval(TimeInterval(offset)),
+                hash: UInt64(offset),
+                displayID: displayID,
+                displayName: "Built-in Display"
+            )
+            expectedSampleBytes += metadata.fileSize
+        }
+        _ = try await store.saveFrame(
+            makeImage(width: 400, height: 300),
+            timestamp: baseDate,
+            hash: 51,
+            displayID: displayID,
+            displayName: "Built-in Display"
+        )
+
+        let statistics = await store.storageStatistics()
+        let sample = try XCTUnwrap(
+            statistics.projectionSamples.first { $0.displayID == displayID }
+        )
+
+        XCTAssertEqual(sample.frameCount, 50)
+        XCTAssertEqual(sample.storedBytes, expectedSampleBytes)
+    }
+
     func testLoadUnknownFrameThrowsFileNotFound() async throws {
         let store = try FrameStore(directory: directory)
         let unknownID = UUID()
