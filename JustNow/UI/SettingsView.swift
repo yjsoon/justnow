@@ -251,6 +251,23 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    LabeledContent("Projected storage") {
+                        if let projectedStorage {
+                            Text("≈\(formatBytes(projectedStorage)) total")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Waiting for samples")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Text(storageEstimateDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Section("Battery") {
@@ -271,21 +288,6 @@ struct SettingsView: View {
                     Text(formatBytes(storageSize))
                         .foregroundStyle(.secondary)
                 }
-
-                LabeledContent("Projected frame storage") {
-                    if let projectedStorage {
-                        Text("≈\(formatBytes(projectedStorage)) total")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("Waiting for samples")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Text(storageEstimateDescription)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 8) {
                     Button("Open Storage Folder") {
