@@ -198,7 +198,7 @@ struct SettingsView: View {
 
     private var captureSettingsTab: some View {
         Form {
-            Section("Capture") {
+            Section("History") {
                 LabeledContent {
                     HStack(spacing: 8) {
                         Slider(value: resolvedCaptureInterval, in: CaptureIntervalSetting.allowedRange, step: 0.25)
@@ -384,7 +384,7 @@ struct SettingsView: View {
                     .onChange(of: overlayDismissModifiers) { _, _ in context.notifyShortcutChanged() }
                 }
 
-                Text("These shortcuts work across macOS while JustNow is running. Keep each action on a distinct shortcut.")
+                Text("These shortcuts work across macOS while JustNow is running.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
