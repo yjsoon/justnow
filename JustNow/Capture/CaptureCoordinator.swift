@@ -39,6 +39,9 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
 
     weak var delegate: CaptureCoordinatorDelegate?
 
+    /// All display managers share one broker so a ScreenCaptureKit false TCC
+    /// denial pauses the whole process before another display can retry.
+    private let captureRequestBroker = CaptureRequestBroker()
     private var managed: [UUID: ManagedDisplay] = [:]
     private var captureInterval: TimeInterval = 1.0
     private var captureScale: Int = 2
@@ -163,7 +166,10 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
         if startNewManagers {
             for (id, info) in desired where managed[id] == nil {
                 guard let physicalDisplayID = info.displayID else { continue }
-                let manager = ScreenCaptureManager(targetDisplayID: physicalDisplayID)
+                let manager = ScreenCaptureManager(
+                    targetDisplayID: physicalDisplayID,
+                    captureRequestBroker: captureRequestBroker
+                )
                 manager.delegate = self
                 manager.updateCaptureInterval(captureInterval)
                 manager.updateCaptureScale(captureScale)

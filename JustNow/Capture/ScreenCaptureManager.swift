@@ -15,9 +15,30 @@ enum CaptureError: Error {
     case noDisplay
 }
 
-private enum CaptureTurnWaitResult {
-    case acquired
-    case cancelled
+enum CaptureFailureRecovery: Equatable {
+    case countTowardsStop
+    case backOff(TimeInterval)
+
+    nonisolated static let falsePermissionDenialDelay: TimeInterval = 30
+
+    nonisolated static func disposition(
+        for error: Error,
+        hasScreenRecordingPermission: Bool
+    ) -> CaptureFailureRecovery {
+        let nsError = error as NSError
+        guard hasScreenRecordingPermission,
+              nsError.domain == "com.apple.ScreenCaptureKit.SCStreamErrorDomain",
+              nsError.code == -3801 else {
+            return .countTowardsStop
+        }
+
+        // On current macOS betas, ScreenCaptureKit can briefly report that the
+        // user declined capture while CoreGraphics and tccd still say the app
+        // is authorised. Rapid retries make that OS-side mismatch worse and
+        // can surface another native permission prompt. Leave the existing
+        // capture session intact and give replayd time to settle instead.
+        return .backOff(falsePermissionDenialDelay)
+    }
 }
 
 @MainActor
@@ -42,9 +63,12 @@ class ScreenCaptureManager: NSObject {
     private(set) var isCapturing = false
     private(set) var captureInterval: TimeInterval = 1.0
     let targetDisplayID: CGDirectDisplayID
+    private let captureRequestBroker: CaptureRequestBroker
+    private let captureRequestOwner = UUID()
 
-    init(targetDisplayID: CGDirectDisplayID) {
+    init(targetDisplayID: CGDirectDisplayID, captureRequestBroker: CaptureRequestBroker) {
         self.targetDisplayID = targetDisplayID
+        self.captureRequestBroker = captureRequestBroker
         super.init()
     }
 
@@ -57,9 +81,6 @@ class ScreenCaptureManager: NSObject {
     private var nextCaptureAt: Date?
     private var captureWakeTask: Task<Void, Never>?
     private var captureWakeContinuation: CheckedContinuation<Void, Never>?
-    /// Global gate so periodic capture and overlay refreshes never issue overlapping screenshot requests.
-    private var isCaptureRequestInFlight = false
-    private var captureRequestWaiters: [(id: UUID, continuation: CheckedContinuation<CaptureTurnWaitResult, Never>)] = []
     private var consecutiveCaptureFailures = 0
 
     static func hasScreenRecordingPermission() -> Bool {
@@ -135,7 +156,7 @@ class ScreenCaptureManager: NSObject {
         nextCaptureAt = nil
         captureLoopTask = nil
         previousLoop?.cancel()
-        cancelQueuedCaptureRequests()
+        captureRequestBroker.cancelRequests(for: captureRequestOwner)
         wakeCaptureLoop()
         if wasCapturing {
             captureLogger.info("Capture stopped")
@@ -165,7 +186,10 @@ class ScreenCaptureManager: NSObject {
     func captureNow() async -> CGImage? {
         let requestLoopSerial = captureLoopSerial
         guard isCapturing else { return nil }
-        return try? await captureImageSerially(expectedLoopSerial: requestLoopSerial)
+        return try? await captureImageSerially(
+            expectedLoopSerial: requestLoopSerial,
+            kind: .interactive
+        )
     }
 
     // MARK: - Private
@@ -241,73 +265,40 @@ class ScreenCaptureManager: NSObject {
         continuation.resume()
     }
 
-    private func acquireCaptureTurn() async throws {
-        if !isCaptureRequestInFlight {
-            isCaptureRequestInFlight = true
-            return
-        }
-
-        let waiterID = UUID()
-        let result = await withTaskCancellationHandler(operation: {
-            await withCheckedContinuation { continuation in
-                captureRequestWaiters.append((id: waiterID, continuation: continuation))
-                if Task.isCancelled {
-                    cancelCaptureRequestWaiter(id: waiterID)
-                }
-            }
-        }, onCancel: {
-            Task { @MainActor [weak self] in
-                self?.cancelCaptureRequestWaiter(id: waiterID)
-            }
-        })
-
-        if case .cancelled = result {
-            throw CancellationError()
-        }
-    }
-
-    private func cancelCaptureRequestWaiter(id: UUID) {
-        guard let index = captureRequestWaiters.firstIndex(where: { $0.id == id }) else { return }
-        let continuation = captureRequestWaiters.remove(at: index).continuation
-        continuation.resume(returning: .cancelled)
-    }
-
-    private func cancelQueuedCaptureRequests() {
-        let waiters = captureRequestWaiters
-        captureRequestWaiters.removeAll()
-        for waiter in waiters {
-            waiter.continuation.resume(returning: .cancelled)
-        }
-    }
-
-    private func releaseCaptureTurn() {
-        guard !captureRequestWaiters.isEmpty else {
-            isCaptureRequestInFlight = false
-            return
-        }
-
-        let continuation = captureRequestWaiters.removeFirst().continuation
-        continuation.resume(returning: .acquired)
-    }
-
-    private func captureImageSerially(expectedLoopSerial: Int? = nil) async throws -> CGImage {
-        try await acquireCaptureTurn()
-        defer { releaseCaptureTurn() }
-
-        try Task.checkCancellation()
-        guard let filter, let config else {
-            throw CancellationError()
-        }
-        if let expectedLoopSerial {
-            guard isCapturing, captureLoopSerial == expectedLoopSerial else {
+    private func captureImageSerially(
+        expectedLoopSerial: Int? = nil,
+        kind: CaptureRequestKind
+    ) async throws -> CGImage {
+        let image = try await captureRequestBroker.perform(
+            owner: captureRequestOwner,
+            kind: kind
+        ) { [weak self] in
+            guard let self else { throw CancellationError() }
+            try Task.checkCancellation()
+            guard let filter = self.filter, let config = self.config else {
                 throw CancellationError()
             }
-        }
+            if let expectedLoopSerial {
+                guard self.isCapturing, self.captureLoopSerial == expectedLoopSerial else {
+                    throw CancellationError()
+                }
+            }
 
-        let image = try await SCScreenshotManager.captureImage(
-            contentFilter: filter,
-            configuration: config
-        )
+            let image = try await SCScreenshotManager.captureImage(
+                contentFilter: filter,
+                configuration: config
+            )
+            // Keep cancellation inside the brokered operation. If a display
+            // disappears while a half-open probe is in ScreenCaptureKit, a
+            // late successful return must not close the global circuit.
+            try Task.checkCancellation()
+            if let expectedLoopSerial {
+                guard self.isCapturing, self.captureLoopSerial == expectedLoopSerial else {
+                    throw CancellationError()
+                }
+            }
+            return image
+        }
         try Task.checkCancellation()
         if let expectedLoopSerial {
             guard isCapturing, captureLoopSerial == expectedLoopSerial else {
@@ -320,11 +311,16 @@ class ScreenCaptureManager: NSObject {
     private func captureSingleFrameAndDeliver(loopSerial: Int) async {
         guard isCapturing, !Task.isCancelled, loopSerial == captureLoopSerial else { return }
         do {
-            let image = try await captureImageSerially(expectedLoopSerial: loopSerial)
+            let image = try await captureImageSerially(
+                expectedLoopSerial: loopSerial,
+                kind: .periodic
+            )
             guard isCapturing, !Task.isCancelled, loopSerial == captureLoopSerial else { return }
             consecutiveCaptureFailures = 0
             let timestamp = Date()
             delegate?.captureManager(self, didCaptureFrame: image, at: timestamp)
+        } catch let error as CaptureRequestBrokerError {
+            handleCaptureRequestDeferral(error, loopSerial: loopSerial)
         } catch is CancellationError {
             // Expected when stopping capture.
         } catch {
@@ -332,12 +328,45 @@ class ScreenCaptureManager: NSObject {
         }
     }
 
+    private func handleCaptureRequestDeferral(
+        _ error: CaptureRequestBrokerError,
+        loopSerial: Int
+    ) {
+        guard isCapturing, loopSerial == captureLoopSerial else { return }
+        guard case .cooldown(let deadline) = error else {
+            // A periodic tick was already superseded by a newer one. Do not
+            // queue catch-up work or count this as a capture failure.
+            return
+        }
+
+        captureScheduleRevision += 1
+        nextCaptureAt = deadline
+    }
+
     private func handleCaptureFailure(_ error: Error, loopSerial: Int) {
         guard isCapturing, loopSerial == captureLoopSerial else { return }
 
+        let detail = DiagnosticsLogFormat.describe(error)
+        let recovery = CaptureFailureRecovery.disposition(
+            for: error,
+            hasScreenRecordingPermission: Self.hasScreenRecordingPermission()
+        )
+        if case .backOff(let delay) = recovery {
+            consecutiveCaptureFailures = 0
+            captureScheduleRevision += 1
+            nextCaptureAt = Date().addingTimeInterval(delay)
+            captureLogger.warning(
+                "ScreenCaptureKit reported a false permission denial; backing off for \(delay, privacy: .public) seconds"
+            )
+            DiagnosticsLog.shared.log(
+                "Capture",
+                "ScreenCaptureKit reported a permission denial while preflight remained granted; backing off for \(delay) seconds: \(detail)"
+            )
+            return
+        }
+
         consecutiveCaptureFailures += 1
         let failureCount = consecutiveCaptureFailures
-        let detail = DiagnosticsLogFormat.describe(error)
         captureLogger.error("Screenshot capture failed (\(failureCount, privacy: .public)/\(self.maximumConsecutiveCaptureFailures, privacy: .public)): \(detail, privacy: .public)")
         DiagnosticsLog.shared.log(
             "Capture",
