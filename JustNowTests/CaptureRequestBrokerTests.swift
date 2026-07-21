@@ -35,7 +35,7 @@ final class CaptureRequestBrokerTests: XCTestCase {
                 return "second"
             }
         }
-        await settleTasks()
+        await waitUntil { broker.queuedRequestCountForTesting == 1 }
 
         XCTAssertEqual(started, ["first"])
         XCTAssertEqual(maximumActiveRequests, 1)
@@ -78,7 +78,7 @@ final class CaptureRequestBrokerTests: XCTestCase {
                 return error
             }
         }
-        await settleTasks()
+        await waitUntil { broker.queuedRequestCountForTesting == 1 }
 
         gate.resumeNext()
         let firstError = await first.value
@@ -88,7 +88,10 @@ final class CaptureRequestBrokerTests: XCTestCase {
         XCTAssertEqual(secondOSCalls, 0)
         XCTAssertEqual(
             secondError as? CaptureRequestBrokerError,
-            .cooldown(until: clock.date.addingTimeInterval(CaptureFailureRecovery.falsePermissionDenialDelay))
+            .cooldown(
+                untilMonotonicTime: clock.monotonicTime
+                    + CaptureFailureRecovery.falsePermissionDenialDelay
+            )
         )
     }
 
@@ -108,7 +111,10 @@ final class CaptureRequestBrokerTests: XCTestCase {
         XCTAssertEqual(calls, 0)
         XCTAssertEqual(
             error as? CaptureRequestBrokerError,
-            .cooldown(until: clock.date.addingTimeInterval(CaptureFailureRecovery.falsePermissionDenialDelay))
+            .cooldown(
+                untilMonotonicTime: clock.monotonicTime
+                    + CaptureFailureRecovery.falsePermissionDenialDelay
+            )
         )
     }
 
@@ -139,7 +145,7 @@ final class CaptureRequestBrokerTests: XCTestCase {
                 return "queued"
             }
         }
-        await settleTasks()
+        await waitUntil { broker.queuedRequestCountForTesting == 1 }
         XCTAssertEqual(started, ["probe"])
 
         probeGate.resumeNext()
@@ -172,7 +178,10 @@ final class CaptureRequestBrokerTests: XCTestCase {
         }
         XCTAssertEqual(
             blockedError as? CaptureRequestBrokerError,
-            .cooldown(until: clock.date.addingTimeInterval(CaptureFailureRecovery.falsePermissionDenialDelay))
+            .cooldown(
+                untilMonotonicTime: clock.monotonicTime
+                    + CaptureFailureRecovery.falsePermissionDenialDelay
+            )
         )
         XCTAssertEqual(logs.filter { $0.contains("circuit opened") }.count, 1)
         XCTAssertEqual(logs.filter { $0.contains("circuit reopened") }.count, 1)
@@ -206,7 +215,10 @@ final class CaptureRequestBrokerTests: XCTestCase {
         }
         XCTAssertEqual(
             otherOwnerError as? CaptureRequestBrokerError,
-            .cooldown(until: clock.date.addingTimeInterval(CaptureFailureRecovery.falsePermissionDenialDelay))
+            .cooldown(
+                untilMonotonicTime: clock.monotonicTime
+                    + CaptureFailureRecovery.falsePermissionDenialDelay
+            )
         )
     }
 
@@ -239,7 +251,7 @@ final class CaptureRequestBrokerTests: XCTestCase {
                 return "surviving"
             }
         }
-        await settleTasks()
+        await waitUntil { broker.queuedRequestCountForTesting == 2 }
 
         broker.cancelRequests(for: cancelledOwner)
         let cancelledError = await cancelled.value
@@ -268,7 +280,10 @@ final class CaptureRequestBrokerTests: XCTestCase {
         }
         XCTAssertEqual(
             otherOwnerError as? CaptureRequestBrokerError,
-            .cooldown(until: clock.date.addingTimeInterval(CaptureFailureRecovery.falsePermissionDenialDelay))
+            .cooldown(
+                untilMonotonicTime: clock.monotonicTime
+                    + CaptureFailureRecovery.falsePermissionDenialDelay
+            )
         )
     }
 
@@ -325,7 +340,7 @@ final class CaptureRequestBrokerTests: XCTestCase {
                 periodicCalls += 1
             }
         }
-        await settleTasks()
+        await waitUntil { broker.queuedRequestCountForTesting == 1 }
         XCTAssertEqual(periodicCalls, 0)
 
         gate.resumeNext()
@@ -356,13 +371,13 @@ final class CaptureRequestBrokerTests: XCTestCase {
                 calls.append("second")
             }
         }
-        await settleTasks()
+        await waitUntil { broker.queuedRequestCountForTesting == 1 }
         let third = Task { @MainActor () throws -> Void in
             try await broker.perform(owner: thirdOwner) {
                 calls.append("third")
             }
         }
-        await settleTasks()
+        await waitUntil { broker.queuedRequestCountForTesting == 2 }
         XCTAssertEqual(calls, ["first"])
 
         gate.resumeNext()
@@ -372,7 +387,7 @@ final class CaptureRequestBrokerTests: XCTestCase {
         XCTAssertEqual(calls, ["first", "second", "third"])
     }
 
-    func testWallClockJumpDoesNotExpireCooldown() async {
+    func testCooldownDeadlineUsesMonotonicTime() async {
         let clock = BrokerTestClock()
         let broker = makeBroker(clock: clock)
         var calls = 0
@@ -380,14 +395,19 @@ final class CaptureRequestBrokerTests: XCTestCase {
         _ = await captureError(from: broker, owner: UUID()) {
             throw self.falsePermissionDenial()
         }
-        clock.date = clock.date.addingTimeInterval(3_600)
 
         let error = await captureError(from: broker, owner: UUID()) {
             calls += 1
         }
 
         XCTAssertEqual(calls, 0)
-        XCTAssertNotNil(error as? CaptureRequestBrokerError)
+        XCTAssertEqual(
+            error as? CaptureRequestBrokerError,
+            .cooldown(
+                untilMonotonicTime: clock.monotonicTime
+                    + CaptureFailureRecovery.falsePermissionDenialDelay
+            )
+        )
     }
 
     func testRecoveryStateReportsCooldownAndRecovery() async throws {
@@ -399,10 +419,7 @@ final class CaptureRequestBrokerTests: XCTestCase {
         _ = await captureError(from: broker, owner: UUID()) {
             throw self.falsePermissionDenial()
         }
-        XCTAssertEqual(
-            states,
-            [.coolingDown(until: clock.date.addingTimeInterval(CaptureFailureRecovery.falsePermissionDenialDelay))]
-        )
+        XCTAssertEqual(states, [.coolingDown])
 
         clock.advance(by: CaptureFailureRecovery.falsePermissionDenialDelay)
         try await broker.perform(owner: UUID()) {}
@@ -424,10 +441,75 @@ final class CaptureRequestBrokerTests: XCTestCase {
             XCTFail("An open circuit must not call the OS request")
         }
 
-        XCTAssertEqual(
-            states,
-            [.coolingDown(until: clock.date.addingTimeInterval(CaptureFailureRecovery.falsePermissionDenialDelay))]
-        )
+        XCTAssertEqual(states, [.coolingDown])
+    }
+
+    func testFailedHalfOpenProbeDoesNotReportHealthyUntilSuccess() async throws {
+        let clock = BrokerTestClock()
+        let broker = makeBroker(clock: clock)
+        var states: [CaptureRequestBrokerRecoveryState] = []
+        broker.recoveryStateDidChange = { states.append($0) }
+
+        _ = await captureError(from: broker, owner: UUID()) {
+            throw self.falsePermissionDenial()
+        }
+        clock.advance(by: CaptureFailureRecovery.falsePermissionDenialDelay)
+
+        _ = await captureError(from: broker, owner: UUID()) {
+            throw NSError(
+                domain: "com.apple.ScreenCaptureKit.CoreGraphicsErrorDomain",
+                code: 1004
+            )
+        }
+        XCTAssertEqual(states, [.coolingDown])
+
+        try await broker.perform(owner: UUID()) {}
+        XCTAssertEqual(states.last, .normal)
+    }
+
+    func testCancellingAllQueuedOwnersBeforeActiveCompletionPreventsHandoff() async {
+        let clock = BrokerTestClock()
+        let broker = makeBroker(clock: clock)
+        let activeOwner = UUID()
+        let secondOwner = UUID()
+        let thirdOwner = UUID()
+        let gate = BrokerTestGate()
+        var started: [String] = []
+
+        let active = Task { @MainActor () -> Error? in
+            await captureError(from: broker, owner: activeOwner) {
+                started.append("active")
+                await gate.wait()
+                try Task.checkCancellation()
+            }
+        }
+        await waitUntil { gate.waiterCount == 1 }
+
+        let second = Task { @MainActor () -> Error? in
+            await captureError(from: broker, owner: secondOwner) {
+                started.append("second")
+            }
+        }
+        let third = Task { @MainActor () -> Error? in
+            await captureError(from: broker, owner: thirdOwner) {
+                started.append("third")
+            }
+        }
+        await waitUntil { broker.queuedRequestCountForTesting == 2 }
+
+        active.cancel()
+        broker.cancelRequests(for: activeOwner)
+        broker.cancelRequests(for: secondOwner)
+        broker.cancelRequests(for: thirdOwner)
+        gate.resumeNext()
+
+        let activeError = await active.value
+        let secondError = await second.value
+        let thirdError = await third.value
+        XCTAssertTrue(activeError is CancellationError)
+        XCTAssertTrue(secondError is CancellationError)
+        XCTAssertTrue(thirdError is CancellationError)
+        XCTAssertEqual(started, ["active"])
     }
 
     private func makeBroker(
@@ -436,7 +518,6 @@ final class CaptureRequestBrokerTests: XCTestCase {
         log: @escaping @MainActor (String) -> Void = { _ in }
     ) -> CaptureRequestBroker {
         CaptureRequestBroker(
-            wallNow: { clock.date },
             monotonicNow: { clock.monotonicTime },
             hasScreenRecordingPermission: { hasScreenRecordingPermission },
             log: log
@@ -490,11 +571,9 @@ final class CaptureRequestBrokerTests: XCTestCase {
 
 @MainActor
 private final class BrokerTestClock {
-    var date = Date(timeIntervalSinceReferenceDate: 1_000)
     var monotonicTime: TimeInterval = 1_000
 
     func advance(by interval: TimeInterval) {
-        date = date.addingTimeInterval(interval)
         monotonicTime += interval
     }
 }

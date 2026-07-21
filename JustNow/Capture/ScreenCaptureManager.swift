@@ -79,6 +79,7 @@ class ScreenCaptureManager: NSObject {
     /// Bumped whenever the desired cadence changes so the live loop can adopt a new deadline without restarting.
     private var captureScheduleRevision = 0
     private var nextCaptureAt: Date?
+    private var captureCooldownDeadline: TimeInterval?
     private var captureWakeTask: Task<Void, Never>?
     private var captureWakeContinuation: CheckedContinuation<Void, Never>?
     private var consecutiveCaptureFailures = 0
@@ -142,8 +143,15 @@ class ScreenCaptureManager: NSObject {
     }
 
     func stopCapture() async {
-        let previousLoop = stopCaptureLoop()
+        let previousLoop = beginStoppingCapture()
         await previousLoop?.value
+    }
+
+    /// Cancels this manager and its broker-owned waiters synchronously. The
+    /// coordinator uses this for two-phase shutdown so no queued display can
+    /// start another OS request while an earlier display is being awaited.
+    func beginStoppingCapture() -> Task<Void, Never>? {
+        stopCaptureLoop()
     }
 
     private func stopCaptureLoop() -> Task<Void, Never>? {
@@ -154,6 +162,7 @@ class ScreenCaptureManager: NSObject {
         isCapturing = false
         consecutiveCaptureFailures = 0
         nextCaptureAt = nil
+        captureCooldownDeadline = nil
         captureLoopTask = nil
         previousLoop?.cancel()
         captureRequestBroker.cancelRequests(for: captureRequestOwner)
@@ -206,6 +215,16 @@ class ScreenCaptureManager: NSObject {
 
     private func runPeriodicCaptureLoop(loopSerial: Int) async {
         while !Task.isCancelled, isCapturing {
+            if let captureCooldownDeadline {
+                let remaining = captureCooldownDeadline - Self.monotonicTime()
+                if remaining > 0 {
+                    await waitForCaptureWake(for: remaining)
+                    continue
+                }
+                self.captureCooldownDeadline = nil
+                nextCaptureAt = Date()
+            }
+
             let now = Date()
             let deadline = nextCaptureAt ?? now
             if deadline > now {
@@ -232,6 +251,12 @@ class ScreenCaptureManager: NSObject {
 
     private func waitForCaptureWake(until deadline: Date) async {
         let delay = deadline.timeIntervalSinceNow
+        guard delay > 0 else { return }
+
+        await waitForCaptureWake(for: delay)
+    }
+
+    private func waitForCaptureWake(for delay: TimeInterval) async {
         guard delay > 0 else { return }
 
         await withCheckedContinuation { continuation in
@@ -329,10 +354,11 @@ class ScreenCaptureManager: NSObject {
         loopSerial: Int
     ) {
         guard isCapturing, loopSerial == captureLoopSerial else { return }
-        guard case .cooldown(let deadline) = error else { return }
+        guard case .cooldown(let monotonicDeadline) = error else { return }
 
         captureScheduleRevision += 1
-        nextCaptureAt = deadline
+        captureCooldownDeadline = monotonicDeadline
+        nextCaptureAt = nil
     }
 
     private func handleCaptureFailure(_ error: Error, loopSerial: Int) {
@@ -395,6 +421,10 @@ class ScreenCaptureManager: NSObject {
             return max(1, screen.backingScaleFactor)
         }
         return 1
+    }
+
+    private static func monotonicTime() -> TimeInterval {
+        TimeInterval(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
     }
 }
 

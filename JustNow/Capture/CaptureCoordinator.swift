@@ -116,8 +116,9 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
         reconcileTask = nil
         let snapshot = Array(managed.values)
         managed.removeAll()
-        for entry in snapshot {
-            await entry.manager.stopCapture()
+        let previousLoops = snapshot.map { $0.manager.beginStoppingCapture() }
+        for previousLoop in previousLoops {
+            await previousLoop?.value
         }
         delegate?.captureCoordinatorDidUpdateDisplays(self)
     }

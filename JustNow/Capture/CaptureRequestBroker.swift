@@ -13,12 +13,12 @@ private let captureBrokerLogger = Logger(subsystem: "sg.tk.JustNow", category: "
 /// These are expected, temporary results and must not count as capture errors.
 enum CaptureRequestBrokerError: Error, Equatable {
     /// A false ScreenCaptureKit permission denial opened the process-wide circuit.
-    case cooldown(until: Date)
+    case cooldown(untilMonotonicTime: TimeInterval)
 }
 
 enum CaptureRequestBrokerRecoveryState: Equatable {
     case normal
-    case coolingDown(until: Date)
+    case coolingDown
 }
 
 /// Serialises all one-shot ScreenCaptureKit calls made by this process.
@@ -38,16 +38,15 @@ final class CaptureRequestBroker {
     private enum WaitResult {
         case acquired
         case cancelled
-        case cooldown(Date)
+        case cooldown(TimeInterval)
     }
 
     private enum CircuitState {
         case closed
-        case open(monotonicDeadline: TimeInterval, wallDeadline: Date)
+        case open(monotonicDeadline: TimeInterval)
         case halfOpen
     }
 
-    private let wallNow: @MainActor () -> Date
     private let monotonicNow: @MainActor () -> TimeInterval
     private let hasScreenRecordingPermission: @MainActor () -> Bool
     private let log: @MainActor (String) -> Void
@@ -61,7 +60,6 @@ final class CaptureRequestBroker {
     private var openedCircuitCount = 0
 
     init(
-        wallNow: @escaping @MainActor () -> Date = Date.init,
         monotonicNow: @escaping @MainActor () -> TimeInterval = {
             TimeInterval(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
         },
@@ -74,7 +72,6 @@ final class CaptureRequestBroker {
             DiagnosticsLog.shared.log("Capture", message)
         }
     ) {
-        self.wallNow = wallNow
         self.monotonicNow = monotonicNow
         self.hasScreenRecordingPermission = hasScreenRecordingPermission
         self.cooldown = cooldown
@@ -118,13 +115,15 @@ final class CaptureRequestBroker {
     private func acquireTurn(owner: UUID) async throws {
         try Task.checkCancellation()
 
-        if case .open(let monotonicDeadline, let wallDeadline) = circuitState {
+        if case .open(let monotonicDeadline) = circuitState {
             guard monotonicNow() >= monotonicDeadline else {
                 // Capture may have been paused and restarted while the shared
                 // circuit was still open. Re-publish the state so the new run
                 // does not briefly present itself as healthy.
-                recoveryStateDidChange(.coolingDown(until: wallDeadline))
-                throw CaptureRequestBrokerError.cooldown(until: wallDeadline)
+                recoveryStateDidChange(.coolingDown)
+                throw CaptureRequestBrokerError.cooldown(
+                    untilMonotonicTime: monotonicDeadline
+                )
             }
             // The first request after expiry is the only half-open probe. It
             // cannot race another request because the broker is main-actor
@@ -161,8 +160,10 @@ final class CaptureRequestBroker {
             return
         case .cancelled:
             throw CancellationError()
-        case .cooldown(let deadline):
-            throw CaptureRequestBrokerError.cooldown(until: deadline)
+        case .cooldown(let monotonicDeadline):
+            throw CaptureRequestBrokerError.cooldown(
+                untilMonotonicTime: monotonicDeadline
+            )
         }
     }
 
@@ -214,21 +215,16 @@ final class CaptureRequestBroker {
                     return
                 }
                 // This was not the beta false-denial signature. Preserve the
-                // manager's normal error handling and let later requests run.
-                circuitState = .closed
-                recoveryStateDidChange(.normal)
+                // manager's normal error handling and let later requests run,
+                // but remain half-open until a capture actually succeeds.
             }
             releaseNextWaiter()
         }
     }
 
     private func openCircuit(for delay: TimeInterval, isReopen: Bool = false) {
-        let wallDeadline = wallNow().addingTimeInterval(delay)
         let monotonicDeadline = monotonicNow() + delay
-        circuitState = .open(
-            monotonicDeadline: monotonicDeadline,
-            wallDeadline: wallDeadline
-        )
+        circuitState = .open(monotonicDeadline: monotonicDeadline)
         openedCircuitCount += 1
 
         let queuedCount = waiters.count
@@ -237,13 +233,13 @@ final class CaptureRequestBroker {
             "Global ScreenCaptureKit capture circuit \(event) for \(delay) seconds "
                 + "(queuedRequests=\(queuedCount), circuitOpenCount=\(openedCircuitCount))"
         )
-        recoveryStateDidChange(.coolingDown(until: wallDeadline))
+        recoveryStateDidChange(.coolingDown)
 
         let pending = waiters
         waiters.removeAll()
         isRequestInFlight = false
         for waiter in pending {
-            waiter.continuation.resume(returning: .cooldown(wallDeadline))
+            waiter.continuation.resume(returning: .cooldown(monotonicDeadline))
         }
     }
 
@@ -265,4 +261,10 @@ final class CaptureRequestBroker {
                 + "(queuedRequests=\(waiters.count), circuitOpenCount=\(openedCircuitCount))"
         )
     }
+
+#if DEBUG
+    var queuedRequestCountForTesting: Int {
+        waiters.count
+    }
+#endif
 }
