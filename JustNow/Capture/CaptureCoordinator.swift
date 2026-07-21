@@ -21,10 +21,18 @@ protocol CaptureCoordinatorDelegate: AnyObject {
     )
     func captureCoordinatorDidStopUnexpectedly(_ coordinator: CaptureCoordinator)
     func captureCoordinatorDidUpdateDisplays(_ coordinator: CaptureCoordinator)
+    func captureCoordinator(
+        _ coordinator: CaptureCoordinator,
+        didChangeRecoveryState state: CaptureRequestBrokerRecoveryState
+    )
 }
 
 extension CaptureCoordinatorDelegate {
     func captureCoordinatorDidUpdateDisplays(_ coordinator: CaptureCoordinator) {}
+    func captureCoordinator(
+        _ coordinator: CaptureCoordinator,
+        didChangeRecoveryState state: CaptureRequestBrokerRecoveryState
+    ) {}
 }
 
 /// Owns one ScreenCaptureManager per physical display and fans capture
@@ -39,6 +47,9 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
 
     weak var delegate: CaptureCoordinatorDelegate?
 
+    /// All display managers share one broker so a ScreenCaptureKit false TCC
+    /// denial pauses the whole process before another display can retry.
+    private let captureRequestBroker: CaptureRequestBroker
     private var managed: [UUID: ManagedDisplay] = [:]
     private var captureInterval: TimeInterval = 1.0
     private var captureScale: Int = 2
@@ -47,7 +58,17 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
     private var reconcileTask: Task<Void, Never>?
 
     override init() {
+        let captureRequestBroker = CaptureRequestBroker()
+        self.captureRequestBroker = captureRequestBroker
         super.init()
+        captureRequestBroker.recoveryStateDidChange = { [weak self] state in
+            // Sleep, lock, overlay and user-pause flows mark the coordinator
+            // stopped before awaiting an in-flight ScreenCaptureKit request.
+            // Do not let a late broker result overwrite those more specific
+            // menu states.
+            guard let self, self.isRunning else { return }
+            self.delegate?.captureCoordinator(self, didChangeRecoveryState: state)
+        }
         screenParamsObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil,
@@ -95,8 +116,9 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
         reconcileTask = nil
         let snapshot = Array(managed.values)
         managed.removeAll()
-        for entry in snapshot {
-            await entry.manager.stopCapture()
+        let previousLoops = snapshot.map { $0.manager.beginStoppingCapture() }
+        for previousLoop in previousLoops {
+            await previousLoop?.value
         }
         delegate?.captureCoordinatorDidUpdateDisplays(self)
     }
@@ -151,19 +173,22 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
 
         // Remove managers for displays that are no longer connected.
         let removedIDs = managed.keys.filter { desired[$0] == nil }
-        for id in removedIDs {
-            if let entry = managed.removeValue(forKey: id) {
-                await entry.manager.stopCapture()
-                captureLogger.info("Capture stopped for removed display: \(entry.info.name, privacy: .public)")
-                DiagnosticsLog.shared.log("Capture", "Capture stopped for removed display: \(entry.info.name)")
-            }
+        let removedEntries = removedIDs.compactMap { managed.removeValue(forKey: $0) }
+        let previousLoops = removedEntries.map { $0.manager.beginStoppingCapture() }
+        for (entry, previousLoop) in zip(removedEntries, previousLoops) {
+            await previousLoop?.value
+            captureLogger.info("Capture stopped for removed display: \(entry.info.name, privacy: .public)")
+            DiagnosticsLog.shared.log("Capture", "Capture stopped for removed display: \(entry.info.name)")
         }
 
         // Start managers for newly seen displays.
         if startNewManagers {
             for (id, info) in desired where managed[id] == nil {
                 guard let physicalDisplayID = info.displayID else { continue }
-                let manager = ScreenCaptureManager(targetDisplayID: physicalDisplayID)
+                let manager = ScreenCaptureManager(
+                    targetDisplayID: physicalDisplayID,
+                    captureRequestBroker: captureRequestBroker
+                )
                 manager.delegate = self
                 manager.updateCaptureInterval(captureInterval)
                 manager.updateCaptureScale(captureScale)
