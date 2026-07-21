@@ -372,7 +372,8 @@ class ScreenCaptureManager: NSObject {
         if case .backOff(let delay) = recovery {
             consecutiveCaptureFailures = 0
             captureScheduleRevision += 1
-            nextCaptureAt = Date().addingTimeInterval(delay)
+            captureCooldownDeadline = Self.monotonicTime() + delay
+            nextCaptureAt = nil
             captureLogger.warning(
                 "ScreenCaptureKit reported a false permission denial; backing off for \(delay, privacy: .public) seconds"
             )

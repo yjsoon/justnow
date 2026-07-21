@@ -173,12 +173,12 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
 
         // Remove managers for displays that are no longer connected.
         let removedIDs = managed.keys.filter { desired[$0] == nil }
-        for id in removedIDs {
-            if let entry = managed.removeValue(forKey: id) {
-                await entry.manager.stopCapture()
-                captureLogger.info("Capture stopped for removed display: \(entry.info.name, privacy: .public)")
-                DiagnosticsLog.shared.log("Capture", "Capture stopped for removed display: \(entry.info.name)")
-            }
+        let removedEntries = removedIDs.compactMap { managed.removeValue(forKey: $0) }
+        let previousLoops = removedEntries.map { $0.manager.beginStoppingCapture() }
+        for (entry, previousLoop) in zip(removedEntries, previousLoops) {
+            await previousLoop?.value
+            captureLogger.info("Capture stopped for removed display: \(entry.info.name, privacy: .public)")
+            DiagnosticsLog.shared.log("Capture", "Capture stopped for removed display: \(entry.info.name)")
         }
 
         // Start managers for newly seen displays.
