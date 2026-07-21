@@ -14,14 +14,11 @@ private let captureBrokerLogger = Logger(subsystem: "sg.tk.JustNow", category: "
 enum CaptureRequestBrokerError: Error, Equatable {
     /// A false ScreenCaptureKit permission denial opened the process-wide circuit.
     case cooldown(until: Date)
-    /// A periodic tick arrived while another request was active. The next tick
-    /// will capture a fresh frame instead of catching up stale work later.
-    case droppedPeriodicRequest
 }
 
-enum CaptureRequestKind: Equatable {
-    case periodic
-    case interactive
+enum CaptureRequestBrokerRecoveryState: Equatable {
+    case normal
+    case coolingDown(until: Date)
 }
 
 /// Serialises all one-shot ScreenCaptureKit calls made by this process.
@@ -46,26 +43,28 @@ final class CaptureRequestBroker {
 
     private enum CircuitState {
         case closed
-        case open(until: Date)
+        case open(monotonicDeadline: TimeInterval, wallDeadline: Date)
         case halfOpen
     }
 
-    private let now: @MainActor () -> Date
+    private let wallNow: @MainActor () -> Date
+    private let monotonicNow: @MainActor () -> TimeInterval
     private let hasScreenRecordingPermission: @MainActor () -> Bool
     private let log: @MainActor (String) -> Void
     private let cooldown: TimeInterval
 
+    var recoveryStateDidChange: @MainActor (CaptureRequestBrokerRecoveryState) -> Void = { _ in }
+
     private var circuitState: CircuitState = .closed
     private var isRequestInFlight = false
     private var waiters: [Waiter] = []
-    /// The next periodic owner to admit after it lost a concurrent tick. This
-    /// is a single fairness token, not a backlog: the losing tick is still
-    /// dropped and only a later fresh tick can consume the token.
-    private var preferredPeriodicOwner: UUID?
     private var openedCircuitCount = 0
 
     init(
-        now: @escaping @MainActor () -> Date = Date.init,
+        wallNow: @escaping @MainActor () -> Date = Date.init,
+        monotonicNow: @escaping @MainActor () -> TimeInterval = {
+            TimeInterval(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
+        },
         hasScreenRecordingPermission: @escaping @MainActor () -> Bool = {
             ScreenCaptureManager.hasScreenRecordingPermission()
         },
@@ -75,7 +74,8 @@ final class CaptureRequestBroker {
             DiagnosticsLog.shared.log("Capture", message)
         }
     ) {
-        self.now = now
+        self.wallNow = wallNow
+        self.monotonicNow = monotonicNow
         self.hasScreenRecordingPermission = hasScreenRecordingPermission
         self.cooldown = cooldown
         self.log = log
@@ -83,15 +83,14 @@ final class CaptureRequestBroker {
 
     /// Runs a single one-shot request after process-wide admission.
     ///
-    /// Interactive requests may wait for the one currently in progress, so an
-    /// overlay refresh can still get the newest image. Periodic requests are
-    /// intentionally dropped while busy, preventing per-display backlogs.
+    /// Each manager's periodic loop is serial, so waiting here preserves the
+    /// configured per-display cadence without allowing stale per-owner work to
+    /// accumulate. Interactive refreshes use the same FIFO admission path.
     func perform<Value>(
         owner: UUID,
-        kind: CaptureRequestKind,
         operation: @escaping @MainActor () async throws -> Value
     ) async throws -> Value {
-        try await acquireTurn(owner: owner, kind: kind)
+        try await acquireTurn(owner: owner)
 
         do {
             let value = try await operation()
@@ -109,9 +108,6 @@ final class CaptureRequestBroker {
     func cancelRequests(for owner: UUID) {
         let matching = waiters.filter { $0.owner == owner }
         waiters.removeAll { $0.owner == owner }
-        if preferredPeriodicOwner == owner {
-            preferredPeriodicOwner = nil
-        }
         for waiter in matching {
             waiter.continuation.resume(returning: .cancelled)
         }
@@ -119,12 +115,16 @@ final class CaptureRequestBroker {
 
     // MARK: - Admission
 
-    private func acquireTurn(owner: UUID, kind: CaptureRequestKind) async throws {
+    private func acquireTurn(owner: UUID) async throws {
         try Task.checkCancellation()
 
-        if case .open(let deadline) = circuitState {
-            guard now() >= deadline else {
-                throw CaptureRequestBrokerError.cooldown(until: deadline)
+        if case .open(let monotonicDeadline, let wallDeadline) = circuitState {
+            guard monotonicNow() >= monotonicDeadline else {
+                // Capture may have been paused and restarted while the shared
+                // circuit was still open. Re-publish the state so the new run
+                // does not briefly present itself as healthy.
+                recoveryStateDidChange(.coolingDown(until: wallDeadline))
+                throw CaptureRequestBrokerError.cooldown(until: wallDeadline)
             }
             // The first request after expiry is the only half-open probe. It
             // cannot race another request because the broker is main-actor
@@ -132,25 +132,7 @@ final class CaptureRequestBroker {
             circuitState = .halfOpen
         }
 
-        if kind == .periodic, let preferredPeriodicOwner {
-            guard preferredPeriodicOwner == owner else {
-                // A competing display was dropped on the previous aligned
-                // tick. Let it receive the next fresh periodic turn rather
-                // than allowing this owner to win every 0.25-second race.
-                throw CaptureRequestBrokerError.droppedPeriodicRequest
-            }
-            self.preferredPeriodicOwner = nil
-        }
-
         if isRequestInFlight {
-            guard kind == .interactive else {
-                // Preserve the first losing owner until it receives a later
-                // turn. Do not enqueue this stale periodic request.
-                if preferredPeriodicOwner == nil {
-                    preferredPeriodicOwner = owner
-                }
-                throw CaptureRequestBrokerError.droppedPeriodicRequest
-            }
             try await waitForTurn(owner: owner)
             return
         }
@@ -203,6 +185,7 @@ final class CaptureRequestBroker {
             if case .halfOpen = circuitState {
                 circuitState = .closed
                 logCircuitRecovery()
+                recoveryStateDidChange(.normal)
             }
             releaseNextWaiter()
 
@@ -233,14 +216,19 @@ final class CaptureRequestBroker {
                 // This was not the beta false-denial signature. Preserve the
                 // manager's normal error handling and let later requests run.
                 circuitState = .closed
+                recoveryStateDidChange(.normal)
             }
             releaseNextWaiter()
         }
     }
 
     private func openCircuit(for delay: TimeInterval, isReopen: Bool = false) {
-        let deadline = now().addingTimeInterval(delay)
-        circuitState = .open(until: deadline)
+        let wallDeadline = wallNow().addingTimeInterval(delay)
+        let monotonicDeadline = monotonicNow() + delay
+        circuitState = .open(
+            monotonicDeadline: monotonicDeadline,
+            wallDeadline: wallDeadline
+        )
         openedCircuitCount += 1
 
         let queuedCount = waiters.count
@@ -249,12 +237,13 @@ final class CaptureRequestBroker {
             "Global ScreenCaptureKit capture circuit \(event) for \(delay) seconds "
                 + "(queuedRequests=\(queuedCount), circuitOpenCount=\(openedCircuitCount))"
         )
+        recoveryStateDidChange(.coolingDown(until: wallDeadline))
 
         let pending = waiters
         waiters.removeAll()
         isRequestInFlight = false
         for waiter in pending {
-            waiter.continuation.resume(returning: .cooldown(deadline))
+            waiter.continuation.resume(returning: .cooldown(wallDeadline))
         }
     }
 

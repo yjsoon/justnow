@@ -655,6 +655,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         captureEventController.handleUnexpectedStop()
     }
 
+    func captureCoordinator(
+        _ coordinator: CaptureCoordinator,
+        didChangeRecoveryState state: CaptureRequestBrokerRecoveryState
+    ) {
+        switch state {
+        case .normal:
+            if coordinator.isCapturing, captureEventController.blockedStatus() == nil {
+                updateCaptureStatus("Active")
+            }
+        case .coolingDown:
+            updateCaptureStatus("Recovering…")
+        }
+    }
+
     @objc private func toggleCapturePause() {
         captureEventController.toggleCapturePause()
     }

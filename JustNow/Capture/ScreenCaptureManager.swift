@@ -187,8 +187,7 @@ class ScreenCaptureManager: NSObject {
         let requestLoopSerial = captureLoopSerial
         guard isCapturing else { return nil }
         return try? await captureImageSerially(
-            expectedLoopSerial: requestLoopSerial,
-            kind: .interactive
+            expectedLoopSerial: requestLoopSerial
         )
     }
 
@@ -266,12 +265,10 @@ class ScreenCaptureManager: NSObject {
     }
 
     private func captureImageSerially(
-        expectedLoopSerial: Int? = nil,
-        kind: CaptureRequestKind
+        expectedLoopSerial: Int? = nil
     ) async throws -> CGImage {
         let image = try await captureRequestBroker.perform(
-            owner: captureRequestOwner,
-            kind: kind
+            owner: captureRequestOwner
         ) { [weak self] in
             guard let self else { throw CancellationError() }
             try Task.checkCancellation()
@@ -312,8 +309,7 @@ class ScreenCaptureManager: NSObject {
         guard isCapturing, !Task.isCancelled, loopSerial == captureLoopSerial else { return }
         do {
             let image = try await captureImageSerially(
-                expectedLoopSerial: loopSerial,
-                kind: .periodic
+                expectedLoopSerial: loopSerial
             )
             guard isCapturing, !Task.isCancelled, loopSerial == captureLoopSerial else { return }
             consecutiveCaptureFailures = 0
@@ -333,11 +329,7 @@ class ScreenCaptureManager: NSObject {
         loopSerial: Int
     ) {
         guard isCapturing, loopSerial == captureLoopSerial else { return }
-        guard case .cooldown(let deadline) = error else {
-            // A periodic tick was already superseded by a newer one. Do not
-            // queue catch-up work or count this as a capture failure.
-            return
-        }
+        guard case .cooldown(let deadline) = error else { return }
 
         captureScheduleRevision += 1
         nextCaptureAt = deadline

@@ -21,10 +21,18 @@ protocol CaptureCoordinatorDelegate: AnyObject {
     )
     func captureCoordinatorDidStopUnexpectedly(_ coordinator: CaptureCoordinator)
     func captureCoordinatorDidUpdateDisplays(_ coordinator: CaptureCoordinator)
+    func captureCoordinator(
+        _ coordinator: CaptureCoordinator,
+        didChangeRecoveryState state: CaptureRequestBrokerRecoveryState
+    )
 }
 
 extension CaptureCoordinatorDelegate {
     func captureCoordinatorDidUpdateDisplays(_ coordinator: CaptureCoordinator) {}
+    func captureCoordinator(
+        _ coordinator: CaptureCoordinator,
+        didChangeRecoveryState state: CaptureRequestBrokerRecoveryState
+    ) {}
 }
 
 /// Owns one ScreenCaptureManager per physical display and fans capture
@@ -41,7 +49,7 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
 
     /// All display managers share one broker so a ScreenCaptureKit false TCC
     /// denial pauses the whole process before another display can retry.
-    private let captureRequestBroker = CaptureRequestBroker()
+    private let captureRequestBroker: CaptureRequestBroker
     private var managed: [UUID: ManagedDisplay] = [:]
     private var captureInterval: TimeInterval = 1.0
     private var captureScale: Int = 2
@@ -50,7 +58,17 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
     private var reconcileTask: Task<Void, Never>?
 
     override init() {
+        let captureRequestBroker = CaptureRequestBroker()
+        self.captureRequestBroker = captureRequestBroker
         super.init()
+        captureRequestBroker.recoveryStateDidChange = { [weak self] state in
+            // Sleep, lock, overlay and user-pause flows mark the coordinator
+            // stopped before awaiting an in-flight ScreenCaptureKit request.
+            // Do not let a late broker result overwrite those more specific
+            // menu states.
+            guard let self, self.isRunning else { return }
+            self.delegate?.captureCoordinator(self, didChangeRecoveryState: state)
+        }
         screenParamsObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
             object: nil,

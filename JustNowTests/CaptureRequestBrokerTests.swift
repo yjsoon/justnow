@@ -15,7 +15,7 @@ final class CaptureRequestBrokerTests: XCTestCase {
         var maximumActiveRequests = 0
 
         let first = Task { @MainActor () throws -> String in
-            try await broker.perform(owner: firstOwner, kind: .interactive) {
+            try await broker.perform(owner: firstOwner) {
                 started.append("first")
                 activeRequests += 1
                 maximumActiveRequests = max(maximumActiveRequests, activeRequests)
@@ -27,7 +27,7 @@ final class CaptureRequestBrokerTests: XCTestCase {
         await waitUntil { gate.waiterCount == 1 }
 
         let second = Task { @MainActor () throws -> String in
-            try await broker.perform(owner: secondOwner, kind: .interactive) {
+            try await broker.perform(owner: secondOwner) {
                 started.append("second")
                 activeRequests += 1
                 maximumActiveRequests = max(maximumActiveRequests, activeRequests)
@@ -57,7 +57,7 @@ final class CaptureRequestBrokerTests: XCTestCase {
 
         let first = Task { @MainActor () -> Error? in
             do {
-                try await broker.perform(owner: UUID(), kind: .interactive) {
+                try await broker.perform(owner: UUID()) {
                     await gate.wait()
                     throw self.falsePermissionDenial()
                 }
@@ -70,7 +70,7 @@ final class CaptureRequestBrokerTests: XCTestCase {
 
         let second = Task { @MainActor () -> Error? in
             do {
-                try await broker.perform(owner: UUID(), kind: .interactive) {
+                try await broker.perform(owner: UUID()) {
                     secondOSCalls += 1
                 }
                 return nil
@@ -122,10 +122,10 @@ final class CaptureRequestBrokerTests: XCTestCase {
         _ = await captureError(from: broker, owner: UUID()) {
             throw self.falsePermissionDenial()
         }
-        clock.date = clock.date.addingTimeInterval(CaptureFailureRecovery.falsePermissionDenialDelay)
+        clock.advance(by: CaptureFailureRecovery.falsePermissionDenialDelay)
 
         let probe = Task { @MainActor () throws -> String in
-            try await broker.perform(owner: UUID(), kind: .interactive) {
+            try await broker.perform(owner: UUID()) {
                 started.append("probe")
                 await probeGate.wait()
                 return "probe"
@@ -134,7 +134,7 @@ final class CaptureRequestBrokerTests: XCTestCase {
         await waitUntil { probeGate.waiterCount == 1 }
 
         let queued = Task { @MainActor () throws -> String in
-            try await broker.perform(owner: UUID(), kind: .interactive) {
+            try await broker.perform(owner: UUID()) {
                 started.append("queued")
                 return "queued"
             }
@@ -160,7 +160,7 @@ final class CaptureRequestBrokerTests: XCTestCase {
         _ = await captureError(from: broker, owner: UUID()) {
             throw self.falsePermissionDenial()
         }
-        clock.date = clock.date.addingTimeInterval(CaptureFailureRecovery.falsePermissionDenialDelay)
+        clock.advance(by: CaptureFailureRecovery.falsePermissionDenialDelay)
 
         let probeError = await captureError(from: broker, owner: UUID()) {
             throw self.falsePermissionDenial()
@@ -186,7 +186,7 @@ final class CaptureRequestBrokerTests: XCTestCase {
         _ = await captureError(from: broker, owner: UUID()) {
             throw self.falsePermissionDenial()
         }
-        clock.date = clock.date.addingTimeInterval(CaptureFailureRecovery.falsePermissionDenialDelay)
+        clock.advance(by: CaptureFailureRecovery.falsePermissionDenialDelay)
 
         let probe = Task { @MainActor () -> Error? in
             await self.captureError(from: broker, owner: UUID()) {
@@ -220,7 +220,7 @@ final class CaptureRequestBrokerTests: XCTestCase {
         var started: [String] = []
 
         let first = Task { @MainActor () throws -> String in
-            try await broker.perform(owner: firstOwner, kind: .interactive) {
+            try await broker.perform(owner: firstOwner) {
                 started.append("first")
                 await gate.wait()
                 return "first"
@@ -234,7 +234,7 @@ final class CaptureRequestBrokerTests: XCTestCase {
             }
         }
         let surviving = Task { @MainActor () throws -> String in
-            try await broker.perform(owner: survivingOwner, kind: .interactive) {
+            try await broker.perform(owner: survivingOwner) {
                 started.append("surviving")
                 return "surviving"
             }
@@ -285,7 +285,7 @@ final class CaptureRequestBrokerTests: XCTestCase {
         }
         XCTAssertEqual((firstError as NSError?)?.code, 1004)
 
-        try await broker.perform(owner: UUID(), kind: .interactive) {
+        try await broker.perform(owner: UUID()) {
             calls += 1
         }
         XCTAssertEqual(calls, 1)
@@ -301,77 +301,133 @@ final class CaptureRequestBrokerTests: XCTestCase {
         }
         XCTAssertEqual((denialError as NSError?)?.code, -3801)
 
-        try await broker.perform(owner: UUID(), kind: .interactive) {
+        try await broker.perform(owner: UUID()) {
             nextRequestCalls += 1
         }
         XCTAssertEqual(nextRequestCalls, 1)
     }
 
-    func testPeriodicRequestIsDroppedRatherThanQueuedBehindActiveRequest() async throws {
+    func testPeriodicRequestWaitsBehindActiveRequest() async throws {
         let clock = BrokerTestClock()
         let broker = makeBroker(clock: clock)
         let gate = BrokerTestGate()
         var periodicCalls = 0
 
         let active = Task { @MainActor () throws -> Void in
-            try await broker.perform(owner: UUID(), kind: .interactive) {
+            try await broker.perform(owner: UUID()) {
                 await gate.wait()
             }
         }
         await waitUntil { gate.waiterCount == 1 }
 
-        let error = await captureError(from: broker, owner: UUID(), kind: .periodic) {
-            periodicCalls += 1
+        let periodic = Task { @MainActor () throws -> Void in
+            try await broker.perform(owner: UUID()) {
+                periodicCalls += 1
+            }
         }
-        XCTAssertEqual(error as? CaptureRequestBrokerError, .droppedPeriodicRequest)
+        await settleTasks()
         XCTAssertEqual(periodicCalls, 0)
 
         gate.resumeNext()
         try await active.value
+        try await periodic.value
+        XCTAssertEqual(periodicCalls, 1)
     }
 
-    func testPeriodicOwnerThatLosesAlignedTickGetsNextFreshTurn() async throws {
+    func testThreeAlignedPeriodicOwnersRunInFIFOOrder() async throws {
         let clock = BrokerTestClock()
         let broker = makeBroker(clock: clock)
         let gate = BrokerTestGate()
         let firstOwner = UUID()
-        let losingOwner = UUID()
+        let secondOwner = UUID()
+        let thirdOwner = UUID()
         var calls: [String] = []
 
         let first = Task { @MainActor () throws -> Void in
-            try await broker.perform(owner: firstOwner, kind: .periodic) {
+            try await broker.perform(owner: firstOwner) {
                 calls.append("first")
                 await gate.wait()
             }
         }
         await waitUntil { gate.waiterCount == 1 }
 
-        let losingTick = await captureError(
-            from: broker,
-            owner: losingOwner,
-            kind: .periodic
-        ) {
-            calls.append("losing-stale")
+        let second = Task { @MainActor () throws -> Void in
+            try await broker.perform(owner: secondOwner) {
+                calls.append("second")
+            }
         }
-        XCTAssertEqual(losingTick as? CaptureRequestBrokerError, .droppedPeriodicRequest)
+        await settleTasks()
+        let third = Task { @MainActor () throws -> Void in
+            try await broker.perform(owner: thirdOwner) {
+                calls.append("third")
+            }
+        }
+        await settleTasks()
         XCTAssertEqual(calls, ["first"])
 
         gate.resumeNext()
         try await first.value
+        try await second.value
+        try await third.value
+        XCTAssertEqual(calls, ["first", "second", "third"])
+    }
 
-        let winnerNextTick = await captureError(
-            from: broker,
-            owner: firstOwner,
-            kind: .periodic
-        ) {
-            calls.append("first-again")
-        }
-        XCTAssertEqual(winnerNextTick as? CaptureRequestBrokerError, .droppedPeriodicRequest)
+    func testWallClockJumpDoesNotExpireCooldown() async {
+        let clock = BrokerTestClock()
+        let broker = makeBroker(clock: clock)
+        var calls = 0
 
-        try await broker.perform(owner: losingOwner, kind: .periodic) {
-            calls.append("losing-fresh")
+        _ = await captureError(from: broker, owner: UUID()) {
+            throw self.falsePermissionDenial()
         }
-        XCTAssertEqual(calls, ["first", "losing-fresh"])
+        clock.date = clock.date.addingTimeInterval(3_600)
+
+        let error = await captureError(from: broker, owner: UUID()) {
+            calls += 1
+        }
+
+        XCTAssertEqual(calls, 0)
+        XCTAssertNotNil(error as? CaptureRequestBrokerError)
+    }
+
+    func testRecoveryStateReportsCooldownAndRecovery() async throws {
+        let clock = BrokerTestClock()
+        let broker = makeBroker(clock: clock)
+        var states: [CaptureRequestBrokerRecoveryState] = []
+        broker.recoveryStateDidChange = { states.append($0) }
+
+        _ = await captureError(from: broker, owner: UUID()) {
+            throw self.falsePermissionDenial()
+        }
+        XCTAssertEqual(
+            states,
+            [.coolingDown(until: clock.date.addingTimeInterval(CaptureFailureRecovery.falsePermissionDenialDelay))]
+        )
+
+        clock.advance(by: CaptureFailureRecovery.falsePermissionDenialDelay)
+        try await broker.perform(owner: UUID()) {}
+        XCTAssertEqual(states.last, .normal)
+    }
+
+    func testOpenCircuitRepublishesRecoveryStateAfterCaptureRestart() async {
+        let clock = BrokerTestClock()
+        let broker = makeBroker(clock: clock)
+        var states: [CaptureRequestBrokerRecoveryState] = []
+        broker.recoveryStateDidChange = { states.append($0) }
+
+        _ = await captureError(from: broker, owner: UUID()) {
+            throw self.falsePermissionDenial()
+        }
+        states.removeAll()
+
+        _ = await captureError(from: broker, owner: UUID()) {
+            XCTFail("An open circuit must not call the OS request")
+        }
+
+        XCTAssertEqual(
+            states,
+            [.coolingDown(until: clock.date.addingTimeInterval(CaptureFailureRecovery.falsePermissionDenialDelay))]
+        )
     }
 
     private func makeBroker(
@@ -380,7 +436,8 @@ final class CaptureRequestBrokerTests: XCTestCase {
         log: @escaping @MainActor (String) -> Void = { _ in }
     ) -> CaptureRequestBroker {
         CaptureRequestBroker(
-            now: { clock.date },
+            wallNow: { clock.date },
+            monotonicNow: { clock.monotonicTime },
             hasScreenRecordingPermission: { hasScreenRecordingPermission },
             log: log
         )
@@ -389,11 +446,10 @@ final class CaptureRequestBrokerTests: XCTestCase {
     private func captureError(
         from broker: CaptureRequestBroker,
         owner: UUID,
-        kind: CaptureRequestKind = .interactive,
         operation: @escaping @MainActor () async throws -> Void
     ) async -> Error? {
         do {
-            try await broker.perform(owner: owner, kind: kind, operation: operation)
+            try await broker.perform(owner: owner, operation: operation)
             return nil
         } catch {
             return error
@@ -435,6 +491,12 @@ final class CaptureRequestBrokerTests: XCTestCase {
 @MainActor
 private final class BrokerTestClock {
     var date = Date(timeIntervalSinceReferenceDate: 1_000)
+    var monotonicTime: TimeInterval = 1_000
+
+    func advance(by interval: TimeInterval) {
+        date = date.addingTimeInterval(interval)
+        monotonicTime += interval
+    }
 }
 
 @MainActor
