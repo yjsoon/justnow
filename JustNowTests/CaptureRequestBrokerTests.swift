@@ -391,10 +391,13 @@ final class CaptureRequestBrokerTests: XCTestCase {
         let clock = BrokerTestClock()
         let broker = makeBroker(clock: clock)
         var calls = 0
+        let expectedDeadline = clock.monotonicTime
+            + CaptureFailureRecovery.falsePermissionDenialDelay
 
         _ = await captureError(from: broker, owner: UUID()) {
             throw self.falsePermissionDenial()
         }
+        clock.advance(by: CaptureFailureRecovery.falsePermissionDenialDelay / 2)
 
         let error = await captureError(from: broker, owner: UUID()) {
             calls += 1
@@ -403,10 +406,7 @@ final class CaptureRequestBrokerTests: XCTestCase {
         XCTAssertEqual(calls, 0)
         XCTAssertEqual(
             error as? CaptureRequestBrokerError,
-            .cooldown(
-                untilMonotonicTime: clock.monotonicTime
-                    + CaptureFailureRecovery.falsePermissionDenialDelay
-            )
+            .cooldown(untilMonotonicTime: expectedDeadline)
         )
     }
 

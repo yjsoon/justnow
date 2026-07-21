@@ -665,7 +665,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 updateCaptureStatus("Active")
             }
         case .coolingDown:
-            updateCaptureStatus("Recovering…")
+            if captureEventController.blockedStatus() == nil {
+                updateCaptureStatus("Recovering…")
+            }
         }
     }
 
