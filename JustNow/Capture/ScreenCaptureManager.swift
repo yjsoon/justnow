@@ -28,10 +28,15 @@ enum ScreenshotCaptureExecution {
         func withPermit<T: Sendable>(
             id: UUID,
             cancellation: RequestCancellation,
+            waiterDidEnqueue: (@Sendable () -> Void)?,
             _ operation: @escaping @Sendable () async throws -> T
         ) async throws -> T {
             try cancellation.check()
-            try await acquire(id: id)
+            try await acquire(
+                id: id,
+                cancellation: cancellation,
+                waiterDidEnqueue: waiterDidEnqueue
+            )
             defer { release() }
             try cancellation.check()
             return try await operation()
@@ -45,13 +50,21 @@ enum ScreenshotCaptureExecution {
             waiter.continuation.resume(throwing: CancellationError())
         }
 
-        private func acquire(id: UUID) async throws {
+        private func acquire(
+            id: UUID,
+            cancellation: RequestCancellation,
+            waiterDidEnqueue: (@Sendable () -> Void)?
+        ) async throws {
+            // Actor serialisation makes this check-and-enqueue atomic with
+            // cancel(id:), closing the cancel-before-enqueue race.
+            try cancellation.check()
             guard isHeld else {
                 isHeld = true
                 return
             }
             try await withCheckedThrowingContinuation { continuation in
                 waiters.append(Waiter(id: id, continuation: continuation))
+                waiterDidEnqueue?()
             }
         }
 
@@ -124,7 +137,7 @@ enum ScreenshotCaptureExecution {
     }
 
     nonisolated static func run<T: Sendable>(
-        workerDidStart: (@Sendable () -> Void)? = nil,
+        waiterDidEnqueue: (@Sendable () -> Void)? = nil,
         _ operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
         let requestID = UUID()
@@ -134,13 +147,13 @@ enum ScreenshotCaptureExecution {
             try await withCheckedThrowingContinuation { continuation in
                 guard race.install(continuation) else { return }
                 Task.detached(priority: .userInitiated) {
-                    workerDidStart?()
                     let result: Result<T, Error>
                     do {
                         result = .success(
                             try await requestGate.withPermit(
                                 id: requestID,
                                 cancellation: cancellation,
+                                waiterDidEnqueue: waiterDidEnqueue,
                                 operation
                             )
                         )
@@ -313,7 +326,12 @@ class ScreenCaptureManager: NSObject {
         let content: SCShareableContent
         do {
             content = try await captureRequestBroker.perform(owner: captureRequestOwner) {
-                try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                try await ScreenshotCaptureExecution.run {
+                    try await SCShareableContent.excludingDesktopWindows(
+                        false,
+                        onScreenWindowsOnly: true
+                    )
+                }
             }
         } catch {
             // Permission can be revoked between the preflight above and the

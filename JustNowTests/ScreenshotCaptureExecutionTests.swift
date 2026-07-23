@@ -34,7 +34,7 @@ final class ScreenshotCaptureExecutionTests: XCTestCase {
 
         let second = Task {
             try await ScreenshotCaptureExecution.run(
-                workerDidStart: {
+                waiterDidEnqueue: {
                     Task {
                         await state.noteSecondWorkerStarted()
                     }
@@ -67,7 +67,7 @@ final class ScreenshotCaptureExecutionTests: XCTestCase {
         let queued = Task {
             do {
                 try await ScreenshotCaptureExecution.run(
-                    workerDidStart: {
+                    waiterDidEnqueue: {
                         Task {
                             await state.noteQueuedWorkerStarted()
                         }
