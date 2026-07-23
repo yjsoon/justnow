@@ -295,13 +295,60 @@ final class CaptureStartControllerTests: XCTestCase {
         let controller = CaptureStartController()
 
         controller.cancelPendingStart()
+        let stopGeneration = controller.generationSnapshot()
         // Models a late broker cooldown callback before the queued coordinator
         // stop begins executing.
         controller.beginDeferredStart()
         XCTAssertTrue(controller.hasPendingStart)
 
-        // The stop completion performs the same final cancellation.
+        controller.completeDeferredStartIfNoNewerRequest(since: stopGeneration)
+        XCTAssertFalse(controller.hasPendingStart)
+    }
+
+    func testStopCompletionDoesNotCancelNewerStartRequest() async {
+        let sleeper = CaptureStartControllerSleepProbe()
+        let controller = CaptureStartController(
+            sleep: { duration in
+                await sleeper.sleep(for: duration)
+            }
+        )
+        var startAttempts = 0
+
         controller.cancelPendingStart()
+        let stopGeneration = controller.generationSnapshot()
+        controller.beginDeferredStart()
+
+        controller.scheduleStart(
+            request: CaptureStartRequest(
+                status: "Resuming...",
+                initialDelay: .seconds(1),
+                attempt: CaptureStartAttempt(
+                    successMessage: "started",
+                    failurePrefix: "failed",
+                    failureStatus: "Error"
+                )
+            ),
+            canStartCapture: { true },
+            blockedStatus: { _ in nil },
+            updateStatus: { _ in },
+            startCapture: { _ in
+                startAttempts += 1
+                return .started
+            }
+        )
+
+        await waitUntil {
+            await sleeper.recordedDurations() == [.seconds(1)]
+                && controller.hasPendingStart
+        }
+
+        controller.completeDeferredStartIfNoNewerRequest(since: stopGeneration)
+        XCTAssertTrue(controller.hasPendingStart)
+
+        await sleeper.resumeAll()
+        await waitUntil { startAttempts == 1 && !controller.hasPendingStart }
+
+        XCTAssertEqual(startAttempts, 1)
         XCTAssertFalse(controller.hasPendingStart)
     }
 

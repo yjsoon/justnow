@@ -19,6 +19,10 @@ enum CaptureStartResult: Equatable {
     case failed
 }
 
+struct CaptureStartGeneration: Equatable {
+    fileprivate let value: Int
+}
+
 struct CaptureStartRequest {
     let status: String
     let includeOverlayInBlockedStatus: Bool
@@ -71,6 +75,15 @@ final class CaptureStartController {
     func completeDeferredStart() {
         deferredCompletionGeneration += 1
         isStartDeferred = false
+    }
+
+    func generationSnapshot() -> CaptureStartGeneration {
+        CaptureStartGeneration(value: pendingStartGeneration)
+    }
+
+    func completeDeferredStartIfNoNewerRequest(since generation: CaptureStartGeneration) {
+        guard generation.value == pendingStartGeneration else { return }
+        completeDeferredStart()
     }
 
     func beginDeferredStart() {

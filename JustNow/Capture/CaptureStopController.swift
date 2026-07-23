@@ -35,9 +35,13 @@ final class CaptureStopController {
         }
     }
 
-    func scheduleStop(_ request: CaptureStopRequest) {
+    func scheduleStop(
+        _ request: CaptureStopRequest,
+        afterStop: @escaping () -> Void = {}
+    ) {
         Task { @MainActor [weak self] in
             await self?.performStop(request)
+            afterStop()
         }
     }
 

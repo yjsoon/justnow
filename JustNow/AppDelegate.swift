@@ -121,11 +121,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         updateStatus: { [weak self] in self?.updateCaptureStatus($0) },
         stopCapture: { [weak self] in
             await self?.captureCoordinator.stopCapture()
-            // A broker cooldown callback can arrive after lifecycle code
-            // cancels a pending start but before this queued stop flips the
-            // coordinator to stopped. Clear any deferred marker restored in
-            // that window once coordinator recovery is definitively cancelled.
-            self?.captureStartController.cancelPendingStart()
         },
         endForegroundActivity: { [weak self] in
             self?.appNapPreventer.stopActivity()
@@ -153,7 +148,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         },
         scheduleStart: { [weak self] in self?.scheduleCaptureStart($0) },
         cancelPendingStart: { [weak self] in self?.captureStartController.cancelPendingStart() },
-        scheduleStop: { [weak self] in self?.captureStopController.scheduleStop($0) },
+        scheduleStop: { [weak self] request in
+            guard let self else { return }
+            // Capture this synchronously, immediately after the lifecycle
+            // controller cancelled its old start. A newer resume advances the
+            // generation while the queued stop awaits and must survive.
+            let startGeneration = self.captureStartController.generationSnapshot()
+            self.captureStopController.scheduleStop(request) { [weak self] in
+                self?.captureStartController.completeDeferredStartIfNoNewerRequest(
+                    since: startGeneration
+                )
+            }
+        },
         updateStatus: { [weak self] in self?.updateCaptureStatus($0) },
         enableBlackFrameFilter: { [weak self] in self?.frameBuffer?.enableBlackFrameFilter(for: $0) },
         endForegroundActivity: { [weak self] in self?.appNapPreventer.stopActivity() },
@@ -623,6 +629,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             updateCaptureStatus(
                 captureRecoveryNeedsAttention ? "Capture Help Needed" : "Recovering…"
             )
+            if captureRecoveryNeedsAttention {
+                schedulePersistentCaptureRecoveryAlert()
+            }
             return .deferred
         } catch {
             let detail = DiagnosticsLogFormat.describe(error)
@@ -701,7 +710,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 // probe succeeds, before a display manager necessarily starts.
                 // Keep deferred lifecycle ownership until capture is truly live.
                 captureStartController.completeDeferredStart()
-                updateCaptureStatus("Active")
+                handleSuccessfulCaptureStart()
             }
         case .coolingDown:
             if captureEventController.blockedStatus() == nil {
@@ -714,7 +723,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             if captureEventController.blockedStatus() == nil {
                 captureStartController.beginDeferredStart()
                 updateCaptureStatus("Capture Help Needed")
-                showPersistentCaptureRecoveryAlert()
+                schedulePersistentCaptureRecoveryAlert()
             }
         }
     }
@@ -1018,6 +1027,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             panel: .screenRecording,
             sourceFrameInScreen: sourceFrame.isEmpty ? nil : sourceFrame
         )
+    }
+
+    private func schedulePersistentCaptureRecoveryAlert() {
+        // Broker recovery callbacks run while its request permit is still held.
+        // Defer modal presentation so queued callers are released first.
+        Task { @MainActor [weak self] in
+            self?.showPersistentCaptureRecoveryAlert()
+        }
     }
 
     private func presentPermissionAlert(status: String) {
