@@ -278,6 +278,19 @@ final class CaptureStartControllerTests: XCTestCase {
         XCTAssertFalse(controller.hasPendingStart)
     }
 
+    func testLaterCooldownReestablishesDeferredLifecycleOwnership() {
+        let controller = CaptureStartController()
+
+        controller.beginDeferredStart()
+        XCTAssertTrue(controller.hasPendingStart)
+
+        controller.completeDeferredStart()
+        XCTAssertFalse(controller.hasPendingStart)
+
+        controller.beginDeferredStart()
+        XCTAssertTrue(controller.hasPendingStart)
+    }
+
     private func settleScheduledTasks() async {
         await Task.yield()
         await Task.yield()

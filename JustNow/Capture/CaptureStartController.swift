@@ -73,6 +73,10 @@ final class CaptureStartController {
         isStartDeferred = false
     }
 
+    func beginDeferredStart() {
+        isStartDeferred = true
+    }
+
     func scheduleStart(
         request: CaptureStartRequest,
         canStartCapture: @escaping () -> Bool,

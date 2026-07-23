@@ -303,6 +303,37 @@ final class CaptureRequestBrokerTests: XCTestCase {
         )
     }
 
+    func testCoordinatorPublishesReadinessAfterEverySuccessfulReconciliation() {
+        XCTAssertTrue(
+            CaptureCoordinator.shouldPublishReconciledReadiness(
+                isRunning: true,
+                isCapturing: true,
+                isCircuitClosed: true
+            )
+        )
+        XCTAssertFalse(
+            CaptureCoordinator.shouldPublishReconciledReadiness(
+                isRunning: false,
+                isCapturing: true,
+                isCircuitClosed: true
+            )
+        )
+        XCTAssertFalse(
+            CaptureCoordinator.shouldPublishReconciledReadiness(
+                isRunning: true,
+                isCapturing: false,
+                isCircuitClosed: true
+            )
+        )
+        XCTAssertFalse(
+            CaptureCoordinator.shouldPublishReconciledReadiness(
+                isRunning: true,
+                isCapturing: true,
+                isCircuitClosed: false
+            )
+        )
+    }
+
     func testCooldownRestartSchedulerCancellationSuppressesRetry() async {
         let sleepGate = BrokerTestGate()
         var retryCount = 0

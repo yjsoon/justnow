@@ -217,6 +217,14 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
         state != .normal || activeReconciliationCount == 0
     }
 
+    nonisolated static func shouldPublishReconciledReadiness(
+        isRunning: Bool,
+        isCapturing: Bool,
+        isCircuitClosed: Bool
+    ) -> Bool {
+        isRunning && isCapturing && isCircuitClosed
+    }
+
     func stopCapture() async {
         isRunning = false
         reconcileTask?.cancel()
@@ -378,9 +386,11 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
         }
 
         delegate?.captureCoordinatorDidUpdateDisplays(self)
-        if activeReconciliationCount == 1,
-           isCapturing,
-           captureRequestBroker.isCircuitClosed {
+        if Self.shouldPublishReconciledReadiness(
+            isRunning: isRunning,
+            isCapturing: isCapturing,
+            isCircuitClosed: captureRequestBroker.isCircuitClosed
+        ) {
             // This is the authoritative ready signal. A broker half-open probe
             // may report healthy earlier, before every missing display starts.
             delegate?.captureCoordinator(self, didChangeRecoveryState: .normal)

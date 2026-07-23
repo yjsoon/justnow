@@ -699,10 +699,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 updateCaptureStatus("Active")
             }
         case .coolingDown:
+            captureStartController.beginDeferredStart()
             if captureEventController.blockedStatus() == nil {
                 updateCaptureStatus("Recovering…")
             }
         case .needsAttention:
+            captureStartController.beginDeferredStart()
             captureRecoveryNeedsAttention = true
             updatePermissionHelpMenuItem()
             if captureEventController.blockedStatus() == nil {
