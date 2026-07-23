@@ -629,10 +629,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 applyBlockedCaptureStatusIfAvailable()
                 return .failed
             }
-            if captureCoordinator.isCapturing {
-                handleSuccessfulCaptureStart(successMessage: successMessage)
-                return .started
-            }
             try await captureCoordinator.startCapture()
             guard !Task.isCancelled else { return .failed }
             guard captureEventController.canStartCapture() else {
