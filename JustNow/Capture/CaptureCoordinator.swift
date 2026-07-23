@@ -128,6 +128,7 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
     /// Suppress that intermediate healthy signal until the full reconciliation
     /// confirms capture is live and the circuit stayed closed.
     private var activeReconciliationCount = 0
+    private var fallbackRestartToken: TimeInterval = -1
     /// Retries display reconciliation shortly after the shared circuit's
     /// cooldown expires, so a restart blocked mid-episode is not stranded in
     /// "Stopped" until the next unrelated system event.
@@ -445,15 +446,33 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
             "Capture",
             "Capture start deferred; retrying in \(Int(delay)) seconds when the shared ScreenCaptureKit circuit cooldown ends"
         )
-        cooldownRestartScheduler.schedule(
-            deadline: deadline,
+        scheduleCaptureRestart(deadline: deadline, delay: .seconds(delay))
+    }
+
+    private func scheduleFallbackRestart() {
+        guard isRunning, !isCapturing else { return }
+        fallbackRestartToken -= 1
+        let delay = CaptureFailureRecovery.falsePermissionDenialDelay
+        DiagnosticsLog.shared.log(
+            "Capture",
+            "Capture recovery found no usable display; retrying reconciliation in \(Int(delay)) seconds"
+        )
+        scheduleCaptureRestart(
+            deadline: fallbackRestartToken,
             delay: .seconds(delay)
-        ) { [weak self] in
+        )
+    }
+
+    private func scheduleCaptureRestart(deadline: TimeInterval, delay: Duration) {
+        cooldownRestartScheduler.schedule(deadline: deadline, delay: delay) { [weak self] in
             guard let self else { return }
             guard !Task.isCancelled, self.isRunning else { return }
             do {
                 try await self.reconcileDisplays(startNewManagers: true)
                 guard self.isRunning, !Task.isCancelled else { return }
+                if !self.isCapturing {
+                    self.scheduleFallbackRestart()
+                }
             } catch {
                 guard self.isRunning, !(error is CancellationError) else { return }
                 if case CaptureError.permissionDenied = error {
@@ -465,10 +484,11 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
                         "Cooldown restart found screen recording permission revoked; \(CaptureSystemState.summary())"
                     )
                     self.delegate?.captureCoordinatorDidStopUnexpectedly(self)
+                } else if self.captureRequestBroker.openCircuitMonotonicDeadline == nil {
+                    self.scheduleFallbackRestart()
                 }
                 // Cooldown failures already rescheduled another restart from
-                // inside reconcileDisplays; other errors keep the existing
-                // reconcile-on-system-event behaviour.
+                // inside reconcileDisplays.
             }
         }
     }

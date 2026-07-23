@@ -63,6 +63,50 @@ final class CaptureStopControllerTests: XCTestCase {
             ]
         )
     }
+
+    func testWaitForPendingStopOrdersLaterStartAfterStopCompletion() async {
+        let stopGate = CaptureStopControllerTestGate()
+        var events: [String] = []
+        let controller = CaptureStopController(
+            updateStatus: { _ in },
+            stopCapture: {
+                events.append("stop-enter")
+                await stopGate.wait()
+                events.append("stop-exit")
+            },
+            endForegroundActivity: {}
+        )
+
+        controller.scheduleStop(CaptureStopRequest(status: "Stopping"))
+        await waitUntil { events == ["stop-enter"] }
+
+        let laterStart = Task { @MainActor in
+            await controller.waitForPendingStop()
+            events.append("start")
+        }
+        await Task.yield()
+        XCTAssertEqual(events, ["stop-enter"])
+
+        await stopGate.resume()
+        await laterStart.value
+        XCTAssertEqual(events, ["stop-enter", "stop-exit", "start"])
+    }
+
+    private func waitUntil(
+        timeout: Duration = .seconds(1),
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        condition: @escaping @MainActor () -> Bool
+    ) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while clock.now < deadline {
+            if condition() { return }
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Timed out waiting for condition", file: file, line: line)
+    }
 }
 
 @MainActor
@@ -83,5 +127,18 @@ private final class CaptureStopControllerRecorder {
 
     func recordLog(_ message: String) {
         events.append("log:\(message)")
+    }
+}
+
+private actor CaptureStopControllerTestGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
     }
 }

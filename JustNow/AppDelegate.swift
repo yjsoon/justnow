@@ -604,6 +604,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         }
 
         do {
+            // Stop and start requests are scheduled by separate lifecycle
+            // tasks. A later resume must wait for any already-queued stop so
+            // the newest user/system intent wins deterministically.
+            await captureStopController.waitForPendingStop()
+            guard !Task.isCancelled, captureEventController.canStartCapture() else {
+                applyBlockedCaptureStatusIfAvailable()
+                return .failed
+            }
             try await captureCoordinator.startCapture()
             guard !Task.isCancelled else { return .failed }
             guard captureEventController.canStartCapture() else {

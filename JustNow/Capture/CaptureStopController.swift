@@ -19,6 +19,8 @@ final class CaptureStopController {
     private let stopCapture: () async -> Void
     private let endForegroundActivity: () -> Void
     private let logger: (String) -> Void
+    private var pendingStopTask: Task<Void, Never>?
+    private var stopGeneration = 0
 
     init(
         updateStatus: @escaping (String) -> Void,
@@ -39,9 +41,21 @@ final class CaptureStopController {
         _ request: CaptureStopRequest,
         afterStop: @escaping () -> Void = {}
     ) {
-        Task { @MainActor [weak self] in
-            await self?.performStop(request)
+        stopGeneration += 1
+        let generation = stopGeneration
+        pendingStopTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performStop(request)
             afterStop()
+            if generation == self.stopGeneration {
+                self.pendingStopTask = nil
+            }
+        }
+    }
+
+    func waitForPendingStop() async {
+        while let pendingStopTask {
+            await pendingStopTask.value
         }
     }
 
