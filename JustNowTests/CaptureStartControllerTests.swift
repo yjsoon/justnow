@@ -171,11 +171,15 @@ final class CaptureStartControllerTests: XCTestCase {
             }
         )
 
-        await waitUntil { !controller.hasPendingStart }
+        await waitUntil { startAttempts == ["first"] }
 
         XCTAssertEqual(startAttempts, ["first"])
         let recordedDurations = await sleeper.recordedDurations()
         XCTAssertTrue(recordedDurations.isEmpty)
+        XCTAssertTrue(controller.hasPendingStart)
+
+        controller.cancelPendingStart()
+        XCTAssertFalse(controller.hasPendingStart)
     }
 
     private func settleScheduledTasks() async {

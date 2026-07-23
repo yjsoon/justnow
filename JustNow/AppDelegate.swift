@@ -689,6 +689,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     ) {
         switch state {
         case .normal:
+            captureStartController.completeDeferredStart()
             captureRecoveryNeedsAttention = false
             updatePermissionHelpMenuItem()
             if coordinator.isCapturing, captureEventController.blockedStatus() == nil {

@@ -117,7 +117,7 @@ final class CaptureEventController {
             || current.hasPendingStart
             || (lifecycle.isPausedForOverlay && lifecycle.wasCapturingBeforeOverlay)
         let shouldStopCapture = lifecycle.pauseForSession(
-            captureWasActive: current.isCapturing,
+            captureWasActive: current.isCapturing || current.hasPendingStart,
             shouldResumeCapture: shouldResumeCaptureAfterSession
         )
         cancelPendingStart()
@@ -207,7 +207,7 @@ final class CaptureEventController {
             || current.hasPendingStart
             || (lifecycle.isPausedForSession && lifecycle.wasCapturingBeforeSession)
         let shouldStopCapture = lifecycle.pauseForOverlay(
-            captureWasActive: current.isCapturing,
+            captureWasActive: current.isCapturing || current.hasPendingStart,
             shouldResumeCapture: shouldResumeCaptureAfterOverlay
         )
         cancelPendingStart()

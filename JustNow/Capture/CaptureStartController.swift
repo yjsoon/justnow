@@ -46,6 +46,7 @@ final class CaptureStartController {
     private let sleep: (Duration) async -> Void
     private var pendingStartTask: Task<Void, Never>?
     private var pendingStartGeneration = 0
+    private var isStartDeferred = false
 
     init(
         sleep: @escaping (Duration) async -> Void = { duration in
@@ -56,13 +57,18 @@ final class CaptureStartController {
     }
 
     var hasPendingStart: Bool {
-        pendingStartTask != nil
+        pendingStartTask != nil || isStartDeferred
     }
 
     func cancelPendingStart() {
         pendingStartGeneration += 1
         pendingStartTask?.cancel()
         pendingStartTask = nil
+        isStartDeferred = false
+    }
+
+    func completeDeferredStart() {
+        isStartDeferred = false
     }
 
     func scheduleStart(
@@ -103,6 +109,13 @@ final class CaptureStartController {
             }
 
             let result = await startCapture(request.attempt)
+            if result == .deferred {
+                // The coordinator owns the actual cooldown timer, but the app
+                // lifecycle must still see pending recovery so overlay/session
+                // transitions can stop and cancel that coordinator work.
+                self.isStartDeferred = true
+                return
+            }
             guard result == .failed, let retry = request.retry else { return }
 
             await sleep(retry.delay)
