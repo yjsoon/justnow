@@ -322,7 +322,12 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
             // while it is cooling down after a false TCC denial, no code path
             // may touch ScreenCaptureKit and risk another native prompt.
             content = try await captureRequestBroker.perform(owner: reconcileRequestOwner) {
-                try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                try await ScreenshotCaptureExecution.run {
+                    try await SCShareableContent.excludingDesktopWindows(
+                        false,
+                        onScreenWindowsOnly: true
+                    )
+                }
             }
         } catch {
             // A genuine revocation must reach the app's permission flow even
