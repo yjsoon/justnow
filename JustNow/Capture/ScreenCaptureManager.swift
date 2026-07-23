@@ -16,6 +16,72 @@ enum CaptureError: Error {
 }
 
 enum ScreenshotCaptureExecution {
+    private actor RequestGate {
+        private var isHeld = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+
+        func withPermit<T: Sendable>(
+            _ operation: @escaping @Sendable () async throws -> T
+        ) async throws -> T {
+            await acquire()
+            defer { release() }
+            return try await operation()
+        }
+
+        private func acquire() async {
+            guard isHeld else {
+                isHeld = true
+                return
+            }
+            await withCheckedContinuation { continuation in
+                waiters.append(continuation)
+            }
+        }
+
+        private func release() {
+            guard !waiters.isEmpty else {
+                isHeld = false
+                return
+            }
+            waiters.removeFirst().resume()
+        }
+    }
+
+    private final class CancellationRace<T: Sendable>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<T, Error>?
+        private var resolvedResult: Result<T, Error>?
+
+        /// Returns false when cancellation won before the continuation was
+        /// installed, so the caller can avoid starting unnecessary OS work.
+        func install(_ continuation: CheckedContinuation<T, Error>) -> Bool {
+            lock.lock()
+            if let resolvedResult {
+                lock.unlock()
+                continuation.resume(with: resolvedResult)
+                return false
+            }
+            self.continuation = continuation
+            lock.unlock()
+            return true
+        }
+
+        func resolve(_ result: Result<T, Error>) {
+            lock.lock()
+            guard resolvedResult == nil else {
+                lock.unlock()
+                return
+            }
+            resolvedResult = result
+            let continuation = self.continuation
+            self.continuation = nil
+            lock.unlock()
+            continuation?.resume(with: result)
+        }
+    }
+
+    private nonisolated static let requestGate = RequestGate()
+
     private struct SendableFilter: @unchecked Sendable {
         let value: SCContentFilter
     }
@@ -23,9 +89,25 @@ enum ScreenshotCaptureExecution {
     nonisolated static func run<T: Sendable>(
         _ operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
-        try await Task.detached(priority: .userInitiated) {
-            try await operation()
-        }.value
+        let race = CancellationRace<T>()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard race.install(continuation) else { return }
+                Task.detached(priority: .userInitiated) {
+                    let result: Result<T, Error>
+                    do {
+                        result = .success(
+                            try await requestGate.withPermit(operation)
+                        )
+                    } catch {
+                        result = .failure(error)
+                    }
+                    race.resolve(result)
+                }
+            }
+        } onCancel: {
+            race.resolve(.failure(CancellationError()))
+        }
     }
 
     nonisolated static func captureImage(
