@@ -17,6 +17,64 @@ enum CaptureCoordinatorStartReadiness: Equatable {
     case noDisplay
 }
 
+/// Owns the cancellable timer used to retry capture after a broker cooldown.
+/// Keeping the timer bookkeeping separate makes replacement and re-entrant
+/// rescheduling deterministic without pulling ScreenCaptureKit into tests.
+@MainActor
+final class CaptureCooldownRestartScheduler {
+    typealias Sleep = @MainActor (Duration) async throws -> Void
+
+    private let sleep: Sleep
+    private var task: Task<Void, Never>?
+    private var generation = 0
+    private(set) var scheduledDeadline: TimeInterval?
+
+    init(sleep: @escaping Sleep = { try await Task.sleep(for: $0) }) {
+        self.sleep = sleep
+    }
+
+    func schedule(
+        deadline: TimeInterval,
+        delay: Duration,
+        retry: @escaping @MainActor () async -> Void
+    ) {
+        guard scheduledDeadline != deadline else { return }
+
+        task?.cancel()
+        scheduledDeadline = deadline
+        generation += 1
+        let taskGeneration = generation
+        task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await self.sleep(delay)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+
+            // A retry may synchronously schedule its replacement. Clear the
+            // current deadline first so even an identical new deadline can be
+            // registered, and let the generation guard protect that new state.
+            self.scheduledDeadline = nil
+            defer {
+                if self.generation == taskGeneration {
+                    self.task = nil
+                    self.scheduledDeadline = nil
+                }
+            }
+            await retry()
+        }
+    }
+
+    func cancel() {
+        task?.cancel()
+        task = nil
+        scheduledDeadline = nil
+        generation += 1
+    }
+}
+
 @MainActor
 protocol CaptureCoordinatorDelegate: AnyObject {
     func captureCoordinator(
@@ -67,16 +125,12 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
     /// Retries display reconciliation shortly after the shared circuit's
     /// cooldown expires, so a restart blocked mid-episode is not stranded in
     /// "Stopped" until the next unrelated system event.
-    private var cooldownRestartTask: Task<Void, Never>?
-    private var cooldownRestartDeadline: TimeInterval?
-    /// Identifies the current restart so a finished task only clears state it
-    /// still owns, even when a reopened circuit scheduled a replacement while
-    /// the task was reconciling.
-    private var cooldownRestartGeneration = 0
+    private let cooldownRestartScheduler: CaptureCooldownRestartScheduler
 
     override init() {
         let captureRequestBroker = CaptureRequestBroker()
         self.captureRequestBroker = captureRequestBroker
+        self.cooldownRestartScheduler = CaptureCooldownRestartScheduler()
         super.init()
         captureRequestBroker.recoveryStateDidChange = { [weak self] state in
             // Sleep, lock, overlay and user-pause flows mark the coordinator
@@ -318,34 +372,19 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
         guard isRunning else { return }
         guard let deadline = captureRequestBroker.openCircuitMonotonicDeadline,
               let remaining = captureRequestBroker.remainingCooldown() else { return }
-        guard cooldownRestartDeadline != deadline else { return }
+        guard cooldownRestartScheduler.scheduledDeadline != deadline else { return }
 
-        cooldownRestartTask?.cancel()
-        cooldownRestartDeadline = deadline
-        cooldownRestartGeneration += 1
-        let generation = cooldownRestartGeneration
         let delay = remaining + 1
         DiagnosticsLog.shared.log(
             "Capture",
             "Capture start deferred; retrying in \(Int(delay)) seconds when the shared ScreenCaptureKit circuit cooldown ends"
         )
-        cooldownRestartTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(delay))
+        cooldownRestartScheduler.schedule(
+            deadline: deadline,
+            delay: .seconds(delay)
+        ) { [weak self] in
             guard let self else { return }
-            // Keep the task handle registered until this task finishes so
-            // stopCapture() can still cancel it while the reconcile below is
-            // in flight. Only clear state this generation still owns: the
-            // reconcile may reopen the circuit and schedule a replacement.
-            defer {
-                if self.cooldownRestartGeneration == generation {
-                    self.cooldownRestartTask = nil
-                    self.cooldownRestartDeadline = nil
-                }
-            }
             guard !Task.isCancelled, self.isRunning else { return }
-            // Allow a reopen during this reconcile to schedule the next
-            // restart even if the broker lands on an identical deadline.
-            self.cooldownRestartDeadline = nil
             do {
                 try await self.reconcileDisplays(startNewManagers: true)
                 guard self.isRunning, !Task.isCancelled else { return }
@@ -377,12 +416,7 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
     }
 
     private func cancelCooldownRestart() {
-        cooldownRestartTask?.cancel()
-        cooldownRestartTask = nil
-        cooldownRestartDeadline = nil
-        // Invalidate any restart task that is past its cancellation checks so
-        // its deferred cleanup cannot clear state from a later schedule.
-        cooldownRestartGeneration += 1
+        cooldownRestartScheduler.cancel()
     }
 
     // MARK: - ScreenCaptureDelegate

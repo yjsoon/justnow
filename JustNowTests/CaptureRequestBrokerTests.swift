@@ -276,6 +276,79 @@ final class CaptureRequestBrokerTests: XCTestCase {
         )
     }
 
+    func testCooldownRestartSchedulerCancellationSuppressesRetry() async {
+        let sleepGate = BrokerTestGate()
+        var retryCount = 0
+        let scheduler = CaptureCooldownRestartScheduler { _ in
+            await sleepGate.wait()
+            try Task.checkCancellation()
+        }
+
+        scheduler.schedule(deadline: 100, delay: .seconds(1)) {
+            retryCount += 1
+        }
+        await waitUntil { sleepGate.waiterCount == 1 }
+
+        scheduler.cancel()
+        sleepGate.resumeNext()
+        await settleTasks()
+
+        XCTAssertEqual(retryCount, 0)
+        XCTAssertNil(scheduler.scheduledDeadline)
+    }
+
+    func testCooldownRestartSchedulerReplacesEarlierDeadline() async {
+        let sleepGate = BrokerTestGate()
+        var retries: [String] = []
+        let scheduler = CaptureCooldownRestartScheduler { _ in
+            await sleepGate.wait()
+            try Task.checkCancellation()
+        }
+
+        scheduler.schedule(deadline: 100, delay: .seconds(1)) {
+            retries.append("first")
+        }
+        await waitUntil { sleepGate.waiterCount == 1 }
+        scheduler.schedule(deadline: 200, delay: .seconds(2)) {
+            retries.append("second")
+        }
+        await waitUntil { sleepGate.waiterCount == 2 }
+
+        sleepGate.resumeNext()
+        sleepGate.resumeNext()
+        await waitUntil { retries == ["second"] }
+
+        XCTAssertEqual(retries, ["second"])
+        XCTAssertNil(scheduler.scheduledDeadline)
+    }
+
+    func testCooldownRestartSchedulerPreservesReentrantReplacement() async {
+        let sleepGate = BrokerTestGate()
+        var retries: [String] = []
+        let scheduler = CaptureCooldownRestartScheduler { _ in
+            await sleepGate.wait()
+            try Task.checkCancellation()
+        }
+
+        scheduler.schedule(deadline: 100, delay: .seconds(1)) {
+            retries.append("first")
+            scheduler.schedule(deadline: 200, delay: .seconds(2)) {
+                retries.append("second")
+            }
+        }
+        await waitUntil { sleepGate.waiterCount == 1 }
+        sleepGate.resumeNext()
+        await waitUntil {
+            retries == ["first"] && scheduler.scheduledDeadline == 200
+                && sleepGate.waiterCount == 1
+        }
+
+        sleepGate.resumeNext()
+        await waitUntil { retries == ["first", "second"] }
+
+        XCTAssertNil(scheduler.scheduledDeadline)
+    }
+
     func testQuickRelapseAfterRecoveryEscalatesCooldown() async throws {
         let clock = BrokerTestClock()
         let broker = makeBroker(clock: clock)
