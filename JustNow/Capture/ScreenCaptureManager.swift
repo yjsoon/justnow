@@ -3,7 +3,7 @@
 //  JustNow
 //
 
-import ScreenCaptureKit
+@preconcurrency import ScreenCaptureKit
 import AppKit
 import CoreVideo
 import os.log
@@ -13,6 +13,61 @@ private let captureLogger = Logger(subsystem: "sg.tk.JustNow", category: "Captur
 enum CaptureError: Error {
     case permissionDenied
     case noDisplay
+}
+
+enum ScreenshotCaptureExecution {
+    private struct SendableFilter: @unchecked Sendable {
+        let value: SCContentFilter
+    }
+
+    nonisolated static func run<T: Sendable>(
+        _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await Task.detached(priority: .userInitiated) {
+            try await operation()
+        }.value
+    }
+
+    nonisolated static func captureImage(
+        contentFilter: SCContentFilter,
+        outputDimensions: (width: Int, height: Int)
+    ) async throws -> CGImage {
+        let filter = SendableFilter(value: contentFilter)
+        return try await run {
+            if #available(macOS 26.0, *) {
+                let configuration = SCScreenshotConfiguration()
+                configuration.width = outputDimensions.width
+                configuration.height = outputDimensions.height
+                configuration.showsCursor = true
+                configuration.dynamicRange = .sdr
+
+                let output = try await SCScreenshotManager.captureScreenshot(
+                    contentFilter: filter.value,
+                    configuration: configuration
+                )
+                guard let image = output.sdrImage else {
+                    throw ScreenshotCaptureError.missingImage
+                }
+                return image
+            }
+
+            let configuration = SCStreamConfiguration()
+            configuration.width = outputDimensions.width
+            configuration.height = outputDimensions.height
+            configuration.showsCursor = true
+            configuration.capturesAudio = false
+            configuration.pixelFormat = kCVPixelFormatType_32BGRA
+            configuration.colorSpaceName = CGColorSpace.sRGB
+            return try await SCScreenshotManager.captureImage(
+                contentFilter: filter.value,
+                configuration: configuration
+            )
+        }
+    }
+}
+
+private enum ScreenshotCaptureError: Error {
+    case missingImage
 }
 
 enum CaptureFailureRecovery: Equatable {
@@ -67,8 +122,8 @@ class ScreenCaptureManager: NSObject {
     private let maximumConsecutiveCaptureFailures = 3
 
     private var filter: SCContentFilter?
-    private var config: SCStreamConfiguration?
     private var displayDimensions: (width: Int, height: Int)?
+    private var captureOutputDimensions: (width: Int, height: Int)?
     private var displayBackingScale: CGFloat = 1
     private var captureScale: Int = 2
 
@@ -151,20 +206,12 @@ class ScreenCaptureManager: NSObject {
         displayBackingScale = Self.backingScale(for: targetDisplayID)
         let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
 
-        let cfg = SCStreamConfiguration()
-        applyCaptureScale(to: cfg, dimensions: dimensions)
-        cfg.showsCursor = true
-        cfg.capturesAudio = false
-        // Pin the surface format so SCK doesn't pick a wider, more expensive
-        // default. BGRA + sRGB matches the JPEG encode path and avoids hidden
-        // colour-space conversion on every capture.
-        cfg.pixelFormat = kCVPixelFormatType_32BGRA
-        cfg.colorSpaceName = CGColorSpace.sRGB
+        let outputDimensions = captureDimensions(for: dimensions)
         try Task.checkCancellation()
 
         self.filter = filter
         displayDimensions = dimensions
-        config = cfg
+        captureOutputDimensions = outputDimensions
 
         consecutiveCaptureFailures = 0
         isCapturing = true
@@ -220,8 +267,8 @@ class ScreenCaptureManager: NSObject {
 
     func updateCaptureScale(_ scale: Int) {
         captureScale = max(1, scale)
-        guard let config else { return }
-        applyCaptureScale(to: config)
+        guard let displayDimensions else { return }
+        captureOutputDimensions = captureDimensions(for: displayDimensions)
     }
 
     /// Capture a single frame immediately and return it (for overlay open).
@@ -330,7 +377,7 @@ class ScreenCaptureManager: NSObject {
         ) { [weak self] in
             guard let self else { throw CancellationError() }
             try Task.checkCancellation()
-            guard let filter = self.filter, let config = self.config else {
+            guard let filter = self.filter, let outputDimensions = self.captureOutputDimensions else {
                 throw CancellationError()
             }
             if let expectedLoopSerial {
@@ -339,9 +386,9 @@ class ScreenCaptureManager: NSObject {
                 }
             }
 
-            let image = try await SCScreenshotManager.captureImage(
+            let image = try await ScreenshotCaptureExecution.captureImage(
                 contentFilter: filter,
-                configuration: config
+                outputDimensions: outputDimensions
             )
             // Keep cancellation inside the brokered operation. If a display
             // disappears while a half-open probe is in ScreenCaptureKit, a
@@ -438,19 +485,14 @@ class ScreenCaptureManager: NSObject {
         delegate?.captureManagerDidStop(self)
     }
 
-    private func applyCaptureScale(to config: SCStreamConfiguration) {
-        guard let displayDimensions else { return }
-        applyCaptureScale(to: config, dimensions: displayDimensions)
-    }
-
-    private func applyCaptureScale(to config: SCStreamConfiguration, dimensions: (width: Int, height: Int)) {
-        let output = ScreenCaptureSizing.outputDimensions(
-            displayDimensions: dimensions,
+    private func captureDimensions(
+        for displayDimensions: (width: Int, height: Int)
+    ) -> (width: Int, height: Int) {
+        ScreenCaptureSizing.outputDimensions(
+            displayDimensions: displayDimensions,
             desiredScale: captureScale,
             displayBackingScale: displayBackingScale
         )
-        config.width = output.width
-        config.height = output.height
     }
 
     private static func backingScale(for displayID: CGDirectDisplayID) -> CGFloat {
