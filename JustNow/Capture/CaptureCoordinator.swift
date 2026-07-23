@@ -122,6 +122,10 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
     private var isRunning = false
     private var screenParamsObserver: NSObjectProtocol?
     private var reconcileTask: Task<Void, Never>?
+    /// Broker recovery can occur midway through display discovery/startup.
+    /// Suppress that intermediate healthy signal until the full reconciliation
+    /// confirms capture is live and the circuit stayed closed.
+    private var activeReconciliationCount = 0
     /// Retries display reconciliation shortly after the shared circuit's
     /// cooldown expires, so a restart blocked mid-episode is not stranded in
     /// "Stopped" until the next unrelated system event.
@@ -138,6 +142,10 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
             // Do not let a late broker result overwrite those more specific
             // menu states.
             guard let self, self.isRunning else { return }
+            guard Self.shouldForwardBrokerRecoveryState(
+                state,
+                activeReconciliationCount: self.activeReconciliationCount
+            ) else { return }
             self.delegate?.captureCoordinator(self, didChangeRecoveryState: state)
         }
         screenParamsObserver = NotificationCenter.default.addObserver(
@@ -202,6 +210,13 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
         return isCapturing ? .ready : .noDisplay
     }
 
+    nonisolated static func shouldForwardBrokerRecoveryState(
+        _ state: CaptureRequestBrokerRecoveryState,
+        activeReconciliationCount: Int
+    ) -> Bool {
+        state != .normal || activeReconciliationCount == 0
+    }
+
     func stopCapture() async {
         isRunning = false
         reconcileTask?.cancel()
@@ -264,6 +279,9 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
     }
 
     private func reconcileDisplays(startNewManagers: Bool) async throws {
+        activeReconciliationCount += 1
+        defer { activeReconciliationCount -= 1 }
+
         // If permission has genuinely been revoked, surface that immediately
         // instead of letting the request be classified as a cooldown deferral
         // (or touching ScreenCaptureKit at all).
@@ -360,6 +378,13 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
         }
 
         delegate?.captureCoordinatorDidUpdateDisplays(self)
+        if activeReconciliationCount == 1,
+           isCapturing,
+           captureRequestBroker.isCircuitClosed {
+            // This is the authoritative ready signal. A broker half-open probe
+            // may report healthy earlier, before every missing display starts.
+            delegate?.captureCoordinator(self, didChangeRecoveryState: .normal)
+        }
     }
 
     // MARK: - Cooldown restart
@@ -388,14 +413,6 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
             do {
                 try await self.reconcileDisplays(startNewManagers: true)
                 guard self.isRunning, !Task.isCancelled else { return }
-                if self.isCapturing, self.captureRequestBroker.isCircuitClosed {
-                    // The broker publishes .normal when its half-open probe
-                    // succeeds, which happens before any display is capturing,
-                    // so the app skips the "Active" status update. Re-publish
-                    // now that capture is actually running again — but only if
-                    // no later display start reopened the circuit.
-                    self.delegate?.captureCoordinator(self, didChangeRecoveryState: .normal)
-                }
             } catch {
                 guard self.isRunning, !(error is CancellationError) else { return }
                 if case CaptureError.permissionDenied = error {

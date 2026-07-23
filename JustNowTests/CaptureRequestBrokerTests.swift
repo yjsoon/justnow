@@ -276,6 +276,33 @@ final class CaptureRequestBrokerTests: XCTestCase {
         )
     }
 
+    func testCoordinatorSuppressesIntermediateNormalDuringReconciliation() {
+        XCTAssertFalse(
+            CaptureCoordinator.shouldForwardBrokerRecoveryState(
+                .normal,
+                activeReconciliationCount: 1
+            )
+        )
+        XCTAssertTrue(
+            CaptureCoordinator.shouldForwardBrokerRecoveryState(
+                .normal,
+                activeReconciliationCount: 0
+            )
+        )
+        XCTAssertTrue(
+            CaptureCoordinator.shouldForwardBrokerRecoveryState(
+                .coolingDown,
+                activeReconciliationCount: 1
+            )
+        )
+        XCTAssertTrue(
+            CaptureCoordinator.shouldForwardBrokerRecoveryState(
+                .needsAttention,
+                activeReconciliationCount: 1
+            )
+        )
+    }
+
     func testCooldownRestartSchedulerCancellationSuppressesRetry() async {
         let sleepGate = BrokerTestGate()
         var retryCount = 0
