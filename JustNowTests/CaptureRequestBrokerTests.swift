@@ -436,6 +436,31 @@ final class CaptureRequestBrokerTests: XCTestCase {
         )
     }
 
+    func testGenericHalfOpenFailureRearmsCooldownForFutureRecovery() async {
+        enum ProbeError: Error { case unavailable }
+
+        let clock = BrokerTestClock()
+        let broker = makeBroker(clock: clock)
+        _ = await captureError(from: broker, owner: UUID()) {
+            throw self.falsePermissionDenial()
+        }
+
+        clock.advance(by: CaptureFailureRecovery.falsePermissionDenialDelay)
+        let probeError = await captureError(from: broker, owner: UUID()) {
+            throw ProbeError.unavailable
+        }
+        XCTAssertTrue(probeError is ProbeError)
+        XCTAssertEqual(
+            broker.openCircuitMonotonicDeadline,
+            clock.monotonicTime + CaptureFailureRecovery.falsePermissionDenialDelay
+        )
+
+        let blocked = await captureError(from: broker, owner: UUID()) {
+            XCTFail("Rearmed cooldown must block another immediate OS request")
+        }
+        XCTAssertTrue(blocked is CaptureRequestBrokerError)
+    }
+
     func testDelayedFailedProbeStillEscalatesCooldown() async {
         let clock = BrokerTestClock()
         let broker = makeBroker(clock: clock)
@@ -846,8 +871,9 @@ final class CaptureRequestBrokerTests: XCTestCase {
                 code: 1004
             )
         }
-        XCTAssertEqual(states, [.coolingDown])
+        XCTAssertEqual(states, [.coolingDown, .coolingDown])
 
+        clock.advance(by: CaptureFailureRecovery.falsePermissionDenialDelay)
         try await broker.perform(owner: UUID()) {}
         XCTAssertEqual(states.last, .normal)
     }

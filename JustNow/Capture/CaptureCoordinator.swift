@@ -122,6 +122,7 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
     private var isRunning = false
     private var screenParamsObserver: NSObjectProtocol?
     private var reconcileTask: Task<Void, Never>?
+    private let reconciliationGate = CaptureReconciliationGate()
     /// Broker recovery can occur midway through display discovery/startup.
     /// Suppress that intermediate healthy signal until the full reconciliation
     /// confirms capture is live and the circuit stayed closed.
@@ -230,11 +231,13 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
         reconcileTask?.cancel()
         reconcileTask = nil
         cancelCooldownRestart()
-        let snapshot = Array(managed.values)
-        managed.removeAll()
-        let previousLoops = snapshot.map { $0.manager.beginStoppingCapture() }
-        for previousLoop in previousLoops {
-            await previousLoop?.value
+        await reconciliationGate.withPermitIgnoringCancellation { [self] in
+            let snapshot = Array(managed.values)
+            managed.removeAll()
+            let previousLoops = snapshot.map { $0.manager.beginStoppingCapture() }
+            for previousLoop in previousLoops {
+                await previousLoop?.value
+            }
         }
         delegate?.captureCoordinatorDidUpdateDisplays(self)
     }
@@ -287,6 +290,12 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
     }
 
     private func reconcileDisplays(startNewManagers: Bool) async throws {
+        try await reconciliationGate.withPermit { [self] in
+            try await reconcileDisplaysWithPermit(startNewManagers: startNewManagers)
+        }
+    }
+
+    private func reconcileDisplaysWithPermit(startNewManagers: Bool) async throws {
         activeReconciliationCount += 1
         defer { activeReconciliationCount -= 1 }
 
@@ -319,6 +328,7 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
             throw error
         }
         try Task.checkCancellation()
+        guard isRunning else { throw CancellationError() }
 
         var desired: [UUID: DisplayInfo] = [:]
         for display in content.displays {
@@ -332,6 +342,7 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
         let previousLoops = removedEntries.map { $0.manager.beginStoppingCapture() }
         for (entry, previousLoop) in zip(removedEntries, previousLoops) {
             await previousLoop?.value
+            guard isRunning, !Task.isCancelled else { throw CancellationError() }
             captureLogger.info("Capture stopped for removed display: \(entry.info.name, privacy: .public)")
             DiagnosticsLog.shared.log("Capture", "Capture stopped for removed display: \(entry.info.name)")
         }
@@ -350,10 +361,21 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
                 managed[id] = ManagedDisplay(info: info, manager: manager)
                 do {
                     try await manager.startCapture()
+                    guard isRunning, !Task.isCancelled else {
+                        if managed[id]?.manager === manager {
+                            managed.removeValue(forKey: id)
+                        }
+                        let previousLoop = manager.beginStoppingCapture()
+                        await previousLoop?.value
+                        throw CancellationError()
+                    }
                     captureLogger.info("Capture started for display: \(info.name, privacy: .public)")
                     DiagnosticsLog.shared.log("Capture", "Capture started for display: \(info.name)")
                 } catch {
-                    managed.removeValue(forKey: id)
+                    if managed[id]?.manager === manager {
+                        managed.removeValue(forKey: id)
+                    }
+                    guard isRunning, !Task.isCancelled else { throw CancellationError() }
                     let isPermissionDenied: Bool
                     if case CaptureError.permissionDenied = error {
                         isPermissionDenied = true

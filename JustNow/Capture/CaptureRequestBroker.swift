@@ -261,18 +261,12 @@ final class CaptureRequestBroker {
             }
 
             if case .halfOpen = circuitState {
-                if error is CancellationError {
-                    // A display disappearing during the probe must not let it
-                    // reset the circuit for every other display. Keep the
-                    // shared protection in place and retry with a future owner.
-                    // A cancelled probe is not fresh evidence of failure, so
-                    // it keeps the current cooldown without escalating it.
-                    openCircuit(isReopen: true, escalatesCooldown: false)
-                    return
-                }
-                // This was not the beta false-denial signature. Preserve the
-                // manager's normal error handling and let later requests run,
-                // but remain half-open until a capture actually succeeds.
+                // A cancelled or otherwise unsuccessful half-open probe is not
+                // proof that ScreenCaptureKit is healthy. Re-arm the same
+                // bounded cooldown without escalating an unrelated error, so
+                // recovery always retains a future owner and deadline.
+                openCircuit(isReopen: true, escalatesCooldown: false)
+                return
             }
             releaseNextWaiter()
         }

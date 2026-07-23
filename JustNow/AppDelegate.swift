@@ -715,7 +715,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         case .coolingDown:
             if captureEventController.blockedStatus() == nil {
                 captureStartController.beginDeferredStart()
-                updateCaptureStatus("Recovering…")
+                updateCaptureStatus(
+                    captureRecoveryNeedsAttention ? "Capture Help Needed" : "Recovering…"
+                )
             }
         case .needsAttention:
             captureRecoveryNeedsAttention = true
@@ -1033,7 +1035,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         // Broker recovery callbacks run while its request permit is still held.
         // Defer modal presentation so queued callers are released first.
         Task { @MainActor [weak self] in
-            self?.showPersistentCaptureRecoveryAlert()
+            guard let self, self.captureRecoveryNeedsAttention else { return }
+            self.showPersistentCaptureRecoveryAlert()
         }
     }
 
