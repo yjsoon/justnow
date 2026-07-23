@@ -11,6 +11,14 @@ struct CaptureStartRetryPolicy {
     let attempt: CaptureStartAttempt
 }
 
+enum CaptureStartResult: Equatable {
+    case started
+    /// Recovery is already owned by another scheduler, so this attempt must
+    /// not consume the generic delayed-retry policy.
+    case deferred
+    case failed
+}
+
 struct CaptureStartRequest {
     let status: String
     let includeOverlayInBlockedStatus: Bool
@@ -62,7 +70,7 @@ final class CaptureStartController {
         canStartCapture: @escaping () -> Bool,
         blockedStatus: @escaping (Bool) -> String?,
         updateStatus: @escaping (String) -> Void,
-        startCapture: @escaping (CaptureStartAttempt) async -> Bool
+        startCapture: @escaping (CaptureStartAttempt) async -> CaptureStartResult
     ) {
         cancelPendingStart()
         let generation = pendingStartGeneration
@@ -94,8 +102,8 @@ final class CaptureStartController {
                 return
             }
 
-            let didStart = await startCapture(request.attempt)
-            guard !didStart, let retry = request.retry else { return }
+            let result = await startCapture(request.attempt)
+            guard result == .failed, let retry = request.retry else { return }
 
             await sleep(retry.delay)
 

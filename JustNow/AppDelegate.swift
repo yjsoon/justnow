@@ -578,31 +578,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         captureEventController.handleScreenUnlock()
     }
 
-    private func startCaptureIfAllowed(successMessage: String, failurePrefix: String, failureStatus: String) async -> Bool {
-        guard !Task.isCancelled else { return false }
+    private func startCaptureIfAllowed(
+        successMessage: String,
+        failurePrefix: String,
+        failureStatus: String
+    ) async -> CaptureStartResult {
+        guard !Task.isCancelled else { return .failed }
         guard captureEventController.canStartCapture() else {
             // Without this update, the caller's transient "Resuming..."
             // (or similar) status would stick forever when the lifecycle
             // says we shouldn't start.
             applyBlockedCaptureStatusIfAvailable()
-            return false
+            return .failed
         }
 
         do {
             try await captureCoordinator.startCapture()
-            guard !Task.isCancelled else { return false }
+            guard !Task.isCancelled else { return .failed }
             guard captureEventController.canStartCapture() else {
                 await captureCoordinator.stopCapture()
                 applyBlockedCaptureStatusIfAvailable()
-                return false
+                return .failed
             }
             handleSuccessfulCaptureStart(successMessage: successMessage)
-            return true
+            return .started
         } catch is CancellationError {
-            return false
+            return .failed
         } catch CaptureError.permissionDenied {
             presentPermissionAlert(status: "No Permission")
-            return false
+            return .failed
         } catch is CaptureRequestBrokerError {
             // Deferred, not failed: the coordinator reconciles again once the
             // shared circuit's cooldown expires, so don't burn retry budget or
@@ -614,13 +618,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             updateCaptureStatus(
                 captureRecoveryNeedsAttention ? "Capture Help Needed" : "Recovering…"
             )
-            return false
+            return .deferred
         } catch {
             let detail = DiagnosticsLogFormat.describe(error)
             captureLogger.error("\(failurePrefix, privacy: .public): \(detail, privacy: .public)")
             DiagnosticsLog.shared.log("Capture", "\(failurePrefix): \(detail); \(CaptureSystemState.summary())")
             updateCaptureStatus(failureStatus)
-            return false
+            return .failed
         }
     }
 
@@ -654,7 +658,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 self?.updateCaptureStatus(status)
             },
             startCapture: { [weak self] attempt in
-                guard let self else { return false }
+                guard let self else { return .failed }
                 return await self.startCaptureIfAllowed(
                     successMessage: attempt.successMessage,
                     failurePrefix: attempt.failurePrefix,
