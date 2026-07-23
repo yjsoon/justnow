@@ -182,6 +182,102 @@ final class CaptureStartControllerTests: XCTestCase {
         XCTAssertFalse(controller.hasPendingStart)
     }
 
+    func testDeferredRetryRemainsVisibleToLifecycle() async {
+        let sleeper = CaptureStartControllerSleepProbe()
+        let controller = CaptureStartController(
+            sleep: { duration in
+                await sleeper.sleep(for: duration)
+            }
+        )
+        var attemptCount = 0
+
+        controller.scheduleStart(
+            request: CaptureStartRequest(
+                status: "Restarting...",
+                attempt: CaptureStartAttempt(
+                    successMessage: "first",
+                    failurePrefix: "first failed",
+                    failureStatus: "Error"
+                ),
+                retry: CaptureStartRetryPolicy(
+                    delay: .seconds(3),
+                    attempt: CaptureStartAttempt(
+                        successMessage: "second",
+                        failurePrefix: "second deferred",
+                        failureStatus: "Recovering"
+                    )
+                )
+            ),
+            canStartCapture: { true },
+            blockedStatus: { _ in nil },
+            updateStatus: { _ in },
+            startCapture: { _ in
+                attemptCount += 1
+                return attemptCount == 1 ? .failed : .deferred
+            }
+        )
+
+        await waitUntil { await sleeper.recordedDurations() == [.seconds(3)] }
+        await sleeper.resumeAll()
+        await waitUntil { attemptCount == 2 && controller.hasPendingStart }
+
+        XCTAssertTrue(controller.hasPendingStart)
+        controller.cancelPendingStart()
+    }
+
+    func testCancellationCannotRestoreDeferredState() async {
+        let attemptGate = CaptureStartControllerAttemptGate()
+        let controller = CaptureStartController()
+
+        controller.scheduleStart(
+            request: CaptureStartRequest(
+                status: "Restarting...",
+                attempt: CaptureStartAttempt(
+                    successMessage: "first",
+                    failurePrefix: "first deferred",
+                    failureStatus: "Recovering"
+                )
+            ),
+            canStartCapture: { true },
+            blockedStatus: { _ in nil },
+            updateStatus: { _ in },
+            startCapture: { _ in await attemptGate.waitThenDefer() }
+        )
+
+        await waitUntil { await attemptGate.isWaiting }
+        controller.cancelPendingStart()
+        await attemptGate.resume()
+        await settleScheduledTasks()
+
+        XCTAssertFalse(controller.hasPendingStart)
+    }
+
+    func testRecoveryCompletionBeforeDeferredResultDoesNotLeaveStaleState() async {
+        let controller = CaptureStartController()
+
+        controller.scheduleStart(
+            request: CaptureStartRequest(
+                status: "Restarting...",
+                attempt: CaptureStartAttempt(
+                    successMessage: "first",
+                    failurePrefix: "first deferred",
+                    failureStatus: "Recovering"
+                )
+            ),
+            canStartCapture: { true },
+            blockedStatus: { _ in nil },
+            updateStatus: { _ in },
+            startCapture: { _ in
+                controller.completeDeferredStart()
+                return .deferred
+            }
+        )
+
+        await settleScheduledTasks()
+
+        XCTAssertFalse(controller.hasPendingStart)
+    }
+
     private func settleScheduledTasks() async {
         await Task.yield()
         await Task.yield()
@@ -230,5 +326,24 @@ private actor CaptureStartControllerSleepProbe {
         for continuation in pendingContinuations {
             continuation.resume()
         }
+    }
+}
+
+private actor CaptureStartControllerAttemptGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var isWaiting = false
+
+    func waitThenDefer() async -> CaptureStartResult {
+        isWaiting = true
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+        return .deferred
+    }
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
+        isWaiting = false
     }
 }

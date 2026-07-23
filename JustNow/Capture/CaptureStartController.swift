@@ -47,6 +47,7 @@ final class CaptureStartController {
     private var pendingStartTask: Task<Void, Never>?
     private var pendingStartGeneration = 0
     private var isStartDeferred = false
+    private var deferredCompletionGeneration = 0
 
     init(
         sleep: @escaping (Duration) async -> Void = { duration in
@@ -68,6 +69,7 @@ final class CaptureStartController {
     }
 
     func completeDeferredStart() {
+        deferredCompletionGeneration += 1
         isStartDeferred = false
     }
 
@@ -108,12 +110,19 @@ final class CaptureStartController {
                 return
             }
 
+            let initialCompletionGeneration = self.deferredCompletionGeneration
             let result = await startCapture(request.attempt)
+            guard !Task.isCancelled,
+                  generation == self.pendingStartGeneration else {
+                return
+            }
             if result == .deferred {
                 // The coordinator owns the actual cooldown timer, but the app
                 // lifecycle must still see pending recovery so overlay/session
                 // transitions can stop and cancel that coordinator work.
-                self.isStartDeferred = true
+                if initialCompletionGeneration == self.deferredCompletionGeneration {
+                    self.isStartDeferred = true
+                }
                 return
             }
             guard result == .failed, let retry = request.retry else { return }
@@ -126,7 +135,16 @@ final class CaptureStartController {
                 return
             }
 
-            _ = await startCapture(retry.attempt)
+            let retryCompletionGeneration = self.deferredCompletionGeneration
+            let retryResult = await startCapture(retry.attempt)
+            guard !Task.isCancelled,
+                  generation == self.pendingStartGeneration else {
+                return
+            }
+            if retryResult == .deferred,
+               retryCompletionGeneration == self.deferredCompletionGeneration {
+                self.isStartDeferred = true
+            }
         }
     }
 }

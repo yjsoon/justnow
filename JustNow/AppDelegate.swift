@@ -689,10 +689,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     ) {
         switch state {
         case .normal:
-            captureStartController.completeDeferredStart()
             captureRecoveryNeedsAttention = false
             updatePermissionHelpMenuItem()
             if coordinator.isCapturing, captureEventController.blockedStatus() == nil {
+                // The broker publishes .normal when its half-open discovery
+                // probe succeeds, before a display manager necessarily starts.
+                // Keep deferred lifecycle ownership until capture is truly live.
+                captureStartController.completeDeferredStart()
                 updateCaptureStatus("Active")
             }
         case .coolingDown:
