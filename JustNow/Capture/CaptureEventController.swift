@@ -117,7 +117,9 @@ final class CaptureEventController {
             || current.hasPendingStart
             || (lifecycle.isPausedForOverlay && lifecycle.wasCapturingBeforeOverlay)
         let shouldStopCapture = lifecycle.pauseForSession(
-            captureWasActive: current.isCapturing || current.hasPendingStart,
+            captureWasActive: current.isCapturing
+                || current.isSetupCaptureInProgress
+                || current.hasPendingStart,
             shouldResumeCapture: shouldResumeCaptureAfterSession
         )
         cancelPendingStart()
@@ -207,7 +209,9 @@ final class CaptureEventController {
             || current.hasPendingStart
             || (lifecycle.isPausedForSession && lifecycle.wasCapturingBeforeSession)
         let shouldStopCapture = lifecycle.pauseForOverlay(
-            captureWasActive: current.isCapturing || current.hasPendingStart,
+            captureWasActive: current.isCapturing
+                || current.isSetupCaptureInProgress
+                || current.hasPendingStart,
             shouldResumeCapture: shouldResumeCaptureAfterOverlay
         )
         cancelPendingStart()
@@ -224,13 +228,6 @@ final class CaptureEventController {
     private func resumeCaptureAfterOverlay() {
         guard lifecycle.resumeAfterOverlay() else { return }
 
-        let current = context()
-        if current.isSetupCaptureInProgress {
-            cancelPendingStart()
-            updateStatus(blockedStatus(includeOverlay: false) ?? "Resuming...")
-            return
-        }
-
         scheduleStart(
             CaptureStartRequest(
                 status: "Resuming...",
@@ -245,13 +242,6 @@ final class CaptureEventController {
     }
 
     private func scheduleResume(reason: String) {
-        let current = context()
-        if current.isSetupCaptureInProgress {
-            cancelPendingStart()
-            updateStatus(blockedStatus() ?? "Resuming...")
-            return
-        }
-
         scheduleStart(
             CaptureStartRequest(
                 status: "Resuming...",

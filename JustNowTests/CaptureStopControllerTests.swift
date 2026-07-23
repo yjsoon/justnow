@@ -92,6 +92,42 @@ final class CaptureStopControllerTests: XCTestCase {
         XCTAssertEqual(events, ["stop-enter", "stop-exit", "start"])
     }
 
+    func testWaitForPendingStopIncludesEveryQueuedStop() async {
+        let firstStopGate = CaptureStopControllerTestGate()
+        var events: [String] = []
+        var stopCount = 0
+        let controller = CaptureStopController(
+            updateStatus: { _ in },
+            stopCapture: {
+                stopCount += 1
+                events.append("stop-\(stopCount)-enter")
+                if stopCount == 1 {
+                    await firstStopGate.wait()
+                }
+                events.append("stop-\(stopCount)-exit")
+            },
+            endForegroundActivity: {}
+        )
+
+        controller.scheduleStop(CaptureStopRequest(status: "First"))
+        await waitUntil { events == ["stop-1-enter"] }
+        controller.scheduleStop(CaptureStopRequest(status: "Second"))
+
+        let laterStart = Task { @MainActor in
+            await controller.waitForPendingStop()
+            events.append("start")
+        }
+        await Task.yield()
+        XCTAssertEqual(events, ["stop-1-enter"])
+
+        await firstStopGate.resume()
+        await laterStart.value
+        XCTAssertEqual(
+            events,
+            ["stop-1-enter", "stop-1-exit", "stop-2-enter", "stop-2-exit", "start"]
+        )
+    }
+
     private func waitUntil(
         timeout: Duration = .seconds(1),
         file: StaticString = #filePath,

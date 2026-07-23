@@ -96,6 +96,44 @@ final class CaptureEventControllerTests: XCTestCase {
         )
     }
 
+    func testOverlayPauseStopsLaunchSetupRecovery() {
+        let recorder = CaptureEventControllerRecorder(
+            context: CaptureEventContext(
+                hasCaptureManager: false,
+                isCapturing: false,
+                isSetupCaptureInProgress: true,
+                hasPendingStart: false,
+                isOverlayVisible: true
+            )
+        )
+        let controller = recorder.makeController()
+
+        controller.handleOverlayVisibilityChanged(isVisible: true)
+
+        XCTAssertEqual(
+            recorder.events,
+            ["cancelPendingStart", "stop:Paused (Overlay)"]
+        )
+    }
+
+    func testWakePreservesResumeIntentWhileLaunchSetupIsInProgress() {
+        let recorder = CaptureEventControllerRecorder(
+            context: CaptureEventContext(
+                hasCaptureManager: false,
+                isCapturing: false,
+                isSetupCaptureInProgress: true,
+                hasPendingStart: false,
+                isOverlayVisible: false
+            )
+        )
+        let controller = recorder.makeController()
+
+        controller.handleWake()
+
+        XCTAssertEqual(recorder.events, ["filter:5.0", "start:Resuming..."])
+        XCTAssertEqual(recorder.startRequests.count, 1)
+    }
+
     func testToggleCapturePauseWithoutCaptureManagerUpdatesPauseMenuAndStatus() {
         let recorder = CaptureEventControllerRecorder(
             context: CaptureEventContext(

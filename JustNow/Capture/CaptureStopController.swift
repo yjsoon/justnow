@@ -43,8 +43,12 @@ final class CaptureStopController {
     ) {
         stopGeneration += 1
         let generation = stopGeneration
+        let previousStopTask = pendingStopTask
         pendingStopTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            // Preserve lifecycle intent order even when several system events
+            // enqueue sibling unstructured tasks in the same run-loop turn.
+            await previousStopTask?.value
             await self.performStop(request)
             afterStop()
             if generation == self.stopGeneration {

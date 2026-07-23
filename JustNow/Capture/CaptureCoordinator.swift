@@ -199,6 +199,7 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
             // partial multi-display start overwrite "Recovering…" with "Active".
             throw CaptureRequestBrokerError.cooldown(untilMonotonicTime: deadline)
         case .noDisplay:
+            scheduleFallbackRestart()
             throw CaptureError.noDisplay
         }
     }

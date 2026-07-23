@@ -400,6 +400,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             return
         } catch CaptureError.permissionDenied {
             presentPermissionAlert(status: "No Permission")
+        } catch CaptureError.noDisplay {
+            captureStartController.beginDeferredStart()
+            DiagnosticsLog.shared.log(
+                "Capture",
+                "Launch capture found no usable display; deferred recovery remains scheduled"
+            )
+            updateCaptureStatus("Recovering…")
         } catch is CaptureRequestBrokerError {
             // The shared ScreenCaptureKit circuit is cooling down after a
             // false permission denial; the coordinator retries when it ends.
@@ -407,6 +414,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 "Capture",
                 "Launch capture start deferred while the shared ScreenCaptureKit circuit cools down; \(CaptureSystemState.summary())"
             )
+            captureStartController.beginDeferredStart()
             updateCaptureStatus(
                 captureRecoveryNeedsAttention ? "Capture Help Needed" : "Recovering…"
             )
@@ -626,6 +634,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         } catch CaptureError.permissionDenied {
             presentPermissionAlert(status: "No Permission")
             return .failed
+        } catch CaptureError.noDisplay {
+            DiagnosticsLog.shared.log(
+                "Capture",
+                "\(failurePrefix): no usable display; deferred recovery remains scheduled"
+            )
+            updateCaptureStatus("Recovering…")
+            return .deferred
         } catch is CaptureRequestBrokerError {
             // Deferred, not failed: the coordinator reconciles again once the
             // shared circuit's cooldown expires, so don't burn retry budget or
