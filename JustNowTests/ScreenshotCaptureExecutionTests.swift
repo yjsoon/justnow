@@ -33,11 +33,17 @@ final class ScreenshotCaptureExecutionTests: XCTestCase {
         await waitUntil { await state.cancellationReturned }
 
         let second = Task {
-            try await ScreenshotCaptureExecution.run {
+            try await ScreenshotCaptureExecution.run(
+                workerDidStart: {
+                    Task {
+                        await state.noteSecondWorkerStarted()
+                    }
+                }
+            ) {
                 await state.noteSecondOperationStarted()
             }
         }
-        try await Task.sleep(for: .milliseconds(50))
+        await waitUntil { await state.secondWorkerStarted }
         let startedWhileFirstRequestWasBlocked = await state.secondOperationStarted
         XCTAssertFalse(startedWhileFirstRequestWasBlocked)
 
@@ -45,6 +51,49 @@ final class ScreenshotCaptureExecutionTests: XCTestCase {
         try await second.value
         let startedAfterFirstRequestCompleted = await state.secondOperationStarted
         XCTAssertTrue(startedAfterFirstRequestCompleted)
+    }
+
+    func testCancellingQueuedRequestPreventsItsOperationFromStarting() async throws {
+        let latch = ScreenshotCaptureExecutionTestLatch()
+        let state = ScreenshotCaptureExecutionTestState()
+
+        let holder = Task {
+            try await ScreenshotCaptureExecution.run {
+                await latch.wait()
+            }
+        }
+        await waitUntil { await latch.waiterCount == 1 }
+
+        let queued = Task {
+            do {
+                try await ScreenshotCaptureExecution.run(
+                    workerDidStart: {
+                        Task {
+                            await state.noteQueuedWorkerStarted()
+                        }
+                    }
+                ) {
+                    await state.noteQueuedOperationStarted()
+                }
+                XCTFail("Cancelled queued capture should not return a value")
+            } catch is CancellationError {
+                await state.noteQueuedCancellationReturned()
+            } catch {
+                XCTFail("Unexpected error: \(error)")
+            }
+        }
+        await waitUntil { await state.queuedWorkerStarted }
+
+        queued.cancel()
+        await waitUntil { await state.queuedCancellationReturned }
+
+        await latch.resume()
+        try await holder.value
+        try await ScreenshotCaptureExecution.run {}
+        await queued.value
+
+        let queuedOperationStarted = await state.queuedOperationStarted
+        XCTAssertFalse(queuedOperationStarted)
     }
 
     private func waitUntil(
@@ -82,13 +131,33 @@ private actor ScreenshotCaptureExecutionTestLatch {
 
 private actor ScreenshotCaptureExecutionTestState {
     private(set) var cancellationReturned = false
+    private(set) var secondWorkerStarted = false
     private(set) var secondOperationStarted = false
+    private(set) var queuedWorkerStarted = false
+    private(set) var queuedOperationStarted = false
+    private(set) var queuedCancellationReturned = false
 
     func noteCancellationReturned() {
         cancellationReturned = true
     }
 
+    func noteSecondWorkerStarted() {
+        secondWorkerStarted = true
+    }
+
     func noteSecondOperationStarted() {
         secondOperationStarted = true
+    }
+
+    func noteQueuedWorkerStarted() {
+        queuedWorkerStarted = true
+    }
+
+    func noteQueuedOperationStarted() {
+        queuedOperationStarted = true
+    }
+
+    func noteQueuedCancellationReturned() {
+        queuedCancellationReturned = true
     }
 }

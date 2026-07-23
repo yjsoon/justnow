@@ -17,24 +17,41 @@ enum CaptureError: Error {
 
 enum ScreenshotCaptureExecution {
     private actor RequestGate {
+        private struct Waiter {
+            let id: UUID
+            let continuation: CheckedContinuation<Void, Error>
+        }
+
         private var isHeld = false
-        private var waiters: [CheckedContinuation<Void, Never>] = []
+        private var waiters: [Waiter] = []
 
         func withPermit<T: Sendable>(
+            id: UUID,
+            cancellation: RequestCancellation,
             _ operation: @escaping @Sendable () async throws -> T
         ) async throws -> T {
-            await acquire()
+            try cancellation.check()
+            try await acquire(id: id)
             defer { release() }
+            try cancellation.check()
             return try await operation()
         }
 
-        private func acquire() async {
+        func cancel(id: UUID) {
+            guard let index = waiters.firstIndex(where: { $0.id == id }) else {
+                return
+            }
+            let waiter = waiters.remove(at: index)
+            waiter.continuation.resume(throwing: CancellationError())
+        }
+
+        private func acquire(id: UUID) async throws {
             guard isHeld else {
                 isHeld = true
                 return
             }
-            await withCheckedContinuation { continuation in
-                waiters.append(continuation)
+            try await withCheckedThrowingContinuation { continuation in
+                waiters.append(Waiter(id: id, continuation: continuation))
             }
         }
 
@@ -43,11 +60,31 @@ enum ScreenshotCaptureExecution {
                 isHeld = false
                 return
             }
-            waiters.removeFirst().resume()
+            waiters.removeFirst().continuation.resume()
         }
     }
 
-    private final class CancellationRace<T: Sendable>: @unchecked Sendable {
+    private nonisolated final class RequestCancellation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var isCancelled = false
+
+        func cancel() {
+            lock.lock()
+            isCancelled = true
+            lock.unlock()
+        }
+
+        func check() throws {
+            lock.lock()
+            let isCancelled = self.isCancelled
+            lock.unlock()
+            if isCancelled {
+                throw CancellationError()
+            }
+        }
+    }
+
+    private nonisolated final class CancellationRace<T: Sendable>: @unchecked Sendable {
         private let lock = NSLock()
         private var continuation: CheckedContinuation<T, Error>?
         private var resolvedResult: Result<T, Error>?
@@ -87,17 +124,25 @@ enum ScreenshotCaptureExecution {
     }
 
     nonisolated static func run<T: Sendable>(
+        workerDidStart: (@Sendable () -> Void)? = nil,
         _ operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
+        let requestID = UUID()
+        let cancellation = RequestCancellation()
         let race = CancellationRace<T>()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 guard race.install(continuation) else { return }
                 Task.detached(priority: .userInitiated) {
+                    workerDidStart?()
                     let result: Result<T, Error>
                     do {
                         result = .success(
-                            try await requestGate.withPermit(operation)
+                            try await requestGate.withPermit(
+                                id: requestID,
+                                cancellation: cancellation,
+                                operation
+                            )
                         )
                     } catch {
                         result = .failure(error)
@@ -106,7 +151,11 @@ enum ScreenshotCaptureExecution {
                 }
             }
         } onCancel: {
+            cancellation.cancel()
             race.resolve(.failure(CancellationError()))
+            Task {
+                await requestGate.cancel(id: requestID)
+            }
         }
     }
 
