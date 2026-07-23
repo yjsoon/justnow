@@ -122,6 +122,7 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
     private var isRunning = false
     private var screenParamsObserver: NSObjectProtocol?
     private var reconcileTask: Task<Void, Never>?
+    private var reconcileTaskGeneration = 0
     private let reconciliationGate = CaptureReconciliationGate()
     /// Broker recovery can occur midway through display discovery/startup.
     /// Suppress that intermediate healthy signal until the full reconciliation
@@ -228,6 +229,7 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
 
     func stopCapture() async {
         isRunning = false
+        reconcileTaskGeneration += 1
         reconcileTask?.cancel()
         reconcileTask = nil
         cancelCooldownRestart()
@@ -272,9 +274,16 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
 
     private func scheduleReconcile() {
         guard isRunning else { return }
+        reconcileTaskGeneration += 1
+        let generation = reconcileTaskGeneration
         reconcileTask?.cancel()
         reconcileTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            defer {
+                if generation == self.reconcileTaskGeneration {
+                    self.reconcileTask = nil
+                }
+            }
             do {
                 try await self.reconcileDisplays(startNewManagers: true)
             } catch {
@@ -285,12 +294,12 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
                     self.delegate?.captureCoordinatorDidStopUnexpectedly(self)
                 }
             }
-            self.reconcileTask = nil
         }
     }
 
     private func reconcileDisplays(startNewManagers: Bool) async throws {
         try await reconciliationGate.withPermit { [self] in
+            guard isRunning, !Task.isCancelled else { throw CancellationError() }
             try await reconcileDisplaysWithPermit(startNewManagers: startNewManagers)
         }
     }
