@@ -612,6 +612,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         }
 
         do {
+            // A resume requested during launch setup is real intent, but it
+            // must not overtake frame-buffer/coordinator configuration or
+            // start a second reconciliation against partially installed state.
+            let startupTask = setupCaptureTask
+            await startupTask?.value
+            guard !Task.isCancelled, captureEventController.canStartCapture() else {
+                applyBlockedCaptureStatusIfAvailable()
+                return .failed
+            }
             // Stop and start requests are scheduled by separate lifecycle
             // tasks. A later resume must wait for any already-queued stop so
             // the newest user/system intent wins deterministically.
@@ -619,6 +628,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             guard !Task.isCancelled, captureEventController.canStartCapture() else {
                 applyBlockedCaptureStatusIfAvailable()
                 return .failed
+            }
+            if captureCoordinator.isCapturing {
+                handleSuccessfulCaptureStart(successMessage: successMessage)
+                return .started
             }
             try await captureCoordinator.startCapture()
             guard !Task.isCancelled else { return .failed }
