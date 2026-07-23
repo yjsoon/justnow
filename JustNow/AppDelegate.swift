@@ -121,6 +121,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         updateStatus: { [weak self] in self?.updateCaptureStatus($0) },
         stopCapture: { [weak self] in
             await self?.captureCoordinator.stopCapture()
+            // A broker cooldown callback can arrive after lifecycle code
+            // cancels a pending start but before this queued stop flips the
+            // coordinator to stopped. Clear any deferred marker restored in
+            // that window once coordinator recovery is definitively cancelled.
+            self?.captureStartController.cancelPendingStart()
         },
         endForegroundActivity: { [weak self] in
             self?.appNapPreventer.stopActivity()
@@ -699,15 +704,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 updateCaptureStatus("Active")
             }
         case .coolingDown:
-            captureStartController.beginDeferredStart()
             if captureEventController.blockedStatus() == nil {
+                captureStartController.beginDeferredStart()
                 updateCaptureStatus("Recovering…")
             }
         case .needsAttention:
-            captureStartController.beginDeferredStart()
             captureRecoveryNeedsAttention = true
             updatePermissionHelpMenuItem()
             if captureEventController.blockedStatus() == nil {
+                captureStartController.beginDeferredStart()
                 updateCaptureStatus("Capture Help Needed")
                 showPersistentCaptureRecoveryAlert()
             }

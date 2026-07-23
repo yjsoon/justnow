@@ -291,6 +291,20 @@ final class CaptureStartControllerTests: XCTestCase {
         XCTAssertTrue(controller.hasPendingStart)
     }
 
+    func testStopCompletionClearsDeferredOwnershipRestoredAfterCancellation() {
+        let controller = CaptureStartController()
+
+        controller.cancelPendingStart()
+        // Models a late broker cooldown callback before the queued coordinator
+        // stop begins executing.
+        controller.beginDeferredStart()
+        XCTAssertTrue(controller.hasPendingStart)
+
+        // The stop completion performs the same final cancellation.
+        controller.cancelPendingStart()
+        XCTAssertFalse(controller.hasPendingStart)
+    }
+
     private func settleScheduledTasks() async {
         await Task.yield()
         await Task.yield()
