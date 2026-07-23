@@ -113,6 +113,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     private var isTerminationFlushInProgress = false
     private var idleTransitionTimer: Timer?
     private var screenRecordingPermission = ScreenRecordingPermissionState()
+    private var captureRecoveryNeedsAttention = false
+    private var hasPresentedPersistentCaptureRecoveryAlert = false
     private let capturePolicyController = CapturePolicyController()
     private let captureStartController = CaptureStartController()
     private lazy var captureStopController = CaptureStopController(
@@ -387,6 +389,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             return
         } catch CaptureError.permissionDenied {
             presentPermissionAlert(status: "No Permission")
+        } catch is CaptureRequestBrokerError {
+            // The shared ScreenCaptureKit circuit is cooling down after a
+            // false permission denial; the coordinator retries when it ends.
+            DiagnosticsLog.shared.log(
+                "Capture",
+                "Launch capture start deferred while the shared ScreenCaptureKit circuit cools down; \(CaptureSystemState.summary())"
+            )
+            updateCaptureStatus(
+                captureRecoveryNeedsAttention ? "Capture Help Needed" : "Recovering…"
+            )
         } catch {
             DiagnosticsLog.shared.log(
                 "Capture",
@@ -591,6 +603,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         } catch CaptureError.permissionDenied {
             presentPermissionAlert(status: "No Permission")
             return false
+        } catch is CaptureRequestBrokerError {
+            // Deferred, not failed: the coordinator reconciles again once the
+            // shared circuit's cooldown expires, so don't burn retry budget or
+            // report a hard stop.
+            DiagnosticsLog.shared.log(
+                "Capture",
+                "\(failurePrefix): deferred while the shared ScreenCaptureKit circuit cools down"
+            )
+            updateCaptureStatus(
+                captureRecoveryNeedsAttention ? "Capture Help Needed" : "Recovering…"
+            )
+            return false
         } catch {
             let detail = DiagnosticsLogFormat.describe(error)
             captureLogger.error("\(failurePrefix, privacy: .public): \(detail, privacy: .public)")
@@ -661,12 +685,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     ) {
         switch state {
         case .normal:
+            captureRecoveryNeedsAttention = false
+            updatePermissionHelpMenuItem()
             if coordinator.isCapturing, captureEventController.blockedStatus() == nil {
                 updateCaptureStatus("Active")
             }
         case .coolingDown:
             if captureEventController.blockedStatus() == nil {
                 updateCaptureStatus("Recovering…")
+            }
+        case .needsAttention:
+            captureRecoveryNeedsAttention = true
+            updatePermissionHelpMenuItem()
+            if captureEventController.blockedStatus() == nil {
+                updateCaptureStatus("Capture Help Needed")
+                showPersistentCaptureRecoveryAlert()
             }
         }
     }
@@ -937,8 +970,39 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     private func updatePermissionHelpMenuItem() {
-        let needsPermissionHelp = !ScreenCaptureManager.hasScreenRecordingPermission()
+        let needsPermissionHelp = captureRecoveryNeedsAttention
+            || !ScreenCaptureManager.hasScreenRecordingPermission()
         statusItemController?.setPermissionHelpVisible(needsPermissionHelp)
+    }
+
+    private func showPersistentCaptureRecoveryAlert() {
+        guard !hasPresentedPersistentCaptureRecoveryAlert else { return }
+        hasPresentedPersistentCaptureRecoveryAlert = true
+
+        DiagnosticsLog.shared.log(
+            "Permission",
+            "Presenting persistent ScreenCaptureKit recovery guidance after maximum cooldown; \(CaptureSystemState.summary())"
+        )
+
+        let alert = NSAlert()
+        alert.messageText = "JustNow Still Can't Capture"
+        alert.informativeText = """
+        macOS continues to reject screen capture even though Screen Recording appears enabled. JustNow has slowed its retries to avoid repeated permission prompts and will keep trying in the background.
+
+        If capture does not recover, open Screen Recording settings, remove the existing JustNow entry, then relaunch JustNow once so macOS can create a fresh permission record.
+        """
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Open System Settings")
+        alert.addButton(withTitle: "Keep Retrying")
+
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let sourceFrame = alert.window.frame
+        PermisoAssistant.shared.present(
+            panel: .screenRecording,
+            sourceFrameInScreen: sourceFrame.isEmpty ? nil : sourceFrame
+        )
     }
 
     private func presentPermissionAlert(status: String) {

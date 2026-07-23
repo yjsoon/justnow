@@ -176,15 +176,233 @@ final class CaptureRequestBrokerTests: XCTestCase {
         let blockedError = await captureError(from: broker, owner: UUID()) {
             XCTFail("A reopened circuit must not call the OS request")
         }
+        // A failed probe is fresh evidence the desync episode is ongoing, so
+        // the reopened circuit escalates to double the base cooldown.
         XCTAssertEqual(
             blockedError as? CaptureRequestBrokerError,
+            .cooldown(
+                untilMonotonicTime: clock.monotonicTime
+                    + CaptureFailureRecovery.falsePermissionDenialDelay * 2
+            )
+        )
+        XCTAssertEqual(logs.filter { $0.contains("circuit opened") }.count, 1)
+        XCTAssertEqual(logs.filter { $0.contains("circuit reopened") }.count, 1)
+    }
+
+    func testReopenedCircuitEscalatesCooldownUpToTheCap() async {
+        let clock = BrokerTestClock()
+        let broker = makeBroker(clock: clock)
+        var recoveryStates: [CaptureRequestBrokerRecoveryState] = []
+        broker.recoveryStateDidChange = { recoveryStates.append($0) }
+
+        _ = await captureError(from: broker, owner: UUID()) {
+            throw self.falsePermissionDenial()
+        }
+
+        var expectedDelay = CaptureFailureRecovery.falsePermissionDenialDelay
+        for _ in 0..<6 {
+            clock.advance(by: expectedDelay)
+            _ = await captureError(from: broker, owner: UUID()) {
+                throw self.falsePermissionDenial()
+            }
+            expectedDelay = min(
+                expectedDelay * 2,
+                CaptureFailureRecovery.falsePermissionDenialMaximumDelay
+            )
+
+            let blocked = await captureError(from: broker, owner: UUID()) {
+                XCTFail("An open circuit must not call the OS request")
+            }
+            XCTAssertEqual(
+                blocked as? CaptureRequestBrokerError,
+                .cooldown(untilMonotonicTime: clock.monotonicTime + expectedDelay)
+            )
+        }
+
+        XCTAssertEqual(recoveryStates.last, .needsAttention)
+    }
+
+    func testMaximumCooldownRepublishesNeedsAttentionAfterCaptureRestart() async {
+        let clock = BrokerTestClock()
+        let broker = makeBroker(clock: clock)
+        var recoveryStates: [CaptureRequestBrokerRecoveryState] = []
+        broker.recoveryStateDidChange = { recoveryStates.append($0) }
+
+        _ = await captureError(from: broker, owner: UUID()) {
+            throw self.falsePermissionDenial()
+        }
+
+        var delay = CaptureFailureRecovery.falsePermissionDenialDelay
+        while delay < CaptureFailureRecovery.falsePermissionDenialMaximumDelay {
+            clock.advance(by: delay)
+            _ = await captureError(from: broker, owner: UUID()) {
+                throw self.falsePermissionDenial()
+            }
+            delay = min(
+                delay * 2,
+                CaptureFailureRecovery.falsePermissionDenialMaximumDelay
+            )
+        }
+
+        recoveryStates.removeAll()
+        _ = await captureError(from: broker, owner: UUID()) {
+            XCTFail("A maximum-cooldown circuit must not call ScreenCaptureKit")
+        }
+
+        XCTAssertEqual(recoveryStates, [.needsAttention])
+    }
+
+    func testCoordinatorStartReadinessPrefersGlobalCooldownOverPartialCapture() {
+        XCTAssertEqual(
+            CaptureCoordinator.startReadiness(
+                isCapturing: true,
+                openCircuitDeadline: 1_234
+            ),
+            .coolingDown(untilMonotonicTime: 1_234)
+        )
+        XCTAssertEqual(
+            CaptureCoordinator.startReadiness(
+                isCapturing: true,
+                openCircuitDeadline: nil
+            ),
+            .ready
+        )
+        XCTAssertEqual(
+            CaptureCoordinator.startReadiness(
+                isCapturing: false,
+                openCircuitDeadline: nil
+            ),
+            .noDisplay
+        )
+    }
+
+    func testQuickRelapseAfterRecoveryEscalatesCooldown() async throws {
+        let clock = BrokerTestClock()
+        let broker = makeBroker(clock: clock)
+
+        _ = await captureError(from: broker, owner: UUID()) {
+            throw self.falsePermissionDenial()
+        }
+        clock.advance(by: CaptureFailureRecovery.falsePermissionDenialDelay)
+        try await broker.perform(owner: UUID()) {}
+
+        // Capture worked briefly, then the same episode resumed well inside
+        // the escalation reset window.
+        clock.advance(by: 20)
+        _ = await captureError(from: broker, owner: UUID()) {
+            throw self.falsePermissionDenial()
+        }
+
+        let blocked = await captureError(from: broker, owner: UUID()) {
+            XCTFail("An open circuit must not call the OS request")
+        }
+        XCTAssertEqual(
+            blocked as? CaptureRequestBrokerError,
+            .cooldown(
+                untilMonotonicTime: clock.monotonicTime
+                    + CaptureFailureRecovery.falsePermissionDenialDelay * 2
+            )
+        )
+    }
+
+    func testDelayedFailedProbeStillEscalatesCooldown() async {
+        let clock = BrokerTestClock()
+        let broker = makeBroker(clock: clock)
+
+        _ = await captureError(from: broker, owner: UUID()) {
+            throw self.falsePermissionDenial()
+        }
+
+        // The probe was delayed long past the reset interval (e.g. the Mac
+        // slept through the cooldown). No healthy capture happened, so the
+        // failed probe must still escalate rather than reset to the base.
+        clock.advance(
+            by: CaptureFailureRecovery.falsePermissionDenialDelay
+                + CaptureFailureRecovery.falsePermissionDenialEscalationResetInterval + 100
+        )
+        _ = await captureError(from: broker, owner: UUID()) {
+            throw self.falsePermissionDenial()
+        }
+
+        let blocked = await captureError(from: broker, owner: UUID()) {
+            XCTFail("An open circuit must not call the OS request")
+        }
+        XCTAssertEqual(
+            blocked as? CaptureRequestBrokerError,
+            .cooldown(
+                untilMonotonicTime: clock.monotonicTime
+                    + CaptureFailureRecovery.falsePermissionDenialDelay * 2
+            )
+        )
+    }
+
+    func testQuickRelapseAfterDelayedRecoveryStillEscalates() async throws {
+        let clock = BrokerTestClock()
+        let broker = makeBroker(clock: clock)
+
+        _ = await captureError(from: broker, owner: UUID()) {
+            throw self.falsePermissionDenial()
+        }
+
+        // The successful probe ran long after the cooldown deadline (e.g.
+        // after sleep). The healthy period starts at that recovery, so a
+        // relapse moments later is the same episode and must escalate.
+        clock.advance(
+            by: CaptureFailureRecovery.falsePermissionDenialDelay
+                + CaptureFailureRecovery.falsePermissionDenialEscalationResetInterval + 100
+        )
+        try await broker.perform(owner: UUID()) {}
+
+        clock.advance(by: 10)
+        _ = await captureError(from: broker, owner: UUID()) {
+            throw self.falsePermissionDenial()
+        }
+
+        let blocked = await captureError(from: broker, owner: UUID()) {
+            XCTFail("An open circuit must not call the OS request")
+        }
+        XCTAssertEqual(
+            blocked as? CaptureRequestBrokerError,
+            .cooldown(
+                untilMonotonicTime: clock.monotonicTime
+                    + CaptureFailureRecovery.falsePermissionDenialDelay * 2
+            )
+        )
+    }
+
+    func testEscalationResetsAfterSustainedRecovery() async throws {
+        let clock = BrokerTestClock()
+        let broker = makeBroker(clock: clock)
+
+        _ = await captureError(from: broker, owner: UUID()) {
+            throw self.falsePermissionDenial()
+        }
+        clock.advance(by: CaptureFailureRecovery.falsePermissionDenialDelay)
+        _ = await captureError(from: broker, owner: UUID()) {
+            throw self.falsePermissionDenial()
+        }
+        clock.advance(by: CaptureFailureRecovery.falsePermissionDenialDelay * 2)
+        try await broker.perform(owner: UUID()) {}
+
+        // A healthy stretch longer than the reset interval means the next
+        // denial is a fresh episode and starts from the base cooldown again.
+        clock.advance(
+            by: CaptureFailureRecovery.falsePermissionDenialEscalationResetInterval + 1
+        )
+        _ = await captureError(from: broker, owner: UUID()) {
+            throw self.falsePermissionDenial()
+        }
+
+        let blocked = await captureError(from: broker, owner: UUID()) {
+            XCTFail("An open circuit must not call the OS request")
+        }
+        XCTAssertEqual(
+            blocked as? CaptureRequestBrokerError,
             .cooldown(
                 untilMonotonicTime: clock.monotonicTime
                     + CaptureFailureRecovery.falsePermissionDenialDelay
             )
         )
-        XCTAssertEqual(logs.filter { $0.contains("circuit opened") }.count, 1)
-        XCTAssertEqual(logs.filter { $0.contains("circuit reopened") }.count, 1)
     }
 
     func testCancelledHalfOpenProbeKeepsSharedCircuitOpen() async {
@@ -212,6 +430,42 @@ final class CaptureRequestBrokerTests: XCTestCase {
 
         let otherOwnerError = await captureError(from: broker, owner: UUID()) {
             XCTFail("A cancelled probe must not clear the shared circuit")
+        }
+        XCTAssertEqual(
+            otherOwnerError as? CaptureRequestBrokerError,
+            .cooldown(
+                untilMonotonicTime: clock.monotonicTime
+                    + CaptureFailureRecovery.falsePermissionDenialDelay
+            )
+        )
+    }
+
+    func testCancelledHalfOpenProbeWithSuccessfulOSCallKeepsSharedCircuitOpen() async {
+        let clock = BrokerTestClock()
+        let broker = makeBroker(clock: clock)
+        let gate = BrokerTestGate()
+
+        _ = await captureError(from: broker, owner: UUID()) {
+            throw self.falsePermissionDenial()
+        }
+        clock.advance(by: CaptureFailureRecovery.falsePermissionDenialDelay)
+
+        let probe = Task { @MainActor () -> Error? in
+            await self.captureError(from: broker, owner: UUID()) {
+                // The OS call returns successfully even though the probe's
+                // task was cancelled while it was in flight.
+                await gate.wait()
+            }
+        }
+        await waitUntil { gate.waiterCount == 1 }
+
+        probe.cancel()
+        gate.resumeNext()
+        let probeError = await probe.value
+        XCTAssertTrue(probeError is CancellationError)
+
+        let otherOwnerError = await captureError(from: broker, owner: UUID()) {
+            XCTFail("A cancelled probe must not close the shared circuit even when its OS call succeeded")
         }
         XCTAssertEqual(
             otherOwnerError as? CaptureRequestBrokerError,

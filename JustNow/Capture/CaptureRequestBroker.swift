@@ -19,6 +19,10 @@ enum CaptureRequestBrokerError: Error, Equatable {
 enum CaptureRequestBrokerRecoveryState: Equatable {
     case normal
     case coolingDown
+    /// Repeated false denials have reached the maximum retry interval. Capture
+    /// still retries in the background, but the user should receive one clear
+    /// route to repair a persistent macOS permission-service desync.
+    case needsAttention
 }
 
 /// Serialises all one-shot ScreenCaptureKit calls made by this process.
@@ -27,6 +31,12 @@ enum CaptureRequestBrokerRecoveryState: Equatable {
 /// when TCC remains granted. The broker sees that result before releasing a
 /// waiting display, opens one shared circuit, and makes callers fail fast
 /// until a single half-open probe succeeds.
+///
+/// Each failed probe that reopens the circuit doubles the cooldown (capped at
+/// `CaptureFailureRecovery.falsePermissionDenialMaximumDelay`), because every
+/// ScreenCaptureKit touch during a desync episode risks re-surfacing the
+/// native permission prompt. Escalation resets once the circuit has stayed
+/// closed past `falsePermissionDenialEscalationResetInterval`.
 @MainActor
 final class CaptureRequestBroker {
     private struct Waiter {
@@ -51,6 +61,8 @@ final class CaptureRequestBroker {
     private let hasScreenRecordingPermission: @MainActor () -> Bool
     private let log: @MainActor (String) -> Void
     private let cooldown: TimeInterval
+    private let maximumCooldown: TimeInterval
+    private let escalationResetInterval: TimeInterval
 
     var recoveryStateDidChange: @MainActor (CaptureRequestBrokerRecoveryState) -> Void = { _ in }
 
@@ -58,6 +70,14 @@ final class CaptureRequestBroker {
     private var isRequestInFlight = false
     private var waiters: [Waiter] = []
     private var openedCircuitCount = 0
+    /// Doubles the cooldown per consecutive reopen; bounded so the exponent
+    /// stays sane even though `maximumCooldown` already caps the delay.
+    private var cooldownEscalationLevel = 0
+    private static let maximumCooldownEscalationLevel = 8
+    /// Monotonic time of the most recent half-open probe success. Used to
+    /// decide whether a new denial after recovery continues the same desync
+    /// episode (escalate) or follows a sustained healthy stretch (reset).
+    private var lastRecoveryMonotonicTime: TimeInterval?
 
     init(
         monotonicNow: @escaping @MainActor () -> TimeInterval = {
@@ -67,6 +87,9 @@ final class CaptureRequestBroker {
             ScreenCaptureManager.hasScreenRecordingPermission()
         },
         cooldown: TimeInterval = CaptureFailureRecovery.falsePermissionDenialDelay,
+        maximumCooldown: TimeInterval = CaptureFailureRecovery.falsePermissionDenialMaximumDelay,
+        escalationResetInterval: TimeInterval =
+            CaptureFailureRecovery.falsePermissionDenialEscalationResetInterval,
         log: @escaping @MainActor (String) -> Void = { message in
             captureBrokerLogger.warning("\(message, privacy: .public)")
             DiagnosticsLog.shared.log("Capture", message)
@@ -75,7 +98,31 @@ final class CaptureRequestBroker {
         self.monotonicNow = monotonicNow
         self.hasScreenRecordingPermission = hasScreenRecordingPermission
         self.cooldown = cooldown
+        self.maximumCooldown = maximumCooldown
+        self.escalationResetInterval = escalationResetInterval
         self.log = log
+    }
+
+    /// Monotonic deadline of the currently open circuit, if any. Callers use
+    /// this to defer restart work until the cooldown has expired instead of
+    /// treating a cooling-down circuit as a hard failure.
+    var openCircuitMonotonicDeadline: TimeInterval? {
+        guard case .open(let monotonicDeadline) = circuitState else { return nil }
+        return monotonicDeadline
+    }
+
+    /// True only when the circuit is fully closed — not open and not waiting
+    /// on a half-open probe. Callers use this to avoid reporting a healthy
+    /// state while the shared circuit is still recovering.
+    var isCircuitClosed: Bool {
+        if case .closed = circuitState { return true }
+        return false
+    }
+
+    /// Seconds until the open circuit's cooldown expires, or nil when closed.
+    func remainingCooldown() -> TimeInterval? {
+        guard let deadline = openCircuitMonotonicDeadline else { return nil }
+        return max(0, deadline - monotonicNow())
     }
 
     /// Runs a single one-shot request after process-wide admission.
@@ -90,7 +137,13 @@ final class CaptureRequestBroker {
         try await acquireTurn(owner: owner)
 
         do {
+            try Task.checkCancellation()
             let value = try await operation()
+            // Enforce cancellation at the broker boundary so a cancelled
+            // half-open probe whose OS call still returned successfully cannot
+            // close the shared circuit on behalf of a caller that no longer
+            // wants the result.
+            try Task.checkCancellation()
             finishTurn(after: .success)
             return value
         } catch {
@@ -120,7 +173,7 @@ final class CaptureRequestBroker {
                 // Capture may have been paused and restarted while the shared
                 // circuit was still open. Re-publish the state so the new run
                 // does not briefly present itself as healthy.
-                recoveryStateDidChange(.coolingDown)
+                publishOpenCircuitRecoveryState()
                 throw CaptureRequestBrokerError.cooldown(
                     untilMonotonicTime: monotonicDeadline
                 )
@@ -185,6 +238,7 @@ final class CaptureRequestBroker {
         case .success:
             if case .halfOpen = circuitState {
                 circuitState = .closed
+                lastRecoveryMonotonicTime = monotonicNow()
                 logCircuitRecovery()
                 recoveryStateDidChange(.normal)
             }
@@ -195,14 +249,14 @@ final class CaptureRequestBroker {
                 for: error,
                 hasScreenRecordingPermission: hasScreenRecordingPermission()
             )
-            if case .backOff(let delay) = recovery {
+            if case .backOff = recovery {
                 let isHalfOpenProbe: Bool
                 if case .halfOpen = circuitState {
                     isHalfOpenProbe = true
                 } else {
                     isHalfOpenProbe = false
                 }
-                openCircuit(for: delay, isReopen: isHalfOpenProbe)
+                openCircuit(isReopen: isHalfOpenProbe, escalatesCooldown: true)
                 return
             }
 
@@ -211,7 +265,9 @@ final class CaptureRequestBroker {
                     // A display disappearing during the probe must not let it
                     // reset the circuit for every other display. Keep the
                     // shared protection in place and retry with a future owner.
-                    openCircuit(for: cooldown, isReopen: true)
+                    // A cancelled probe is not fresh evidence of failure, so
+                    // it keeps the current cooldown without escalating it.
+                    openCircuit(isReopen: true, escalatesCooldown: false)
                     return
                 }
                 // This was not the beta false-denial signature. Preserve the
@@ -222,8 +278,30 @@ final class CaptureRequestBroker {
         }
     }
 
-    private func openCircuit(for delay: TimeInterval, isReopen: Bool = false) {
-        let monotonicDeadline = monotonicNow() + delay
+    private func openCircuit(isReopen: Bool, escalatesCooldown: Bool) {
+        let now = monotonicNow()
+        if escalatesCooldown {
+            if isReopen {
+                // A failed half-open probe means no healthy period occurred,
+                // no matter how long the probe was delayed (e.g. by sleep).
+                cooldownEscalationLevel = min(
+                    cooldownEscalationLevel + 1,
+                    Self.maximumCooldownEscalationLevel
+                )
+            } else if let lastRecoveryMonotonicTime,
+                      now - lastRecoveryMonotonicTime < escalationResetInterval {
+                // Quick relapse after recovery: same desync episode.
+                cooldownEscalationLevel = min(
+                    cooldownEscalationLevel + 1,
+                    Self.maximumCooldownEscalationLevel
+                )
+            } else {
+                // First denial ever, or one after a sustained healthy stretch.
+                cooldownEscalationLevel = 0
+            }
+        }
+        let delay = currentCooldownDelay
+        let monotonicDeadline = now + delay
         circuitState = .open(monotonicDeadline: monotonicDeadline)
         openedCircuitCount += 1
 
@@ -233,13 +311,25 @@ final class CaptureRequestBroker {
             "Global ScreenCaptureKit capture circuit \(event) for \(delay) seconds "
                 + "(queuedRequests=\(queuedCount), circuitOpenCount=\(openedCircuitCount))"
         )
-        recoveryStateDidChange(.coolingDown)
+        publishOpenCircuitRecoveryState()
 
         let pending = waiters
         waiters.removeAll()
         isRequestInFlight = false
         for waiter in pending {
             waiter.continuation.resume(returning: .cooldown(monotonicDeadline))
+        }
+    }
+
+    private var currentCooldownDelay: TimeInterval {
+        min(cooldown * pow(2, Double(cooldownEscalationLevel)), maximumCooldown)
+    }
+
+    private func publishOpenCircuitRecoveryState() {
+        if currentCooldownDelay >= maximumCooldown {
+            recoveryStateDidChange(.needsAttention)
+        } else {
+            recoveryStateDidChange(.coolingDown)
         }
     }
 

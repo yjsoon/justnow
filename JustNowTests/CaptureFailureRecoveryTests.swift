@@ -32,6 +32,25 @@ final class CaptureFailureRecoveryTests: XCTestCase {
         )
     }
 
+    func testIsPermissionDenialMatchesScreenCaptureKitDenialSignature() {
+        XCTAssertTrue(
+            CaptureFailureRecovery.isPermissionDenial(
+                NSError(domain: "com.apple.ScreenCaptureKit.SCStreamErrorDomain", code: -3801)
+            )
+        )
+        XCTAssertFalse(
+            CaptureFailureRecovery.isPermissionDenial(
+                NSError(domain: "com.apple.ScreenCaptureKit.SCStreamErrorDomain", code: -3802)
+            )
+        )
+        XCTAssertFalse(
+            CaptureFailureRecovery.isPermissionDenial(
+                NSError(domain: "com.apple.ScreenCaptureKit.CoreGraphicsErrorDomain", code: -3801)
+            )
+        )
+        XCTAssertFalse(CaptureFailureRecovery.isPermissionDenial(CaptureError.permissionDenied))
+    }
+
     func testCountsOtherScreenCaptureKitErrorsTowardsStop() {
         let error = NSError(
             domain: "com.apple.ScreenCaptureKit.CoreGraphicsErrorDomain",
