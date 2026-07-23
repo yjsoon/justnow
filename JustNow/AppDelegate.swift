@@ -113,6 +113,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     private var isTerminationFlushInProgress = false
     private var idleTransitionTimer: Timer?
     private var screenRecordingPermission = ScreenRecordingPermissionState()
+    private var captureRecoveryNeedsAttention = false
+    private var hasPresentedPersistentCaptureRecoveryAlert = false
     private let capturePolicyController = CapturePolicyController()
     private let captureStartController = CaptureStartController()
     private lazy var captureStopController = CaptureStopController(
@@ -146,7 +148,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         },
         scheduleStart: { [weak self] in self?.scheduleCaptureStart($0) },
         cancelPendingStart: { [weak self] in self?.captureStartController.cancelPendingStart() },
-        scheduleStop: { [weak self] in self?.captureStopController.scheduleStop($0) },
+        scheduleStop: { [weak self] request in
+            guard let self else { return }
+            // Capture this synchronously, immediately after the lifecycle
+            // controller cancelled its old start. A newer resume advances the
+            // generation while the queued stop awaits and must survive.
+            let startGeneration = self.captureStartController.generationSnapshot()
+            self.captureStopController.scheduleStop(request) { [weak self] in
+                self?.captureStartController.completeDeferredStartIfNoNewerRequest(
+                    since: startGeneration
+                )
+            }
+        },
         updateStatus: { [weak self] in self?.updateCaptureStatus($0) },
         enableBlackFrameFilter: { [weak self] in self?.frameBuffer?.enableBlackFrameFilter(for: $0) },
         endForegroundActivity: { [weak self] in self?.appNapPreventer.stopActivity() },
@@ -387,6 +400,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             return
         } catch CaptureError.permissionDenied {
             presentPermissionAlert(status: "No Permission")
+        } catch CaptureError.noDisplay {
+            captureStartController.beginDeferredStart()
+            DiagnosticsLog.shared.log(
+                "Capture",
+                "Launch capture found no usable display; deferred recovery remains scheduled"
+            )
+            updateCaptureStatus("Recovering…")
+        } catch is CaptureRequestBrokerError {
+            // The shared ScreenCaptureKit circuit is cooling down after a
+            // false permission denial; the coordinator retries when it ends.
+            DiagnosticsLog.shared.log(
+                "Capture",
+                "Launch capture start deferred while the shared ScreenCaptureKit circuit cools down; \(CaptureSystemState.summary())"
+            )
+            captureStartController.beginDeferredStart()
+            updateCaptureStatus(
+                captureRecoveryNeedsAttention ? "Capture Help Needed" : "Recovering…"
+            )
         } catch {
             DiagnosticsLog.shared.log(
                 "Capture",
@@ -566,37 +597,80 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         captureEventController.handleScreenUnlock()
     }
 
-    private func startCaptureIfAllowed(successMessage: String, failurePrefix: String, failureStatus: String) async -> Bool {
-        guard !Task.isCancelled else { return false }
+    private func startCaptureIfAllowed(
+        successMessage: String,
+        failurePrefix: String,
+        failureStatus: String
+    ) async -> CaptureStartResult {
+        guard !Task.isCancelled else { return .failed }
         guard captureEventController.canStartCapture() else {
             // Without this update, the caller's transient "Resuming..."
             // (or similar) status would stick forever when the lifecycle
             // says we shouldn't start.
             applyBlockedCaptureStatusIfAvailable()
-            return false
+            return .failed
         }
 
         do {
+            // A resume requested during launch setup is real intent, but it
+            // must not overtake frame-buffer/coordinator configuration or
+            // start a second reconciliation against partially installed state.
+            let startupTask = setupCaptureTask
+            await startupTask?.value
+            guard !Task.isCancelled, captureEventController.canStartCapture() else {
+                applyBlockedCaptureStatusIfAvailable()
+                return .failed
+            }
+            // Stop and start requests are scheduled by separate lifecycle
+            // tasks. A later resume must wait for any already-queued stop so
+            // the newest user/system intent wins deterministically.
+            await captureStopController.waitForPendingStop()
+            guard !Task.isCancelled, captureEventController.canStartCapture() else {
+                applyBlockedCaptureStatusIfAvailable()
+                return .failed
+            }
             try await captureCoordinator.startCapture()
-            guard !Task.isCancelled else { return false }
+            guard !Task.isCancelled else { return .failed }
             guard captureEventController.canStartCapture() else {
                 await captureCoordinator.stopCapture()
                 applyBlockedCaptureStatusIfAvailable()
-                return false
+                return .failed
             }
             handleSuccessfulCaptureStart(successMessage: successMessage)
-            return true
+            return .started
         } catch is CancellationError {
-            return false
+            return .failed
         } catch CaptureError.permissionDenied {
             presentPermissionAlert(status: "No Permission")
-            return false
+            return .failed
+        } catch CaptureError.noDisplay {
+            DiagnosticsLog.shared.log(
+                "Capture",
+                "\(failurePrefix): no usable display; deferred recovery remains scheduled"
+            )
+            updateCaptureStatus("Recovering…")
+            return .deferred
+        } catch is CaptureRequestBrokerError {
+            // Deferred, not failed: the coordinator reconciles again once the
+            // shared circuit's cooldown expires, so don't burn retry budget or
+            // report a hard stop.
+            DiagnosticsLog.shared.log(
+                "Capture",
+                "\(failurePrefix): deferred while the shared ScreenCaptureKit circuit cools down"
+            )
+            updateCaptureStatus(
+                captureRecoveryNeedsAttention ? "Capture Help Needed" : "Recovering…"
+            )
+            if captureRecoveryNeedsAttention {
+                schedulePersistentCaptureRecoveryAlert()
+            }
+            return .deferred
         } catch {
             let detail = DiagnosticsLogFormat.describe(error)
             captureLogger.error("\(failurePrefix, privacy: .public): \(detail, privacy: .public)")
             DiagnosticsLog.shared.log("Capture", "\(failurePrefix): \(detail); \(CaptureSystemState.summary())")
             updateCaptureStatus(failureStatus)
-            return false
+            return .failed
         }
     }
 
@@ -630,7 +704,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 self?.updateCaptureStatus(status)
             },
             startCapture: { [weak self] attempt in
-                guard let self else { return false }
+                guard let self else { return .failed }
                 return await self.startCaptureIfAllowed(
                     successMessage: attempt.successMessage,
                     failurePrefix: attempt.failurePrefix,
@@ -661,12 +735,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     ) {
         switch state {
         case .normal:
+            captureRecoveryNeedsAttention = false
+            updatePermissionHelpMenuItem()
             if coordinator.isCapturing, captureEventController.blockedStatus() == nil {
-                updateCaptureStatus("Active")
+                // The broker publishes .normal when its half-open discovery
+                // probe succeeds, before a display manager necessarily starts.
+                // Keep deferred lifecycle ownership until capture is truly live.
+                captureStartController.completeDeferredStart()
+                handleSuccessfulCaptureStart()
             }
         case .coolingDown:
             if captureEventController.blockedStatus() == nil {
-                updateCaptureStatus("Recovering…")
+                captureStartController.beginDeferredStart()
+                updateCaptureStatus(
+                    captureRecoveryNeedsAttention ? "Capture Help Needed" : "Recovering…"
+                )
+            }
+        case .needsAttention:
+            captureRecoveryNeedsAttention = true
+            updatePermissionHelpMenuItem()
+            if captureEventController.blockedStatus() == nil {
+                captureStartController.beginDeferredStart()
+                updateCaptureStatus("Capture Help Needed")
+                schedulePersistentCaptureRecoveryAlert()
             }
         }
     }
@@ -937,8 +1028,48 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     private func updatePermissionHelpMenuItem() {
-        let needsPermissionHelp = !ScreenCaptureManager.hasScreenRecordingPermission()
+        let needsPermissionHelp = captureRecoveryNeedsAttention
+            || !ScreenCaptureManager.hasScreenRecordingPermission()
         statusItemController?.setPermissionHelpVisible(needsPermissionHelp)
+    }
+
+    private func showPersistentCaptureRecoveryAlert() {
+        guard !hasPresentedPersistentCaptureRecoveryAlert else { return }
+        hasPresentedPersistentCaptureRecoveryAlert = true
+
+        DiagnosticsLog.shared.log(
+            "Permission",
+            "Presenting persistent ScreenCaptureKit recovery guidance after maximum cooldown; \(CaptureSystemState.summary())"
+        )
+
+        let alert = NSAlert()
+        alert.messageText = "JustNow Still Can't Capture"
+        alert.informativeText = """
+        macOS continues to reject screen capture even though Screen Recording appears enabled. JustNow has slowed its retries to avoid repeated permission prompts and will keep trying in the background.
+
+        If capture does not recover, open Screen Recording settings, remove the existing JustNow entry, then relaunch JustNow once so macOS can create a fresh permission record.
+        """
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Open System Settings")
+        alert.addButton(withTitle: "Keep Retrying")
+
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let sourceFrame = alert.window.frame
+        PermisoAssistant.shared.present(
+            panel: .screenRecording,
+            sourceFrameInScreen: sourceFrame.isEmpty ? nil : sourceFrame
+        )
+    }
+
+    private func schedulePersistentCaptureRecoveryAlert() {
+        // Broker recovery callbacks run while its request permit is still held.
+        // Defer modal presentation so queued callers are released first.
+        Task { @MainActor [weak self] in
+            guard let self, self.captureRecoveryNeedsAttention else { return }
+            self.showPersistentCaptureRecoveryAlert()
+        }
     }
 
     private func presentPermissionAlert(status: String) {

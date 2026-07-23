@@ -11,6 +11,18 @@ struct CaptureStartRetryPolicy {
     let attempt: CaptureStartAttempt
 }
 
+enum CaptureStartResult: Equatable {
+    case started
+    /// Recovery is already owned by another scheduler, so this attempt must
+    /// not consume the generic delayed-retry policy.
+    case deferred
+    case failed
+}
+
+struct CaptureStartGeneration: Equatable {
+    fileprivate let value: Int
+}
+
 struct CaptureStartRequest {
     let status: String
     let includeOverlayInBlockedStatus: Bool
@@ -38,6 +50,8 @@ final class CaptureStartController {
     private let sleep: (Duration) async -> Void
     private var pendingStartTask: Task<Void, Never>?
     private var pendingStartGeneration = 0
+    private var isStartDeferred = false
+    private var deferredCompletionGeneration = 0
 
     init(
         sleep: @escaping (Duration) async -> Void = { duration in
@@ -48,13 +62,32 @@ final class CaptureStartController {
     }
 
     var hasPendingStart: Bool {
-        pendingStartTask != nil
+        pendingStartTask != nil || isStartDeferred
     }
 
     func cancelPendingStart() {
         pendingStartGeneration += 1
         pendingStartTask?.cancel()
         pendingStartTask = nil
+        isStartDeferred = false
+    }
+
+    func completeDeferredStart() {
+        deferredCompletionGeneration += 1
+        isStartDeferred = false
+    }
+
+    func generationSnapshot() -> CaptureStartGeneration {
+        CaptureStartGeneration(value: pendingStartGeneration)
+    }
+
+    func completeDeferredStartIfNoNewerRequest(since generation: CaptureStartGeneration) {
+        guard generation.value == pendingStartGeneration else { return }
+        completeDeferredStart()
+    }
+
+    func beginDeferredStart() {
+        isStartDeferred = true
     }
 
     func scheduleStart(
@@ -62,7 +95,7 @@ final class CaptureStartController {
         canStartCapture: @escaping () -> Bool,
         blockedStatus: @escaping (Bool) -> String?,
         updateStatus: @escaping (String) -> Void,
-        startCapture: @escaping (CaptureStartAttempt) async -> Bool
+        startCapture: @escaping (CaptureStartAttempt) async -> CaptureStartResult
     ) {
         cancelPendingStart()
         let generation = pendingStartGeneration
@@ -94,8 +127,22 @@ final class CaptureStartController {
                 return
             }
 
-            let didStart = await startCapture(request.attempt)
-            guard !didStart, let retry = request.retry else { return }
+            let initialCompletionGeneration = self.deferredCompletionGeneration
+            let result = await startCapture(request.attempt)
+            guard !Task.isCancelled,
+                  generation == self.pendingStartGeneration else {
+                return
+            }
+            if result == .deferred {
+                // The coordinator owns the actual cooldown timer, but the app
+                // lifecycle must still see pending recovery so overlay/session
+                // transitions can stop and cancel that coordinator work.
+                if initialCompletionGeneration == self.deferredCompletionGeneration {
+                    self.isStartDeferred = true
+                }
+                return
+            }
+            guard result == .failed, let retry = request.retry else { return }
 
             await sleep(retry.delay)
 
@@ -105,7 +152,16 @@ final class CaptureStartController {
                 return
             }
 
-            _ = await startCapture(retry.attempt)
+            let retryCompletionGeneration = self.deferredCompletionGeneration
+            let retryResult = await startCapture(retry.attempt)
+            guard !Task.isCancelled,
+                  generation == self.pendingStartGeneration else {
+                return
+            }
+            if retryResult == .deferred,
+               retryCompletionGeneration == self.deferredCompletionGeneration {
+                self.isStartDeferred = true
+            }
         }
     }
 }

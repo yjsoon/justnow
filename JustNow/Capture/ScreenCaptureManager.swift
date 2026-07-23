@@ -20,15 +20,28 @@ enum CaptureFailureRecovery: Equatable {
     case backOff(TimeInterval)
 
     nonisolated static let falsePermissionDenialDelay: TimeInterval = 30
+    /// Upper bound for the shared circuit's escalating cooldown. A sustained
+    /// OS-side desync should settle into one probe every ten minutes instead
+    /// of touching ScreenCaptureKit twice a minute forever.
+    nonisolated static let falsePermissionDenialMaximumDelay: TimeInterval = 600
+    /// A circuit that reopens within this interval of the previous cooldown's
+    /// end is treated as the same desync episode and escalates the next
+    /// cooldown; a longer healthy stretch resets escalation to the base delay.
+    nonisolated static let falsePermissionDenialEscalationResetInterval: TimeInterval = 300
+
+    /// True when the error is ScreenCaptureKit's TCC denial signature,
+    /// regardless of whether preflight considers the denial genuine.
+    nonisolated static func isPermissionDenial(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == "com.apple.ScreenCaptureKit.SCStreamErrorDomain"
+            && nsError.code == -3801
+    }
 
     nonisolated static func disposition(
         for error: Error,
         hasScreenRecordingPermission: Bool
     ) -> CaptureFailureRecovery {
-        let nsError = error as NSError
-        guard hasScreenRecordingPermission,
-              nsError.domain == "com.apple.ScreenCaptureKit.SCStreamErrorDomain",
-              nsError.code == -3801 else {
+        guard hasScreenRecordingPermission, isPermissionDenial(error) else {
             return .countTowardsStop
         }
 
@@ -108,7 +121,27 @@ class ScreenCaptureManager: NSObject {
             throw CaptureError.permissionDenied
         }
 
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        // Route content discovery through the shared broker so a start attempt
+        // during a false-denial cooldown fails fast instead of touching
+        // ScreenCaptureKit and risking another native permission prompt.
+        let content: SCShareableContent
+        do {
+            content = try await captureRequestBroker.perform(owner: captureRequestOwner) {
+                try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            }
+        } catch {
+            // Permission can be revoked between the preflight above and the
+            // ScreenCaptureKit call. Surface that as a typed permission error
+            // so callers show the permission flow instead of a generic failure.
+            if CaptureFailureRecovery.isPermissionDenial(error), !Self.hasScreenRecordingPermission() {
+                DiagnosticsLog.shared.log(
+                    "Capture",
+                    "Start failed for display \(targetDisplayID): screen recording permission revoked during content discovery; \(CaptureSystemState.summary())"
+                )
+                throw CaptureError.permissionDenied
+            }
+            throw error
+        }
         try Task.checkCancellation()
         guard let display = content.displays.first(where: { $0.displayID == targetDisplayID }) else {
             throw CaptureError.noDisplay
@@ -374,12 +407,15 @@ class ScreenCaptureManager: NSObject {
             captureScheduleRevision += 1
             captureCooldownDeadline = Self.monotonicTime() + delay
             nextCaptureAt = nil
+            // The shared broker owns the authoritative (possibly escalated)
+            // cooldown; this local deadline only parks the loop until its next
+            // attempt adopts the broker's real deadline without touching the OS.
             captureLogger.warning(
-                "ScreenCaptureKit reported a false permission denial; backing off for \(delay, privacy: .public) seconds"
+                "ScreenCaptureKit reported a false permission denial; deferring capture while the shared circuit cools down"
             )
             DiagnosticsLog.shared.log(
                 "Capture",
-                "ScreenCaptureKit reported a permission denial while preflight remained granted; backing off for \(delay) seconds: \(detail)"
+                "ScreenCaptureKit reported a permission denial while preflight remained granted; deferring capture while the shared circuit cools down: \(detail)"
             )
             return
         }

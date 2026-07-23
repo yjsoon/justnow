@@ -19,6 +19,8 @@ final class CaptureStopController {
     private let stopCapture: () async -> Void
     private let endForegroundActivity: () -> Void
     private let logger: (String) -> Void
+    private var pendingStopTask: Task<Void, Never>?
+    private var stopGeneration = 0
 
     init(
         updateStatus: @escaping (String) -> Void,
@@ -35,9 +37,29 @@ final class CaptureStopController {
         }
     }
 
-    func scheduleStop(_ request: CaptureStopRequest) {
-        Task { @MainActor [weak self] in
-            await self?.performStop(request)
+    func scheduleStop(
+        _ request: CaptureStopRequest,
+        afterStop: @escaping () -> Void = {}
+    ) {
+        stopGeneration += 1
+        let generation = stopGeneration
+        let previousStopTask = pendingStopTask
+        pendingStopTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            // Preserve lifecycle intent order even when several system events
+            // enqueue sibling unstructured tasks in the same run-loop turn.
+            await previousStopTask?.value
+            await self.performStop(request)
+            afterStop()
+            if generation == self.stopGeneration {
+                self.pendingStopTask = nil
+            }
+        }
+    }
+
+    func waitForPendingStop() async {
+        while let pendingStopTask {
+            await pendingStopTask.value
         }
     }
 

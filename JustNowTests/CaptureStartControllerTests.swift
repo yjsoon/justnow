@@ -24,7 +24,7 @@ final class CaptureStartControllerTests: XCTestCase {
             updateStatus: { statuses.append($0) },
             startCapture: { _ in
                 startAttempts += 1
-                return true
+                return .started
             }
         )
 
@@ -67,7 +67,7 @@ final class CaptureStartControllerTests: XCTestCase {
             updateStatus: { statuses.append($0) },
             startCapture: { attempt in
                 startAttempts.append(attempt)
-                return startAttempts.count == 2
+                return startAttempts.count == 2 ? .started : .failed
             }
         )
 
@@ -119,7 +119,7 @@ final class CaptureStartControllerTests: XCTestCase {
             updateStatus: { _ in },
             startCapture: { _ in
                 startAttempts += 1
-                return true
+                return .started
             }
         )
 
@@ -133,6 +133,222 @@ final class CaptureStartControllerTests: XCTestCase {
         await settleScheduledTasks()
 
         XCTAssertEqual(startAttempts, 0)
+        XCTAssertFalse(controller.hasPendingStart)
+    }
+
+    func testDeferredStartDoesNotConsumeRetryPolicy() async {
+        let sleeper = CaptureStartControllerSleepProbe()
+        let controller = CaptureStartController(
+            sleep: { duration in
+                await sleeper.sleep(for: duration)
+            }
+        )
+        var startAttempts: [String] = []
+
+        controller.scheduleStart(
+            request: CaptureStartRequest(
+                status: "Restarting...",
+                attempt: CaptureStartAttempt(
+                    successMessage: "first",
+                    failurePrefix: "first deferred",
+                    failureStatus: "Recovering"
+                ),
+                retry: CaptureStartRetryPolicy(
+                    delay: .seconds(3),
+                    attempt: CaptureStartAttempt(
+                        successMessage: "second",
+                        failurePrefix: "second failed",
+                        failureStatus: "Failed"
+                    )
+                )
+            ),
+            canStartCapture: { true },
+            blockedStatus: { _ in nil },
+            updateStatus: { _ in },
+            startCapture: { attempt in
+                startAttempts.append(attempt.successMessage)
+                return .deferred
+            }
+        )
+
+        await waitUntil { startAttempts == ["first"] }
+
+        XCTAssertEqual(startAttempts, ["first"])
+        let recordedDurations = await sleeper.recordedDurations()
+        XCTAssertTrue(recordedDurations.isEmpty)
+        XCTAssertTrue(controller.hasPendingStart)
+
+        controller.cancelPendingStart()
+        XCTAssertFalse(controller.hasPendingStart)
+    }
+
+    func testDeferredRetryRemainsVisibleToLifecycle() async {
+        let sleeper = CaptureStartControllerSleepProbe()
+        let controller = CaptureStartController(
+            sleep: { duration in
+                await sleeper.sleep(for: duration)
+            }
+        )
+        var attemptCount = 0
+
+        controller.scheduleStart(
+            request: CaptureStartRequest(
+                status: "Restarting...",
+                attempt: CaptureStartAttempt(
+                    successMessage: "first",
+                    failurePrefix: "first failed",
+                    failureStatus: "Error"
+                ),
+                retry: CaptureStartRetryPolicy(
+                    delay: .seconds(3),
+                    attempt: CaptureStartAttempt(
+                        successMessage: "second",
+                        failurePrefix: "second deferred",
+                        failureStatus: "Recovering"
+                    )
+                )
+            ),
+            canStartCapture: { true },
+            blockedStatus: { _ in nil },
+            updateStatus: { _ in },
+            startCapture: { _ in
+                attemptCount += 1
+                return attemptCount == 1 ? .failed : .deferred
+            }
+        )
+
+        await waitUntil { await sleeper.recordedDurations() == [.seconds(3)] }
+        await sleeper.resumeAll()
+        await waitUntil { attemptCount == 2 && controller.hasPendingStart }
+
+        XCTAssertTrue(controller.hasPendingStart)
+        controller.cancelPendingStart()
+    }
+
+    func testCancellationCannotRestoreDeferredState() async {
+        let attemptGate = CaptureStartControllerAttemptGate()
+        let controller = CaptureStartController()
+
+        controller.scheduleStart(
+            request: CaptureStartRequest(
+                status: "Restarting...",
+                attempt: CaptureStartAttempt(
+                    successMessage: "first",
+                    failurePrefix: "first deferred",
+                    failureStatus: "Recovering"
+                )
+            ),
+            canStartCapture: { true },
+            blockedStatus: { _ in nil },
+            updateStatus: { _ in },
+            startCapture: { _ in await attemptGate.waitThenDefer() }
+        )
+
+        await waitUntil { await attemptGate.isWaiting }
+        controller.cancelPendingStart()
+        await attemptGate.resume()
+        await settleScheduledTasks()
+
+        XCTAssertFalse(controller.hasPendingStart)
+    }
+
+    func testRecoveryCompletionBeforeDeferredResultDoesNotLeaveStaleState() async {
+        let controller = CaptureStartController()
+
+        controller.scheduleStart(
+            request: CaptureStartRequest(
+                status: "Restarting...",
+                attempt: CaptureStartAttempt(
+                    successMessage: "first",
+                    failurePrefix: "first deferred",
+                    failureStatus: "Recovering"
+                )
+            ),
+            canStartCapture: { true },
+            blockedStatus: { _ in nil },
+            updateStatus: { _ in },
+            startCapture: { _ in
+                controller.completeDeferredStart()
+                return .deferred
+            }
+        )
+
+        await settleScheduledTasks()
+
+        XCTAssertFalse(controller.hasPendingStart)
+    }
+
+    func testLaterCooldownReestablishesDeferredLifecycleOwnership() {
+        let controller = CaptureStartController()
+
+        controller.beginDeferredStart()
+        XCTAssertTrue(controller.hasPendingStart)
+
+        controller.completeDeferredStart()
+        XCTAssertFalse(controller.hasPendingStart)
+
+        controller.beginDeferredStart()
+        XCTAssertTrue(controller.hasPendingStart)
+    }
+
+    func testStopCompletionClearsDeferredOwnershipRestoredAfterCancellation() {
+        let controller = CaptureStartController()
+
+        controller.cancelPendingStart()
+        let stopGeneration = controller.generationSnapshot()
+        // Models a late broker cooldown callback before the queued coordinator
+        // stop begins executing.
+        controller.beginDeferredStart()
+        XCTAssertTrue(controller.hasPendingStart)
+
+        controller.completeDeferredStartIfNoNewerRequest(since: stopGeneration)
+        XCTAssertFalse(controller.hasPendingStart)
+    }
+
+    func testStopCompletionDoesNotCancelNewerStartRequest() async {
+        let sleeper = CaptureStartControllerSleepProbe()
+        let controller = CaptureStartController(
+            sleep: { duration in
+                await sleeper.sleep(for: duration)
+            }
+        )
+        var startAttempts = 0
+
+        controller.cancelPendingStart()
+        let stopGeneration = controller.generationSnapshot()
+        controller.beginDeferredStart()
+
+        controller.scheduleStart(
+            request: CaptureStartRequest(
+                status: "Resuming...",
+                initialDelay: .seconds(1),
+                attempt: CaptureStartAttempt(
+                    successMessage: "started",
+                    failurePrefix: "failed",
+                    failureStatus: "Error"
+                )
+            ),
+            canStartCapture: { true },
+            blockedStatus: { _ in nil },
+            updateStatus: { _ in },
+            startCapture: { _ in
+                startAttempts += 1
+                return .started
+            }
+        )
+
+        await waitUntil {
+            await sleeper.recordedDurations() == [.seconds(1)]
+                && controller.hasPendingStart
+        }
+
+        controller.completeDeferredStartIfNoNewerRequest(since: stopGeneration)
+        XCTAssertTrue(controller.hasPendingStart)
+
+        await sleeper.resumeAll()
+        await waitUntil { startAttempts == 1 && !controller.hasPendingStart }
+
+        XCTAssertEqual(startAttempts, 1)
         XCTAssertFalse(controller.hasPendingStart)
     }
 
@@ -184,5 +400,24 @@ private actor CaptureStartControllerSleepProbe {
         for continuation in pendingContinuations {
             continuation.resume()
         }
+    }
+}
+
+private actor CaptureStartControllerAttemptGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var isWaiting = false
+
+    func waitThenDefer() async -> CaptureStartResult {
+        isWaiting = true
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+        return .deferred
+    }
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
+        isWaiting = false
     }
 }
