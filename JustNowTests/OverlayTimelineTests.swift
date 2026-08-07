@@ -13,22 +13,19 @@ final class OverlayTimelineTests: XCTestCase {
         try super.tearDownWithError()
     }
 
-    func testTimelineGeometryUsesElapsedTimeRatherThanEntryIndex() {
-        let start = Date(timeIntervalSinceReferenceDate: 1_000)
-        let end = start.addingTimeInterval(100)
-
-        XCTAssertEqual(timelinePosition(for: start.addingTimeInterval(10), start: start, end: end), 0.1, accuracy: 0.000_1)
-        XCTAssertEqual(timelinePosition(for: start.addingTimeInterval(90), start: start, end: end), 0.9, accuracy: 0.000_1)
-        XCTAssertEqual(timelineDate(at: 0.73, start: start, end: end), start.addingTimeInterval(73))
+    func testTimelineGeometryUsesEntryIndexRatherThanElapsedTime() {
+        XCTAssertEqual(timelineEntryPosition(index: 1, count: 11), 0.1, accuracy: 0.000_1)
+        XCTAssertEqual(timelineEntryPosition(index: 9, count: 11), 0.9, accuracy: 0.000_1)
+        XCTAssertEqual(timelineEntryIndex(at: 0.73, count: 11), 7)
     }
 
-    func testTimelineGeometryClampsAndHandlesZeroDuration() {
-        let date = Date(timeIntervalSinceReferenceDate: 1_000)
-
-        XCTAssertEqual(timelinePosition(for: date.addingTimeInterval(-1), start: date, end: date.addingTimeInterval(10)), 0)
-        XCTAssertEqual(timelinePosition(for: date.addingTimeInterval(11), start: date, end: date.addingTimeInterval(10)), 1)
-        XCTAssertEqual(timelinePosition(for: date, start: date, end: date), 1)
-        XCTAssertEqual(timelineDate(at: 0.5, start: date, end: date), date)
+    func testTimelineGeometryClampsAndHandlesSingleEntry() {
+        XCTAssertEqual(timelineEntryPosition(index: -1, count: 10), 0)
+        XCTAssertEqual(timelineEntryPosition(index: 11, count: 10), 1)
+        XCTAssertEqual(timelineEntryPosition(index: 0, count: 1), 0)
+        XCTAssertEqual(timelineEntryIndex(at: -0.5, count: 10), 0)
+        XCTAssertEqual(timelineEntryIndex(at: 1.5, count: 10), 9)
+        XCTAssertEqual(timelineEntryIndex(at: 0.5, count: 1), 0)
     }
 
     func testPayloadLeaseReleaseGateFinishesLeaseBeforeCaptureCanResume() async {
@@ -510,7 +507,7 @@ final class OverlayTimelineTests: XCTestCase {
             targetAge: 300,
             now: now
         ))
-        XCTAssertEqual(position, 0.7, accuracy: 0.000_1)
+        XCTAssertEqual(position, 0.5, accuracy: 0.000_1)
 
         let marker = try XCTUnwrap(timelineLandmarkMarkers(
             entries: entries,
@@ -518,7 +515,7 @@ final class OverlayTimelineTests: XCTestCase {
             now: now
         ).first { $0.targetAge == 300 })
         XCTAssertEqual(marker.targetDate, now.addingTimeInterval(-300))
-        XCTAssertEqual(marker.position, 0.7, accuracy: 0.000_1)
+        XCTAssertEqual(marker.position, 0.5, accuracy: 0.000_1)
         XCTAssertEqual(marker.id, marker.targetDate.timeIntervalSinceReferenceDate)
     }
 

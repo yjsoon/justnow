@@ -74,13 +74,11 @@ struct TimelineSlider: View {
 
             SliderTrack(
                 frameCount: frameCount,
-                rangeStart: viewModel.timelineStartDate,
-                rangeEnd: viewModel.timelineReferenceDate,
-                selectedTimestamp: viewModel.selectedTimestamp,
+                selectedIndex: viewModel.selectedIndex,
                 markers: timelineMarkers,
                 colourSegments: colourSegments,
                 accessibilityValue: viewModel.accessibilityTimelineValue,
-                onTimestampChanged: viewModel.setSelectedTimestamp,
+                onIndexChanged: { viewModel.selectedIndex = $0 },
                 onIncrement: viewModel.moveRight,
                 onDecrement: viewModel.moveLeft
             )
@@ -201,13 +199,11 @@ func formatRelativeTime(_ date: Date, now: Date = Date()) -> String {
 
 private struct SliderTrack: View {
     let frameCount: Int
-    let rangeStart: Date?
-    let rangeEnd: Date
-    let selectedTimestamp: Date
+    let selectedIndex: Int
     let markers: [TimelineMarker]
     let colourSegments: [TimelineZoneFill]
     let accessibilityValue: String
-    let onTimestampChanged: (Date) -> Void
+    let onIndexChanged: (Int) -> Void
     let onIncrement: () -> Void
     let onDecrement: () -> Void
 
@@ -311,13 +307,9 @@ private struct SliderTrack: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        guard frameCount > 0, width > 0, let rangeStart else { return }
+                        guard frameCount > 0, width > 0 else { return }
                         let position = max(0, min(1, value.location.x / width))
-                        onTimestampChanged(timelineDate(
-                            at: position,
-                            start: rangeStart,
-                            end: rangeEnd
-                        ))
+                        onIndexChanged(timelineEntryIndex(at: position, count: frameCount))
                     }
             )
         }
@@ -337,8 +329,7 @@ private struct SliderTrack: View {
     }
 
     private var selectedPosition: CGFloat {
-        guard frameCount > 0, let rangeStart else { return 0 }
-        return timelinePosition(for: selectedTimestamp, start: rangeStart, end: rangeEnd)
+        timelineEntryPosition(index: selectedIndex, count: frameCount)
     }
 
     private func visibleMarkers(in width: CGFloat) -> [TimelineMarker] {
@@ -425,15 +416,13 @@ func resolveTimelineMarkerPosition(
     targetAge: TimeInterval,
     now: Date = Date()
 ) -> CGFloat? {
-    guard let oldest = entries.map({ timelineSpanBounds(for: $0).start }).min() else {
-        return nil
-    }
+    guard entries.count > 1 else { return nil }
     let reference = clampedTimelineReferenceDate(requested: now, entries: entries)
-    return timelinePosition(
-        for: reference.addingTimeInterval(-targetAge),
-        start: oldest,
-        end: reference
-    )
+    guard let selection = resolveTimelineSelection(
+        entries: entries,
+        target: reference.addingTimeInterval(-targetAge)
+    ) else { return nil }
+    return timelineEntryPosition(index: selection.entryIndex, count: entries.count)
 }
 
 func timelineLandmarkMarkers(
@@ -441,7 +430,8 @@ func timelineLandmarkMarkers(
     recentWindow: TimeInterval,
     now: Date = Date()
 ) -> [TimelineMarker] {
-    guard let oldest = entries.map({ timelineSpanBounds(for: $0).start }).min() else { return [] }
+    guard entries.count > 1,
+          let oldest = entries.map({ timelineSpanBounds(for: $0).start }).min() else { return [] }
     let reference = clampedTimelineReferenceDate(requested: now, entries: entries)
 
     let oldestAge = reference.timeIntervalSince(oldest)
@@ -450,28 +440,31 @@ func timelineLandmarkMarkers(
         recentWindow: recentWindow,
         now: reference
     )
-    return targets.map { target in
-        TimelineMarker(
+    return targets.compactMap { target in
+        guard let selection = resolveTimelineSelection(entries: entries, target: target.targetDate) else {
+            return nil
+        }
+        return TimelineMarker(
             targetAge: target.targetAge,
             targetDate: target.targetDate,
             label: target.label,
-            position: timelinePosition(for: target.targetDate, start: oldest, end: reference),
+            position: timelineEntryPosition(index: selection.entryIndex, count: entries.count),
             priority: target.priority
         )
     }
     .sorted { $0.position < $1.position }
 }
 
-func timelinePosition(for date: Date, start: Date, end: Date) -> CGFloat {
-    let duration = end.timeIntervalSince(start)
-    guard duration > 0 else { return 1 }
-    return CGFloat(max(0, min(1, date.timeIntervalSince(start) / duration)))
+func timelineEntryPosition(index: Int, count: Int) -> CGFloat {
+    guard count > 1 else { return 0 }
+    let clampedIndex = max(0, min(count - 1, index))
+    return CGFloat(clampedIndex) / CGFloat(count - 1)
 }
 
-func timelineDate(at position: CGFloat, start: Date, end: Date) -> Date {
+func timelineEntryIndex(at position: CGFloat, count: Int) -> Int {
+    guard count > 1 else { return 0 }
     let clampedPosition = max(0, min(1, position))
-    let duration = max(0, end.timeIntervalSince(start))
-    return start.addingTimeInterval(TimeInterval(clampedPosition) * duration)
+    return Int((clampedPosition * CGFloat(count - 1)).rounded())
 }
 
 func timelineThumbOffset(
