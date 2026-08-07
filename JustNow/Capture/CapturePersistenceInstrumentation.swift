@@ -40,20 +40,26 @@ nonisolated struct CapturePersistenceInstrumentationSnapshot: Sendable, Equatabl
     let persistedFrames: Int
     /// Encoded JPEGs small enough for a byte-for-byte comparison.
     let exactComparisonEligibleFrames: Int
-    /// Eligible JPEGs with the preceding successfully persisted same-display
-    /// JPEG still available as an exact-comparison baseline.
+    /// Eligible JPEGs with the preceding same-display comparison baseline.
+    /// Hybrid mode uses the repository's active accepted payload; all-disk
+    /// compatibility instrumentation uses the last durable payload.
     let exactComparisonBaselineAvailableFrames: Int
     /// Encoded JPEGs over the bounded observer comparison budget.
     let exactComparisonSkippedFrames: Int
-    let byteIdenticalEncodedFrames: Int
+    /// Exact-duplicate decisions reported by the active repository policy.
+    let repositoryExactDuplicateFrames: Int
     let perceptuallyEqualFrames: Int
-    let logicalJPEGBytesWritten: Int64
-    let metadataBytesWritten: Int64
+    /// Sum of JPEG payload sizes for durable-write events. This is logical
+    /// event volume, not allocated-space growth or physical/NAND writes.
+    let logicalDurableJPEGEventBytes: Int64
+    /// Estimated logical metadata payload represented by transactions.
+    let logicalMetadataEventBytes: Int64
     let metadataTransactions: Int
     let durableRepositorySaves: Int
     let volatileRepositorySaves: Int
     let duplicateRepositorySaves: Int
     let spanCheckpointRepositorySaves: Int
+    let pressureDroppedRepositorySaves: Int
     let firstAnchorRepositorySaves: Int
     let ordinaryAnchorRepositorySaves: Int
     let majorChangeAnchorRepositorySaves: Int
@@ -83,15 +89,16 @@ nonisolated struct CapturePersistenceInstrumentationSnapshot: Sendable, Equatabl
         exactComparisonEligibleFrames: 0,
         exactComparisonBaselineAvailableFrames: 0,
         exactComparisonSkippedFrames: 0,
-        byteIdenticalEncodedFrames: 0,
+        repositoryExactDuplicateFrames: 0,
         perceptuallyEqualFrames: 0,
-        logicalJPEGBytesWritten: 0,
-        metadataBytesWritten: 0,
+        logicalDurableJPEGEventBytes: 0,
+        logicalMetadataEventBytes: 0,
         metadataTransactions: 0,
         durableRepositorySaves: 0,
         volatileRepositorySaves: 0,
         duplicateRepositorySaves: 0,
         spanCheckpointRepositorySaves: 0,
+        pressureDroppedRepositorySaves: 0,
         firstAnchorRepositorySaves: 0,
         ordinaryAnchorRepositorySaves: 0,
         majorChangeAnchorRepositorySaves: 0,
@@ -116,13 +123,13 @@ nonisolated struct CapturePersistenceInstrumentationSnapshot: Sendable, Equatabl
 /// byte totals: no capture content, paths, display names, IDs, or hashes.
 enum CapturePersistenceInstrumentationDiagnosticsFormat {
     static func line(_ snapshot: CapturePersistenceInstrumentationSnapshot) -> String {
-        "epoch=\(snapshot.epoch) captured=\(snapshot.capturedFrames) encoded=\(snapshot.encodedFrames) persisted=\(snapshot.persistedFrames) repository{durable=\(snapshot.durableRepositorySaves) volatile=\(snapshot.volatileRepositorySaves) duplicate=\(snapshot.duplicateRepositorySaves) checkpoint=\(snapshot.spanCheckpointRepositorySaves)} actualAnchors{first=\(snapshot.firstAnchorRepositorySaves) ordinary=\(snapshot.ordinaryAnchorRepositorySaves) major=\(snapshot.majorChangeAnchorRepositorySaves) capacity=\(snapshot.capacitySpillRepositorySaves) termination=\(snapshot.terminationAnchorRepositorySaves)} exact{eligible=\(snapshot.exactComparisonEligibleFrames) baseline=\(snapshot.exactComparisonBaselineAvailableFrames) identical=\(snapshot.byteIdenticalEncodedFrames) skipped=\(snapshot.exactComparisonSkippedFrames)} perceptualEqual=\(snapshot.perceptuallyEqualFrames) jpegBytes=\(snapshot.logicalJPEGBytesWritten) metadata{bytes=\(snapshot.metadataBytesWritten) transactions=\(snapshot.metadataTransactions)} proposedAnchors{ordinary=\(snapshot.proposedOrdinaryAnchors) major=\(snapshot.proposedMajorAnchors)} queue{preTrimHigh=\(snapshot.maximumPreTrimIngestQueueDepth) retainedHigh=\(snapshot.maximumIngestQueueDepth) asyncDropped=\(snapshot.droppedAsyncIngests) priorityDropped=\(snapshot.droppedAsyncIngestsForSyncPriority) backlogDropped=\(snapshot.droppedAsyncIngestsForBacklogLimit)} displays{current=\(snapshot.currentTrackedDisplays) high=\(snapshot.maximumObservedDisplays) evictions=\(snapshot.displayStateEvictions)} payloadHigh{jpeg=\(snapshot.largestEncodedJPEGBytes) metadata=\(snapshot.largestMetadataWriteBytes)}"
+        "epoch=\(snapshot.epoch) captured=\(snapshot.capturedFrames) encoded=\(snapshot.encodedFrames) durableJPEGEvents=\(snapshot.persistedFrames) repository{durable=\(snapshot.durableRepositorySaves) volatile=\(snapshot.volatileRepositorySaves) duplicate=\(snapshot.duplicateRepositorySaves) checkpoint=\(snapshot.spanCheckpointRepositorySaves) pressureDropped=\(snapshot.pressureDroppedRepositorySaves)} actualAnchors{first=\(snapshot.firstAnchorRepositorySaves) ordinary=\(snapshot.ordinaryAnchorRepositorySaves) major=\(snapshot.majorChangeAnchorRepositorySaves) capacity=\(snapshot.capacitySpillRepositorySaves) termination=\(snapshot.terminationAnchorRepositorySaves)} exact{eligible=\(snapshot.exactComparisonEligibleFrames) baseline=\(snapshot.exactComparisonBaselineAvailableFrames) repositoryDuplicate=\(snapshot.repositoryExactDuplicateFrames) skipped=\(snapshot.exactComparisonSkippedFrames)} perceptualEqual=\(snapshot.perceptuallyEqualFrames) logicalJPEGEventBytes=\(snapshot.logicalDurableJPEGEventBytes) logicalMetadata{eventBytes=\(snapshot.logicalMetadataEventBytes) transactions=\(snapshot.metadataTransactions)} proposedAnchors{ordinary=\(snapshot.proposedOrdinaryAnchors) major=\(snapshot.proposedMajorAnchors)} queue{preTrimHigh=\(snapshot.maximumPreTrimIngestQueueDepth) retainedHigh=\(snapshot.maximumIngestQueueDepth) asyncDropped=\(snapshot.droppedAsyncIngests) priorityDropped=\(snapshot.droppedAsyncIngestsForSyncPriority) backlogDropped=\(snapshot.droppedAsyncIngestsForBacklogLimit)} displays{current=\(snapshot.currentTrackedDisplays) high=\(snapshot.maximumObservedDisplays) evictions=\(snapshot.displayStateEvictions)} payloadHigh{jpeg=\(snapshot.largestEncodedJPEGBytes) metadata=\(snapshot.largestMetadataWriteBytes)}"
     }
 }
 
-/// Thread-safe observer shared by the main-actor buffer and the frame-store
-/// actor. It retains a bounded number of small, successfully persisted JPEGs
-/// so byte equality can be measured exactly, without adding an encode pass.
+/// Thread-safe observer shared by the main-actor buffer and frame-store actor.
+/// Its bounded baselines exist only for diagnostic comparisons; hybrid exact
+/// duplicate totals come from repository decisions.
 nonisolated final class CapturePersistenceInstrumentation: @unchecked Sendable {
     private struct DisplayObservation {
         var lastHash: UInt64?
@@ -137,6 +144,7 @@ nonisolated final class CapturePersistenceInstrumentation: @unchecked Sendable {
     private var snapshot = CapturePersistenceInstrumentationSnapshot.empty
     private var observations: [UUID?: DisplayObservation] = [:]
     private var lastPersistedJPEGData: [UUID?: Data] = [:]
+    private var lastAcceptedJPEGData: [UUID?: Data] = [:]
     private var trackedDisplayOrder: [UUID?] = []
     private var recordedWriteReceiptTokens: Set<UUID> = []
 
@@ -224,7 +232,11 @@ nonisolated final class CapturePersistenceInstrumentation: @unchecked Sendable {
     /// The comparison is against the last successfully persisted JPEG for
     /// this display. It is therefore exact byte equality, not a hash proxy.
     /// JPEGs over the small observer budget are deliberately not compared.
-    func recordEncodedJPEG(_ data: Data, displayID: UUID?) {
+    func recordEncodedJPEG(
+        _ data: Data,
+        displayID: UUID?,
+        compareAgainstPersistedBaseline: Bool = true
+    ) {
         withLock {
             touchDisplay(displayID)
             var next = snapshot.replacing(
@@ -237,12 +249,14 @@ nonisolated final class CapturePersistenceInstrumentation: @unchecked Sendable {
             }
 
             next = next.replacing(exactComparisonEligibleFrames: next.exactComparisonEligibleFrames + 1)
-            if let prior = lastPersistedJPEGData[displayID] {
+            if compareAgainstPersistedBaseline, let prior = lastPersistedJPEGData[displayID] {
                 next = next.replacing(
                     exactComparisonBaselineAvailableFrames: next.exactComparisonBaselineAvailableFrames + 1
                 )
                 if prior.count == data.count, prior == data {
-                    next = next.replacing(byteIdenticalEncodedFrames: next.byteIdenticalEncodedFrames + 1)
+                    next = next.replacing(
+                        repositoryExactDuplicateFrames: next.repositoryExactDuplicateFrames + 1
+                    )
                 }
             }
             snapshot = next
@@ -270,7 +284,7 @@ nonisolated final class CapturePersistenceInstrumentation: @unchecked Sendable {
     func recordMetadataWrite(byteCount: Int) {
         withLock {
             snapshot = snapshot.replacing(
-                metadataBytesWritten: snapshot.metadataBytesWritten + Int64(byteCount),
+                logicalMetadataEventBytes: snapshot.logicalMetadataEventBytes + Int64(byteCount),
                 metadataTransactions: snapshot.metadataTransactions + 1,
                 largestMetadataWriteBytes: max(snapshot.largestMetadataWriteBytes, byteCount)
             )
@@ -305,7 +319,9 @@ nonisolated final class CapturePersistenceInstrumentation: @unchecked Sendable {
                     spanCheckpointRepositorySaves: snapshot.spanCheckpointRepositorySaves + 1
                 )
             case .pressureDrop:
-                break
+                snapshot = snapshot.replacing(
+                    pressureDroppedRepositorySaves: snapshot.pressureDroppedRepositorySaves + 1
+                )
             }
 
             if outcome.wroteDurableJPEG {
@@ -313,13 +329,13 @@ nonisolated final class CapturePersistenceInstrumentation: @unchecked Sendable {
                 updateComparisonData(jpegData, displayID: displayID)
                 snapshot = snapshot.replacing(
                     persistedFrames: snapshot.persistedFrames + 1,
-                    logicalJPEGBytesWritten: snapshot.logicalJPEGBytesWritten + Int64(jpegData.count)
+                    logicalDurableJPEGEventBytes: snapshot.logicalDurableJPEGEventBytes + Int64(jpegData.count)
                 )
             }
 
             for byteCount in outcome.metadataWriteByteCounts {
                 snapshot = snapshot.replacing(
-                    metadataBytesWritten: snapshot.metadataBytesWritten + Int64(byteCount),
+                    logicalMetadataEventBytes: snapshot.logicalMetadataEventBytes + Int64(byteCount),
                     metadataTransactions: snapshot.metadataTransactions + 1,
                     largestMetadataWriteBytes: max(snapshot.largestMetadataWriteBytes, byteCount)
                 )
@@ -331,7 +347,11 @@ nonisolated final class CapturePersistenceInstrumentation: @unchecked Sendable {
     /// outcome, this preserves compound operations (for example, completing a
     /// pending promotion before admitting the current capture) and attributes
     /// durable anchors to the policy decision which caused the write.
-    func recordRepositoryEffects(_ effects: FrameRepositoryEffects) {
+    func recordRepositoryEffects(
+        _ effects: FrameRepositoryEffects,
+        acceptedJPEGData: Data? = nil,
+        acceptedDisplayID: UUID? = nil
+    ) {
         withLock {
             for event in effects.persistenceEvents {
                 switch event {
@@ -342,11 +362,15 @@ nonisolated final class CapturePersistenceInstrumentation: @unchecked Sendable {
 
                 case .exactDuplicate:
                     snapshot = snapshot.replacing(
+                        repositoryExactDuplicateFrames:
+                            snapshot.repositoryExactDuplicateFrames + 1,
                         duplicateRepositorySaves: snapshot.duplicateRepositorySaves + 1
                     )
 
                 case .pressureDrop:
-                    break
+                    snapshot = snapshot.replacing(
+                        pressureDroppedRepositorySaves: snapshot.pressureDroppedRepositorySaves + 1
+                    )
 
                 case .durableAnchor(
                     reason: let reason,
@@ -396,6 +420,13 @@ nonisolated final class CapturePersistenceInstrumentation: @unchecked Sendable {
                     recordMetadataWriteLocked(metadataByteCount)
                 }
             }
+            if let acceptedJPEGData {
+                recordHybridRepositoryDecisionLocked(
+                    effects,
+                    jpegData: acceptedJPEGData,
+                    displayID: acceptedDisplayID
+                )
+            }
         }
     }
 
@@ -411,6 +442,7 @@ nonisolated final class CapturePersistenceInstrumentation: @unchecked Sendable {
             snapshot = .empty.replacing(epoch: nextEpoch)
             observations.removeAll(keepingCapacity: true)
             lastPersistedJPEGData.removeAll(keepingCapacity: true)
+            lastAcceptedJPEGData.removeAll(keepingCapacity: true)
             trackedDisplayOrder.removeAll(keepingCapacity: true)
             recordedWriteReceiptTokens.removeAll(keepingCapacity: true)
         }
@@ -430,7 +462,7 @@ nonisolated final class CapturePersistenceInstrumentation: @unchecked Sendable {
         updateComparisonData(data, displayID: displayID)
         snapshot = snapshot.replacing(
             persistedFrames: snapshot.persistedFrames + 1,
-            logicalJPEGBytesWritten: snapshot.logicalJPEGBytesWritten + Int64(data.count)
+            logicalDurableJPEGEventBytes: snapshot.logicalDurableJPEGEventBytes + Int64(data.count)
         )
     }
 
@@ -438,7 +470,7 @@ nonisolated final class CapturePersistenceInstrumentation: @unchecked Sendable {
     private func recordMetadataWriteLocked(_ byteCount: Int) {
         guard byteCount > 0 else { return }
         snapshot = snapshot.replacing(
-            metadataBytesWritten: snapshot.metadataBytesWritten + Int64(byteCount),
+            logicalMetadataEventBytes: snapshot.logicalMetadataEventBytes + Int64(byteCount),
             metadataTransactions: snapshot.metadataTransactions + 1,
             largestMetadataWriteBytes: max(snapshot.largestMetadataWriteBytes, byteCount)
         )
@@ -455,6 +487,35 @@ nonisolated final class CapturePersistenceInstrumentation: @unchecked Sendable {
         lastPersistedJPEGData[displayID] = data
     }
 
+    /// Hybrid exact-duplicate metrics follow the repository's active accepted
+    /// payload decision. This avoids comparing against an older durable JPEG
+    /// across volatile admissions (for example A→RAM B→B or A→B→A).
+    private func recordHybridRepositoryDecisionLocked(
+        _ effects: FrameRepositoryEffects,
+        jpegData: Data,
+        displayID: UUID?
+    ) {
+        let wasPressureDropped = effects.persistenceEvents.contains {
+            if case .pressureDrop = $0 { return true }
+            return false
+        }
+        if wasPressureDropped {
+            lastAcceptedJPEGData.removeValue(forKey: displayID)
+            return
+        }
+        guard jpegData.count <= Self.maximumComparableJPEGBytes else {
+            lastAcceptedJPEGData.removeValue(forKey: displayID)
+            return
+        }
+        if lastAcceptedJPEGData[displayID] != nil {
+            snapshot = snapshot.replacing(
+                exactComparisonBaselineAvailableFrames:
+                    snapshot.exactComparisonBaselineAvailableFrames + 1
+            )
+        }
+        lastAcceptedJPEGData[displayID] = jpegData
+    }
+
     /// Must be called while `lock` is held. One shared LRU bounds every
     /// per-display structure, including shadow observations and JPEG bases.
     private func touchDisplay(_ displayID: UUID?) {
@@ -465,6 +526,7 @@ nonisolated final class CapturePersistenceInstrumentation: @unchecked Sendable {
             let evictedDisplayID = trackedDisplayOrder.removeFirst()
             observations.removeValue(forKey: evictedDisplayID)
             lastPersistedJPEGData.removeValue(forKey: evictedDisplayID)
+            lastAcceptedJPEGData.removeValue(forKey: evictedDisplayID)
             snapshot = snapshot.replacing(displayStateEvictions: snapshot.displayStateEvictions + 1)
         }
 
@@ -489,15 +551,16 @@ private extension CapturePersistenceInstrumentationSnapshot {
         exactComparisonEligibleFrames: Int? = nil,
         exactComparisonBaselineAvailableFrames: Int? = nil,
         exactComparisonSkippedFrames: Int? = nil,
-        byteIdenticalEncodedFrames: Int? = nil,
+        repositoryExactDuplicateFrames: Int? = nil,
         perceptuallyEqualFrames: Int? = nil,
-        logicalJPEGBytesWritten: Int64? = nil,
-        metadataBytesWritten: Int64? = nil,
+        logicalDurableJPEGEventBytes: Int64? = nil,
+        logicalMetadataEventBytes: Int64? = nil,
         metadataTransactions: Int? = nil,
         durableRepositorySaves: Int? = nil,
         volatileRepositorySaves: Int? = nil,
         duplicateRepositorySaves: Int? = nil,
         spanCheckpointRepositorySaves: Int? = nil,
+        pressureDroppedRepositorySaves: Int? = nil,
         firstAnchorRepositorySaves: Int? = nil,
         ordinaryAnchorRepositorySaves: Int? = nil,
         majorChangeAnchorRepositorySaves: Int? = nil,
@@ -524,15 +587,16 @@ private extension CapturePersistenceInstrumentationSnapshot {
             exactComparisonEligibleFrames: exactComparisonEligibleFrames ?? self.exactComparisonEligibleFrames,
             exactComparisonBaselineAvailableFrames: exactComparisonBaselineAvailableFrames ?? self.exactComparisonBaselineAvailableFrames,
             exactComparisonSkippedFrames: exactComparisonSkippedFrames ?? self.exactComparisonSkippedFrames,
-            byteIdenticalEncodedFrames: byteIdenticalEncodedFrames ?? self.byteIdenticalEncodedFrames,
+            repositoryExactDuplicateFrames: repositoryExactDuplicateFrames ?? self.repositoryExactDuplicateFrames,
             perceptuallyEqualFrames: perceptuallyEqualFrames ?? self.perceptuallyEqualFrames,
-            logicalJPEGBytesWritten: logicalJPEGBytesWritten ?? self.logicalJPEGBytesWritten,
-            metadataBytesWritten: metadataBytesWritten ?? self.metadataBytesWritten,
+            logicalDurableJPEGEventBytes: logicalDurableJPEGEventBytes ?? self.logicalDurableJPEGEventBytes,
+            logicalMetadataEventBytes: logicalMetadataEventBytes ?? self.logicalMetadataEventBytes,
             metadataTransactions: metadataTransactions ?? self.metadataTransactions,
             durableRepositorySaves: durableRepositorySaves ?? self.durableRepositorySaves,
             volatileRepositorySaves: volatileRepositorySaves ?? self.volatileRepositorySaves,
             duplicateRepositorySaves: duplicateRepositorySaves ?? self.duplicateRepositorySaves,
             spanCheckpointRepositorySaves: spanCheckpointRepositorySaves ?? self.spanCheckpointRepositorySaves,
+            pressureDroppedRepositorySaves: pressureDroppedRepositorySaves ?? self.pressureDroppedRepositorySaves,
             firstAnchorRepositorySaves: firstAnchorRepositorySaves ?? self.firstAnchorRepositorySaves,
             ordinaryAnchorRepositorySaves: ordinaryAnchorRepositorySaves ?? self.ordinaryAnchorRepositorySaves,
             majorChangeAnchorRepositorySaves: majorChangeAnchorRepositorySaves ?? self.majorChangeAnchorRepositorySaves,

@@ -9,7 +9,7 @@ import Darwin
 import Foundation
 import ImageIO
 
-enum FrameStoreError: Error {
+enum FrameStoreError: LocalizedError {
     case directoryCreationFailed
     case imageEncodingFailed
     case imageDecodingFailed
@@ -21,6 +21,17 @@ enum FrameStoreError: Error {
     case noActiveCaptureSession
     case staleCaptureObservation
     case promotionConflict(String)
+    case clearIncomplete([String])
+
+    var errorDescription: String? {
+        switch self {
+        case .clearIncomplete(let paths):
+            let locations = paths.joined(separator: "\n")
+            return "History was removed from the timeline, but some stored data could not be deleted. Try Clear All History again.\n\(locations)"
+        default:
+            return nil
+        }
+    }
 }
 
 nonisolated enum FrameStoreCaptureMutation: Sendable, Equatable {
@@ -73,6 +84,7 @@ actor FrameStore {
     private let screenshotsDirectory: URL?
     private let clearPayloadRemoval: FrameStoreClearPayloadRemoval?
     private let promotionPayloadDidWrite: FrameStorePromotionPayloadDidWrite?
+    private var pendingClearURLs: [URL] = []
 
     static func defaultStorageDirectory() throws -> URL {
         guard let appSupport = FileManager.default.urls(
@@ -791,16 +803,36 @@ actor FrameStore {
             throw FrameStoreError.database(String(describing: error))
         }
 
-        for url in payloadFiles {
-            if let clearPayloadRemoval {
-                try? clearPayloadRemoval(url)
-            } else {
-                try? fileManager.removeItem(at: url)
+        let cleanupCandidates = pendingClearURLs
+            + payloadFiles
+            + [manifestURL, migratedManifestURL, recoveryURL]
+        let uniqueCandidates = Dictionary(
+            cleanupCandidates.map { ($0.standardizedFileURL.path, $0) },
+            uniquingKeysWith: { first, _ in first }
+        ).values.sorted { lhs, rhs in
+            // Remove children before a directory that may contain them.
+            lhs.pathComponents.count > rhs.pathComponents.count
+        }
+        var failedURLs: [URL] = []
+        for url in uniqueCandidates where FrameStoreFile.exists(at: url) {
+            do {
+                if let clearPayloadRemoval {
+                    try clearPayloadRemoval(url)
+                } else {
+                    try fileManager.removeItem(at: url)
+                }
+            } catch {
+                if FrameStoreFile.exists(at: url) {
+                    failedURLs.append(url)
+                    Self.logStorageDiagnostic(
+                        "Clear could not delete a managed history item; it will retry on the next clear."
+                    )
+                }
             }
         }
-
-        for url in [manifestURL, migratedManifestURL, recoveryURL] where fileManager.fileExists(atPath: url.path) {
-            try? fileManager.removeItem(at: url)
+        pendingClearURLs = failedURLs
+        if !failedURLs.isEmpty {
+            throw FrameStoreError.clearIncomplete(failedURLs.map(\.path).sorted())
         }
     }
 
@@ -847,31 +879,64 @@ actor FrameStore {
     }
 
     func storageStatistics() -> FrameStorageStatistics {
+        storageSnapshot().statistics
+    }
+
+    func storageSnapshot(
+        logicalOverlay: [TimelineEntry] = []
+    ) -> DurableFrameStorageSnapshot {
         do {
             let statistics = try database.storageStatistics(
-                sampleLimitPerDisplay: Self.projectionSampleLimitPerDisplay
+                sampleLimitPerDisplay: Self.projectionSampleLimitPerDisplay,
+                logicalOverlay: logicalOverlay
             )
-            let timeline = try database.allTimelineEntries()
-            return FrameStorageStatistics(
-                storedBytes: statistics.storedBytes,
+            let allocated = sqliteAllocatedByteCounts()
+            let combined = FrameStorageStatistics(
+                durableJPEGPayloadBytes: statistics.durableJPEGPayloadBytes,
+                knownSQLiteAllocatedBytes: allocated.total,
+                sqliteWALAllocatedBytes: allocated.wal,
                 frameCount: statistics.frameCount,
                 durableFrameCount: statistics.durableFrameCount,
                 timelineSpanCount: statistics.timelineSpanCount,
                 observationCount: statistics.observationCount,
                 projectionSamples: statistics.projectionSamples,
-                displayCoverage: FrameCoverageCalculator.calculate(
-                    durable: timeline,
-                    volatile: []
-                )
+                displayCoverage: statistics.displayCoverage
             )
+            return DurableFrameStorageSnapshot(statistics: combined)
         } catch {
             Self.logStorageDiagnostic("Failed to calculate frame statistics: \(error)")
-            return .empty
+            return DurableFrameStorageSnapshot(statistics: .empty)
         }
     }
 
-    func totalStorageSize() -> Int64 {
-        storageStatistics().storedBytes
+    func durableJPEGPayloadBytes() -> Int64 {
+        storageStatistics().durableJPEGPayloadBytes
+    }
+
+    private func sqliteAllocatedByteCounts() -> (total: Int64, wal: Int64) {
+        let baseNames = ["frames.sqlite", "text_cache.sqlite"]
+        var total: Int64 = 0
+        var wal: Int64 = 0
+        for baseName in baseNames {
+            for suffix in ["", "-journal", "-wal", "-shm"] {
+                let url = storageURL.appendingPathComponent(baseName + suffix)
+                guard let values = try? url.resourceValues(forKeys: [
+                    .isRegularFileKey,
+                    .totalFileAllocatedSizeKey,
+                    .fileAllocatedSizeKey,
+                    .fileSizeKey,
+                ]), values.isRegularFile == true else { continue }
+                let bytes = Int64(
+                    values.totalFileAllocatedSize
+                        ?? values.fileAllocatedSize
+                        ?? values.fileSize
+                        ?? 0
+                )
+                total += bytes
+                if suffix == "-wal" { wal += bytes }
+            }
+        }
+        return (total, wal)
     }
 
     func flush() {
@@ -922,12 +987,14 @@ actor FrameStore {
         try fileManager.createDirectory(at: storageURL, withIntermediateDirectories: true)
 
         let databaseExisted = fileManager.fileExists(atPath: databaseURL.path)
+        let databaseJournalURL = URL(fileURLWithPath: databaseURL.path + "-journal")
         let databaseWALURL = URL(fileURLWithPath: databaseURL.path + "-wal")
         let databaseSHMURL = URL(fileURLWithPath: databaseURL.path + "-shm")
         if !databaseExisted,
-           (fileManager.fileExists(atPath: databaseWALURL.path)
+           (fileManager.fileExists(atPath: databaseJournalURL.path)
+            || fileManager.fileExists(atPath: databaseWALURL.path)
             || fileManager.fileExists(atPath: databaseSHMURL.path)) {
-            var interruptedDatabaseItems = [databaseWALURL, databaseSHMURL]
+            var interruptedDatabaseItems = [databaseJournalURL, databaseWALURL, databaseSHMURL]
             if !fileManager.fileExists(atPath: manifestURL.path) {
                 interruptedDatabaseItems.append(framesURL)
                 interruptedDatabaseItems.append(migratedManifestURL)
@@ -938,6 +1005,23 @@ actor FrameStore {
                 reason: "database-sidecars-without-main-database",
                 items: interruptedDatabaseItems
             )
+        }
+
+        // SQLite may consume or remove a rollback journal while attempting to
+        // open a corrupt database. Preserve an exact temporary copy so the
+        // corrupt-store recovery bundle can still include that sidecar.
+        var databaseJournalSnapshotURL: URL?
+        if FrameStoreFile.isRegularFile(at: databaseJournalURL) {
+            let snapshotURL = fileManager.temporaryDirectory.appendingPathComponent(
+                "JustNow-\(UUID().uuidString)-frames.sqlite-journal"
+            )
+            try fileManager.copyItem(at: databaseJournalURL, to: snapshotURL)
+            databaseJournalSnapshotURL = snapshotURL
+        }
+        defer {
+            if let databaseJournalSnapshotURL {
+                try? fileManager.removeItem(at: databaseJournalSnapshotURL)
+            }
         }
 
         if !databaseExisted, !fileManager.fileExists(atPath: manifestURL.path) {
@@ -971,6 +1055,15 @@ actor FrameStore {
             database = candidate
         } catch {
             openedDatabase?.close()
+            if let databaseJournalSnapshotURL {
+                if fileManager.fileExists(atPath: databaseJournalURL.path) {
+                    try fileManager.removeItem(at: databaseJournalURL)
+                }
+                try fileManager.copyItem(
+                    at: databaseJournalSnapshotURL,
+                    to: databaseJournalURL
+                )
+            }
             _ = try createRecoveryBundle(
                 fileManager: fileManager,
                 recoveryURL: recoveryURL,
@@ -1182,18 +1275,61 @@ actor FrameStore {
         storeID: String
     ) throws {
         try fileManager.createDirectory(at: framesURL, withIntermediateDirectories: true)
-        if try readStoreMarker(at: markerURL) == storeID { return }
-
+        let marker = try readStoreMarker(at: markerURL)
         let files = try payloadFiles(fileManager: fileManager, framesURL: framesURL, markerURL: markerURL)
-        guard !files.isEmpty else {
-            try writeStoreMarker(storeID, to: markerURL)
-            return
-        }
-
         let rows = try database.allMetadata()
-        if try readStoreMarker(at: markerURL) == nil, !rows.isEmpty {
-            let knownFiles = Set(rows.flatMap { [$0.filename, $0.thumbnailFilename] })
-            let unidentified = files.filter { !knownFiles.contains($0.lastPathComponent) }
+        if marker == storeID || (marker == nil && !rows.isEmpty) || (marker == nil && files.isEmpty) {
+            var unusableFrameIDs = Set<UUID>()
+            var unusableFiles: [URL] = []
+            for metadata in rows {
+                let payloadURL = framesURL.appendingPathComponent(metadata.filename)
+                guard FrameStoreFile.isRegularFile(at: payloadURL) else {
+                    unusableFrameIDs.insert(metadata.id)
+                    let thumbnailURL = framesURL.appendingPathComponent(metadata.thumbnailFilename)
+                    if FrameStoreFile.isRegularFile(at: thumbnailURL) {
+                        unusableFiles.append(thumbnailURL)
+                    }
+                    continue
+                }
+
+                let payloadIsValid: Bool
+                do {
+                    let data = try FrameStoreFile.readRegularFile(at: payloadURL)
+                    payloadIsValid = Int64(data.count) == metadata.fileSize
+                        && ImageEncoder.cgImage(from: data) != nil
+                } catch {
+                    payloadIsValid = false
+                }
+                if !payloadIsValid {
+                    unusableFrameIDs.insert(metadata.id)
+                    unusableFiles.append(payloadURL)
+                    let thumbnailURL = framesURL.appendingPathComponent(metadata.thumbnailFilename)
+                    if FrameStoreFile.isRegularFile(at: thumbnailURL) {
+                        unusableFiles.append(thumbnailURL)
+                    }
+                }
+            }
+
+            if !unusableFiles.isEmpty {
+                _ = try createRecoveryBundle(
+                    fileManager: fileManager,
+                    recoveryURL: recoveryURL,
+                    reason: "invalid-frame-payloads",
+                    items: unusableFiles
+                )
+            }
+            if !unusableFrameIDs.isEmpty {
+                try database.deleteFrames(ids: unusableFrameIDs)
+            }
+
+            let usableRows = rows.filter { !unusableFrameIDs.contains($0.id) }
+            let knownFiles = Set(usableRows.flatMap { [$0.filename, $0.thumbnailFilename] })
+            let remainingFiles = try payloadFiles(
+                fileManager: fileManager,
+                framesURL: framesURL,
+                markerURL: markerURL
+            )
+            let unidentified = remainingFiles.filter { !knownFiles.contains($0.lastPathComponent) }
             if !unidentified.isEmpty {
                 _ = try createRecoveryBundle(
                     fileManager: fileManager,
@@ -1202,7 +1338,9 @@ actor FrameStore {
                     items: unidentified
                 )
             }
-            try writeStoreMarker(storeID, to: markerURL)
+            if marker != storeID {
+                try writeStoreMarker(storeID, to: markerURL)
+            }
             return
         }
 
@@ -1274,6 +1412,7 @@ actor FrameStore {
     ) -> [URL] {
         [
             databaseURL,
+            URL(fileURLWithPath: databaseURL.path + "-journal"),
             URL(fileURLWithPath: databaseURL.path + "-wal"),
             URL(fileURLWithPath: databaseURL.path + "-shm"),
             framesURL,

@@ -643,7 +643,10 @@ nonisolated final class FrameDatabase: @unchecked Sendable {
         }
     }
 
-    func storageStatistics(sampleLimitPerDisplay: Int) throws -> FrameStorageStatistics {
+    func storageStatistics(
+        sampleLimitPerDisplay: Int,
+        logicalOverlay: [TimelineEntry] = []
+    ) throws -> FrameStorageStatistics {
         let totals = try withPreparedStatement(
             """
             SELECT COALESCE(SUM(file_size), 0), COUNT(*),
@@ -701,7 +704,7 @@ nonisolated final class FrameDatabase: @unchecked Sendable {
                 values.append(
                     FrameStorageSample(
                         displayID: displayID,
-                        storedBytes: sqlite3_column_int64(statement, 1),
+                        jpegPayloadBytes: sqlite3_column_int64(statement, 1),
                         frameCount: Int(sqlite3_column_int64(statement, 2))
                     )
                 )
@@ -713,13 +716,302 @@ nonisolated final class FrameDatabase: @unchecked Sendable {
             return values
         }
 
+        // Merge durable span intervals inside SQLite and return one bounded
+        // aggregate per display. Settings never needs to materialise the
+        // complete durable timeline merely to show coverage totals.
+        let displayCoverage = try withPreparedStatement(
+            """
+            WITH ordered AS (
+                SELECT display_id, display_name, sequence,
+                       started_at, observed_through_at,
+                       MAX(observed_through_at) OVER (
+                           PARTITION BY display_id
+                           ORDER BY started_at ASC, observed_through_at ASC, sequence ASC
+                           ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                       ) AS prior_max_end
+                FROM frame_spans
+            ), marked AS (
+                SELECT *,
+                       CASE WHEN prior_max_end IS NULL OR started_at > prior_max_end
+                            THEN 1 ELSE 0 END AS starts_island
+                FROM ordered
+            ), grouped AS (
+                SELECT *,
+                       SUM(starts_island) OVER (
+                           PARTITION BY display_id
+                           ORDER BY started_at ASC, observed_through_at ASC, sequence ASC
+                           ROWS UNBOUNDED PRECEDING
+                       ) AS island_id
+                FROM marked
+            ), merged AS (
+                SELECT display_id, island_id,
+                       MIN(started_at) AS island_start,
+                       MAX(observed_through_at) AS island_end
+                FROM grouped
+                GROUP BY display_id, island_id
+            )
+            SELECT merged.display_id,
+                   (
+                       SELECT names.display_name
+                       FROM frame_spans AS names
+                       WHERE names.display_id IS merged.display_id
+                         AND names.display_name IS NOT NULL
+                       ORDER BY names.observed_through_at DESC, names.sequence DESC
+                       LIMIT 1
+                   ),
+                   MIN(island_start), MAX(island_end),
+                   COALESCE(SUM(island_end - island_start), 0), COUNT(*)
+            FROM merged
+            GROUP BY merged.display_id;
+            """
+        ) { statement -> [FrameDisplayCoverageStatistics] in
+            var values: [FrameDisplayCoverageStatistics] = []
+            var result = sqlite3_step(statement)
+            while result == SQLITE_ROW {
+                let displayID: UUID?
+                if sqlite3_column_type(statement, 0) == SQLITE_NULL {
+                    displayID = nil
+                } else {
+                    guard let text = sqlite3_column_text(statement, 0),
+                          let decoded = UUID(uuidString: String(cString: text)) else {
+                        throw FrameDatabaseError.corrupt("Invalid display ID in coverage aggregate")
+                    }
+                    displayID = decoded
+                }
+                let displayName = sqlite3_column_text(statement, 1).map {
+                    String(cString: $0)
+                }
+                let oldestValue = sqlite3_column_double(statement, 2)
+                let newestValue = sqlite3_column_double(statement, 3)
+                let coveredSeconds = sqlite3_column_double(statement, 4)
+                let islandCount = sqlite3_column_int64(statement, 5)
+                guard oldestValue.isFinite,
+                      newestValue.isFinite,
+                      coveredSeconds.isFinite,
+                      newestValue >= oldestValue,
+                      coveredSeconds >= 0,
+                      islandCount >= 1 else {
+                    throw FrameDatabaseError.corrupt("Invalid durable coverage aggregate")
+                }
+                let durable = FrameCoverageIntervalStatistics(
+                    oldest: Date(timeIntervalSince1970: oldestValue),
+                    newest: Date(timeIntervalSince1970: newestValue),
+                    coveredSeconds: coveredSeconds,
+                    hasGaps: islandCount > 1
+                )
+                values.append(FrameDisplayCoverageStatistics(
+                    displayID: displayID,
+                    displayName: displayName,
+                    durable: durable,
+                    volatile: .empty,
+                    combined: durable
+                ))
+                result = sqlite3_step(statement)
+            }
+            guard result == SQLITE_DONE else {
+                throw sqliteError(message: "Failed to finish reading durable coverage aggregates")
+            }
+            return values.sorted { lhs, rhs in
+                if lhs.displayID == nil { return false }
+                if rhs.displayID == nil { return true }
+                if lhs.displayLabel != rhs.displayLabel { return lhs.displayLabel < rhs.displayLabel }
+                return lhs.id < rhs.id
+            }
+        }
+
+        let exactCoverage: [FrameDisplayCoverageStatistics]
+        if logicalOverlay.isEmpty {
+            exactCoverage = displayCoverage
+        } else {
+            let combined = try combinedDisplayCoverage(logicalOverlay: logicalOverlay)
+            let durableByID = Dictionary(uniqueKeysWithValues: displayCoverage.map {
+                ($0.id, $0)
+            })
+            let combinedByID = Dictionary(uniqueKeysWithValues: combined.map {
+                ($0.id, $0)
+            })
+            exactCoverage = Set(durableByID.keys).union(combinedByID.keys).map { id in
+                let durable = durableByID[id]
+                let combinedValue = combinedByID[id]
+                return FrameDisplayCoverageStatistics(
+                    displayID: durable?.displayID ?? combinedValue?.displayID,
+                    displayName: combinedValue?.displayName ?? durable?.displayName,
+                    durable: durable?.durable ?? .empty,
+                    volatile: .empty,
+                    combined: combinedValue?.combined ?? durable?.durable ?? .empty
+                )
+            }.sorted { lhs, rhs in
+                if lhs.displayID == nil { return false }
+                if rhs.displayID == nil { return true }
+                if lhs.displayLabel != rhs.displayLabel { return lhs.displayLabel < rhs.displayLabel }
+                return lhs.id < rhs.id
+            }
+        }
+
         return FrameStorageStatistics(
-            storedBytes: totals.0,
+            durableJPEGPayloadBytes: totals.0,
             frameCount: totals.1,
             timelineSpanCount: totals.2,
             observationCount: totals.3,
-            projectionSamples: samples
+            projectionSamples: samples,
+            displayCoverage: exactCoverage
         )
+    }
+
+    /// Unions the bounded in-memory hybrid overlay with durable spans inside
+    /// SQLite. The result remains one aggregate row per display and never
+    /// materialises the durable timeline in Swift.
+    private func combinedDisplayCoverage(
+        logicalOverlay: [TimelineEntry]
+    ) throws -> [FrameDisplayCoverageStatistics] {
+        try execute(
+            """
+            CREATE TEMP TABLE IF NOT EXISTS coverage_overlay (
+                display_id TEXT,
+                display_name TEXT,
+                started_at REAL NOT NULL,
+                observed_through_at REAL NOT NULL
+            );
+            """
+        )
+        try execute("DELETE FROM coverage_overlay;")
+        defer { try? execute("DELETE FROM coverage_overlay;") }
+
+        try withPreparedStatement(
+            """
+            INSERT INTO coverage_overlay (
+                display_id, display_name, started_at, observed_through_at
+            ) VALUES (?, ?, ?, ?);
+            """
+        ) { statement in
+            for entry in logicalOverlay {
+                let bounds = timelineSpanBounds(for: entry)
+                guard bindOptionalText(entry.span.displayID?.uuidString, to: statement, index: 1),
+                      bindOptionalText(
+                          entry.span.displayName ?? entry.frame.displayName,
+                          to: statement,
+                          index: 2
+                      ),
+                      sqlite3_bind_double(
+                          statement,
+                          3,
+                          bounds.start.timeIntervalSince1970
+                      ) == SQLITE_OK,
+                      sqlite3_bind_double(
+                          statement,
+                          4,
+                          bounds.end.timeIntervalSince1970
+                      ) == SQLITE_OK,
+                      sqlite3_step(statement) == SQLITE_DONE else {
+                    throw sqliteError(message: "Failed to insert bounded coverage overlay")
+                }
+                sqlite3_reset(statement)
+                sqlite3_clear_bindings(statement)
+            }
+        }
+
+        return try withPreparedStatement(
+            """
+            WITH intervals AS (
+                SELECT display_id, display_name, sequence AS source_order,
+                       started_at, observed_through_at
+                FROM frame_spans
+                UNION ALL
+                SELECT display_id, display_name, rowid AS source_order,
+                       started_at, observed_through_at
+                FROM coverage_overlay
+            ), ordered AS (
+                SELECT display_id, display_name, source_order,
+                       started_at, observed_through_at,
+                       MAX(observed_through_at) OVER (
+                           PARTITION BY display_id
+                           ORDER BY started_at ASC, observed_through_at ASC, source_order ASC
+                           ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                       ) AS prior_max_end
+                FROM intervals
+            ), marked AS (
+                SELECT *,
+                       CASE WHEN prior_max_end IS NULL OR started_at > prior_max_end
+                            THEN 1 ELSE 0 END AS starts_island
+                FROM ordered
+            ), grouped AS (
+                SELECT *,
+                       SUM(starts_island) OVER (
+                           PARTITION BY display_id
+                           ORDER BY started_at ASC, observed_through_at ASC, source_order ASC
+                           ROWS UNBOUNDED PRECEDING
+                       ) AS island_id
+                FROM marked
+            ), merged AS (
+                SELECT display_id, island_id,
+                       MIN(started_at) AS island_start,
+                       MAX(observed_through_at) AS island_end
+                FROM grouped
+                GROUP BY display_id, island_id
+            )
+            SELECT merged.display_id,
+                   (
+                       SELECT names.display_name
+                       FROM intervals AS names
+                       WHERE names.display_id IS merged.display_id
+                         AND names.display_name IS NOT NULL
+                       ORDER BY names.observed_through_at DESC, names.source_order DESC
+                       LIMIT 1
+                   ),
+                   MIN(island_start), MAX(island_end),
+                   COALESCE(SUM(island_end - island_start), 0), COUNT(*)
+            FROM merged
+            GROUP BY merged.display_id;
+            """
+        ) { statement -> [FrameDisplayCoverageStatistics] in
+            var values: [FrameDisplayCoverageStatistics] = []
+            var result = sqlite3_step(statement)
+            while result == SQLITE_ROW {
+                let displayID: UUID?
+                if sqlite3_column_type(statement, 0) == SQLITE_NULL {
+                    displayID = nil
+                } else {
+                    guard let text = sqlite3_column_text(statement, 0),
+                          let decoded = UUID(uuidString: String(cString: text)) else {
+                        throw FrameDatabaseError.corrupt("Invalid display ID in combined coverage")
+                    }
+                    displayID = decoded
+                }
+                let displayName = sqlite3_column_text(statement, 1).map {
+                    String(cString: $0)
+                }
+                let oldestValue = sqlite3_column_double(statement, 2)
+                let newestValue = sqlite3_column_double(statement, 3)
+                let coveredSeconds = sqlite3_column_double(statement, 4)
+                let islandCount = sqlite3_column_int64(statement, 5)
+                guard oldestValue.isFinite,
+                      newestValue.isFinite,
+                      coveredSeconds.isFinite,
+                      newestValue >= oldestValue,
+                      coveredSeconds >= 0,
+                      islandCount >= 1 else {
+                    throw FrameDatabaseError.corrupt("Invalid combined coverage aggregate")
+                }
+                let combined = FrameCoverageIntervalStatistics(
+                    oldest: Date(timeIntervalSince1970: oldestValue),
+                    newest: Date(timeIntervalSince1970: newestValue),
+                    coveredSeconds: coveredSeconds,
+                    hasGaps: islandCount > 1
+                )
+                values.append(FrameDisplayCoverageStatistics(
+                    displayID: displayID,
+                    displayName: displayName,
+                    durable: .empty,
+                    volatile: .empty,
+                    combined: combined
+                ))
+                result = sqlite3_step(statement)
+            }
+            guard result == SQLITE_DONE else {
+                throw sqliteError(message: "Failed to finish combined coverage aggregate")
+            }
+            return values
+        }
     }
 
     static func logicalByteCount(for metadata: FrameMetadata) -> Int {

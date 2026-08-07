@@ -275,7 +275,7 @@ struct SettingsView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    LabeledContent("Projected storage") {
+                    LabeledContent(storageProjectionTitle) {
                         if let projectedStorage {
                             Text("≈\(formatBytes(projectedStorage)) total")
                                 .foregroundStyle(.secondary)
@@ -336,9 +336,21 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                LabeledContent("Durable disk storage") {
-                    Text(formatBytes(storageStatistics.storedBytes))
+                LabeledContent("Durable JPEG payload bytes") {
+                    Text(formatBytes(storageStatistics.durableJPEGPayloadBytes))
                         .foregroundStyle(.secondary)
+                }
+
+                LabeledContent("SQLite allocated space") {
+                    Text(formatBytes(storageStatistics.knownSQLiteAllocatedBytes))
+                        .foregroundStyle(.secondary)
+                }
+
+                if storageStatistics.sqliteWALAllocatedBytes > 0 {
+                    LabeledContent("SQLite WAL allocated space") {
+                        Text(formatBytes(storageStatistics.sqliteWALAllocatedBytes))
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 LabeledContent("RAM payloads") {
@@ -542,7 +554,12 @@ struct SettingsView: View {
         }
         let displayCount = connectedDisplayIDs.count
         let displayLabel = displayCount == 1 ? "1 display" : "\(displayCount) displays"
-        return "Projected total for \(displayLabel) once your current settings have been in use for the full history window. Actual frame storage varies with screen activity, display resolution, and power saving."
+        let qualifier = StorageEstimate.projectionKind(for: desiredHistoryStorageMode).qualifier
+        return "Projected for \(displayLabel) once your current settings have been in use for the full history window. \(qualifier) Actual usage varies with screen activity, display resolution, and power saving."
+    }
+
+    private var storageProjectionTitle: String {
+        StorageEstimate.projectionKind(for: desiredHistoryStorageMode).title
     }
 
     private func updateStorageInfo() async {
@@ -585,11 +602,18 @@ struct SettingsView: View {
     }
 
     private func refreshSettingsLoop() async {
+        var cyclesSinceStorageRefresh = 0
         while !Task.isCancelled {
             let snapshot = await SearchTelemetry.shared.snapshot()
-            await updateStorageInfo()
             guard !Task.isCancelled else { return }
             telemetrySnapshot = snapshot
+            cyclesSinceStorageRefresh += 1
+            if cyclesSinceStorageRefresh >= 15 {
+                // Storage aggregation touches SQLite and filesystem allocation metadata.
+                // Keep it current without repeating that work on the telemetry cadence.
+                await updateStorageInfo()
+                cyclesSinceStorageRefresh = 0
+            }
             try? await Task.sleep(for: .seconds(2))
         }
     }

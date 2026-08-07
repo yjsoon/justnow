@@ -7,15 +7,24 @@ import Foundation
 import SQLite3
 import os.log
 
-enum TextCacheError: Error {
+enum TextCacheError: LocalizedError {
     case sqlite(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .sqlite(let message): message
+        }
+    }
 }
+
+typealias TextCacheClearHook = @Sendable () throws -> Void
 
 /// Caches OCR-extracted text for frames to speed up subsequent searches
 actor TextCache {
     nonisolated private static let logger = Logger(subsystem: "sg.tk.JustNow", category: "TextCache")
     private let databaseURL: URL
     private let legacyCacheURL: URL
+    private let clearHook: TextCacheClearHook?
     private var db: OpaquePointer?
     /// Diagnostic seam counting attempted SQLite write transactions. Reads do
     /// not affect it, so tests can prove capture stayed off the OCR database.
@@ -26,12 +35,13 @@ actor TextCache {
 
     /// `directory` is injectable so tests can run against a temporary
     /// location instead of the live Application Support store.
-    init(directory: URL? = nil) {
+    init(directory: URL? = nil, clearHook: TextCacheClearHook? = nil) {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support")
         let appDir = directory ?? appSupport.appendingPathComponent("JustNow", isDirectory: true)
         self.databaseURL = appDir.appendingPathComponent("text_cache.sqlite")
         self.legacyCacheURL = appDir.appendingPathComponent("text_cache.json")
+        self.clearHook = clearHook
 
         do {
             try FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
@@ -358,15 +368,26 @@ actor TextCache {
     }
 
     /// Clear all cached text
-    func clear() {
-        do {
-            try withTransaction {
-                try execute("DELETE FROM frame_search_layout;")
-                try execute("DELETE FROM frame_text_fts;")
-                try execute("DELETE FROM frame_text;")
+    func clear() throws {
+        try clearHook?()
+        try withTransaction {
+            try execute("DELETE FROM frame_search_layout;")
+            try execute("DELETE FROM frame_text_fts;")
+            try execute("DELETE FROM frame_text;")
+        }
+        let remainingRows = try ["frame_search_layout", "frame_text_fts", "frame_text"].reduce(0) {
+            partialResult, table in
+            try partialResult + withPreparedStatement("SELECT COUNT(*) FROM \(table);") { statement in
+                guard sqlite3_step(statement) == SQLITE_ROW else {
+                    throw sqliteError(message: "Failed to verify OCR cache clear")
+                }
+                return Int(sqlite3_column_int64(statement, 0))
             }
-        } catch {
-            Self.logger.error("Failed to clear OCR cache: \(error.localizedDescription)")
+        }
+        guard remainingRows == 0 else {
+            throw TextCacheError.sqlite(
+                "OCR cache clear verification found \(remainingRows) remaining row(s)"
+            )
         }
     }
 

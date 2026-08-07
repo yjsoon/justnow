@@ -203,13 +203,13 @@ final class TextCacheTests: XCTestCase {
         XCTAssertTrue(staleHits.isEmpty)
     }
 
-    func testClearEmptiesTextSearchAndLayouts() async {
+    func testClearEmptiesTextSearchAndLayouts() async throws {
         let cache = TextCache(directory: directory)
         let frameID = UUID()
         await cache.setText("something", for: frameID)
         await cache.setSearchLayout(makeLayout(), for: frameID)
 
-        await cache.clear()
+        try await cache.clear()
 
         let count = await cache.count
         XCTAssertEqual(count, 0)
@@ -217,6 +217,46 @@ final class TextCacheTests: XCTestCase {
         XCTAssertTrue(hits.isEmpty)
         let layout = await cache.getSearchLayout(for: frameID)
         XCTAssertNil(layout)
+    }
+
+    func testClearFailureIsReportedAndLaterRetryIsVerified() async throws {
+        final class FailureState: @unchecked Sendable {
+            private let lock = NSLock()
+            nonisolated(unsafe) private var shouldFail = true
+
+            nonisolated func failOnce() throws {
+                lock.lock()
+                defer { lock.unlock() }
+                if shouldFail {
+                    shouldFail = false
+                    throw TextCacheError.sqlite("Injected OCR clear failure")
+                }
+            }
+        }
+
+        let state = FailureState()
+        let cache = TextCache(directory: directory, clearHook: state.failOnce)
+        let frameID = UUID()
+        await cache.setText("must eventually disappear", for: frameID)
+        await cache.setSearchLayout(makeLayout(), for: frameID)
+
+        do {
+            try await cache.clear()
+            XCTFail("Expected the first clear to report its failure")
+        } catch TextCacheError.sqlite(let message) {
+            XCTAssertTrue(message.contains("Injected OCR clear failure"))
+        }
+        let countAfterFailure = await cache.count
+        XCTAssertEqual(countAfterFailure, 1)
+
+        try await cache.clear()
+
+        let countAfterRetry = await cache.count
+        let hitsAfterRetry = await cache.searchFrameIDs(matching: "eventually", limit: 10)
+        let layoutAfterRetry = await cache.getSearchLayout(for: frameID)
+        XCTAssertEqual(countAfterRetry, 0)
+        XCTAssertTrue(hitsAfterRetry.isEmpty)
+        XCTAssertNil(layoutAfterRetry)
     }
 
     func testSearchLayoutRoundTrip() async {

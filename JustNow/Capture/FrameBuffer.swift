@@ -64,11 +64,17 @@ enum FrameBufferCaptureSessionError: Error, Equatable {
 
 enum FrameBufferClearError: LocalizedError {
     case captureResumeFailed(String)
+    case cleanupIncomplete([String])
+    case cleanupIncompleteAndCaptureResumeFailed([String], String)
 
     var errorDescription: String? {
         switch self {
         case .captureResumeFailed(let detail):
             "History was cleared, but capture could not resume. JustNow will retry automatically. \(detail)"
+        case .cleanupIncomplete(let failures):
+            "History was removed from the timeline, but some stored data could not be deleted. Try Clear All History again.\n\(failures.joined(separator: "\n"))"
+        case .cleanupIncompleteAndCaptureResumeFailed(let failures, let detail):
+            "History was removed from the timeline, but some stored data could not be deleted and capture could not resume. Try Clear All History again; JustNow will retry capture automatically.\n\(failures.joined(separator: "\n"))\n\(detail)"
         }
     }
 }
@@ -868,16 +874,27 @@ class FrameBuffer {
         }
         cancelBackgroundOCRIndexing(clearQueue: true)
         var repositoryWasCleared = false
-        var clearOperationError: Error?
+        var cleanupFailures: [String] = []
+        var captureResumeError: Error?
         do {
             // Clear is the epoch boundary and must not queue behind an
             // uncooperative operation holding the coordinator gate.
-            try await frameRepository.clear()
-            repositoryWasCleared = true
+            do {
+                try await frameRepository.clear()
+                repositoryWasCleared = true
+            } catch let error as FrameStoreError {
+                guard case .clearIncomplete(let paths) = error else { throw error }
+                repositoryWasCleared = true
+                cleanupFailures.append(contentsOf: paths)
+            }
             repositoryEffectGeneration += 1
             activeCaptureSession = nil
             pendingCaptureSessionClose = nil
-            await resetInMemoryAfterRepositoryClear()
+            do {
+                try await resetInMemoryAfterRepositoryClear()
+            } catch {
+                cleanupFailures.append("OCR cache: \(DiagnosticsLogFormat.describe(error))")
+            }
             if captureSessionIntentActive,
                captureSessionIntentGeneration == clearIntentGeneration {
                 do {
@@ -888,11 +905,10 @@ class FrameBuffer {
                         isCaptureSessionActive = true
                     }
                 } catch {
-                    clearOperationError = error
+                    captureResumeError = error
                 }
             }
         } catch {
-            clearOperationError = error
             if !repositoryWasCleared {
                 if activeCaptureSession != nil,
                    captureSessionIntentActive,
@@ -902,14 +918,23 @@ class FrameBuffer {
                 throw error
             }
         }
-        if let clearOperationError {
-            throw FrameBufferClearError.captureResumeFailed(
-                DiagnosticsLogFormat.describe(clearOperationError)
+        if let captureResumeError, !cleanupFailures.isEmpty {
+            throw FrameBufferClearError.cleanupIncompleteAndCaptureResumeFailed(
+                cleanupFailures,
+                DiagnosticsLogFormat.describe(captureResumeError)
             )
+        }
+        if let captureResumeError {
+            throw FrameBufferClearError.captureResumeFailed(
+                DiagnosticsLogFormat.describe(captureResumeError)
+            )
+        }
+        if !cleanupFailures.isEmpty {
+            throw FrameBufferClearError.cleanupIncomplete(cleanupFailures)
         }
     }
 
-    private func resetInMemoryAfterRepositoryClear() async {
+    private func resetInMemoryAfterRepositoryClear() async throws {
         captureInstrumentation.reset()
         lastCaptureInstrumentationDiagnosticAt = Date()
         timelineEntries.removeAll()
@@ -926,7 +951,7 @@ class FrameBuffer {
             task.cancel()
         }
         inFlightFullImageLoads.removeAll()
-        await textCache.clear()
+        try await textCache.clear()
     }
 
     private func recoverCaptureSessionIfNeeded(at startedAt: Date) async throws {
@@ -988,8 +1013,8 @@ class FrameBuffer {
         }
     }
 
-    func totalStorageSize() async -> Int64 {
-        await frameRepository.totalStorageSize()
+    func durableJPEGPayloadBytes() async -> Int64 {
+        await frameRepository.durableJPEGPayloadBytes()
     }
 
     func storageStatistics() async -> FrameStorageStatistics {
@@ -1335,7 +1360,11 @@ class FrameBuffer {
             guard !Task.isCancelled, generation == ingestGeneration else {
                 return .retryAfterClear
             }
-            captureInstrumentation.recordEncodedJPEG(jpegData, displayID: displayID)
+            captureInstrumentation.recordEncodedJPEG(
+                jpegData,
+                displayID: displayID,
+                compareAgainstPersistedBaseline: admissionMode != .hybridEveryCapture
+            )
             let repositoryGeneration = repositoryEffectGeneration
             let reconciliationResult = try await repositoryReconciliationGate.withPermitIgnoringCancellation {
                 guard generation == self.ingestGeneration,
@@ -1378,7 +1407,11 @@ class FrameBuffer {
                         }
                     }
                 } else {
-                    await self.applyRepositoryEffects(saveResult.effects)
+                    await self.applyRepositoryEffects(
+                        saveResult.effects,
+                        acceptedJPEGData: admissionMode == .hybridEveryCapture ? jpegData : nil,
+                        acceptedDisplayID: displayID
+                    )
                 }
                 self.recordAcceptedObservation(
                     hash: frame.hash,
@@ -1496,8 +1529,16 @@ class FrameBuffer {
     /// can upsert more than one span; durable transitions are fenced by a set
     /// so OCR is enqueued once even if an idempotent retry returns the same
     /// canonical entry.
-    private func applyRepositoryEffects(_ effects: FrameRepositoryEffects) async {
-        captureInstrumentation.recordRepositoryEffects(effects)
+    private func applyRepositoryEffects(
+        _ effects: FrameRepositoryEffects,
+        acceptedJPEGData: Data? = nil,
+        acceptedDisplayID: UUID? = nil
+    ) async {
+        captureInstrumentation.recordRepositoryEffects(
+            effects,
+            acceptedJPEGData: acceptedJPEGData,
+            acceptedDisplayID: acceptedDisplayID
+        )
         await applyRepositoryInvalidation(effects.invalidation)
 
         var timelineChanged = false

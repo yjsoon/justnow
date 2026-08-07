@@ -569,6 +569,7 @@ actor HybridFrameRepository: FrameRepository {
             let removedSpanIDs = Set(residentEviction.entries.map(\.span.id))
                 .union(durableInvalidation.spanIDs)
             self.removePolicyState(spanIDs: removedSpanIDs, frameIDs: removedFrameIDs)
+            self.reconcilePendingEffectsAfterPrune(spanIDs: removedSpanIDs)
             for spanID in removedSpanIDs {
                 self.durableEntriesBySpanID.removeValue(forKey: spanID)
             }
@@ -582,11 +583,16 @@ actor HybridFrameRepository: FrameRepository {
 
     func clear() async throws {
         try await withMutationPermit {
-            // FrameStore guarantees that a thrown clear has not committed its
-            // database deletion. RAM and session state therefore remain valid
-            // on failure; once durable clear succeeds, the remaining steps do
-            // not throw.
-            try await self.disk.clear()
+            var committedCleanupError: Error?
+            do {
+                try await self.disk.clear()
+            } catch let error as FrameStoreError {
+                guard case .clearIncomplete = error else { throw error }
+                // Logical deletion committed. The failed file paths remain
+                // tracked by FrameStore for a later exact retry, so RAM and
+                // session state must cross the same clear boundary now.
+                committedCleanupError = error
+            }
             _ = await self.ring.clear()
             self.policyStates.removeAll(keepingCapacity: false)
             self.pendingPromotions.removeAll(keepingCapacity: false)
@@ -596,29 +602,64 @@ actor HybridFrameRepository: FrameRepository {
             self.activeSession = nil
             self.volatilePayloadResolutions = 0
             self.durablePayloadResolutions = 0
+            if let committedCleanupError {
+                throw committedCleanupError
+            }
         }
     }
 
-    func totalStorageSize() async -> Int64 {
-        await disk.totalStorageSize()
+    func durableJPEGPayloadBytes() async -> Int64 {
+        await disk.durableJPEGPayloadBytes()
     }
 
     func storageStatistics() async -> FrameStorageStatistics {
         await withMutationPermit {
-            let durable = await self.disk.storageStatistics()
-            let durableTimeline = await self.disk.orderedTimeline()
             let residentTimeline = await self.ring.entries()
             let resident = await self.ring.statistics()
-            let timeline = self.mergedTimeline(
-                durable: durableTimeline,
-                resident: residentTimeline
+            var knownDurableEntries = self.durableEntriesBySpanID
+            var overlayBySpanID = Dictionary(
+                uniqueKeysWithValues: residentTimeline.map { ($0.span.id, $0) }
             )
+            for state in self.policyStates.values {
+                guard let active = state.active else { continue }
+                if let canonical = active.canonicalDurableEntry {
+                    knownDurableEntries[canonical.span.id] = canonical
+                }
+                if active.residency == .durableOnly {
+                    overlayBySpanID[active.entry.span.id] = active.entry
+                }
+            }
+            let overlayTimeline = Array(overlayBySpanID.values)
+            let durableSnapshot = await self.disk.durableStorageSnapshot(
+                logicalOverlay: overlayTimeline
+            )
+            let durable = durableSnapshot.statistics
+            let knownDurableFrameIDs = Set(knownDurableEntries.values.map(\.frame.id))
+            let additionalFrameIDs = Set(
+                overlayTimeline.compactMap { entry in
+                    knownDurableFrameIDs.contains(entry.frame.id) ? nil : entry.frame.id
+                }
+            )
+            let additionalSpanCount = overlayTimeline.reduce(0) { count, entry in
+                count + (knownDurableEntries[entry.span.id] == nil ? 1 : 0)
+            }
+            let additionalObservationCount = overlayTimeline.reduce(0) { count, entry in
+                guard let canonical = knownDurableEntries[entry.span.id] else {
+                    return count + entry.span.observationCount
+                }
+                return count + max(
+                    0,
+                    entry.span.observationCount - canonical.span.observationCount
+                )
+            }
             return FrameStorageStatistics(
-                storedBytes: durable.storedBytes,
-                frameCount: Set(timeline.map(\.frame.id)).count,
+                durableJPEGPayloadBytes: durable.durableJPEGPayloadBytes,
+                knownSQLiteAllocatedBytes: durable.knownSQLiteAllocatedBytes,
+                sqliteWALAllocatedBytes: durable.sqliteWALAllocatedBytes,
+                frameCount: durable.frameCount + additionalFrameIDs.count,
                 durableFrameCount: durable.durableFrameCount,
-                timelineSpanCount: timeline.count,
-                observationCount: timeline.reduce(0) { $0 + $1.span.observationCount },
+                timelineSpanCount: durable.timelineSpanCount + additionalSpanCount,
+                observationCount: durable.observationCount + additionalObservationCount,
                 projectionSamples: durable.projectionSamples,
                 volatileBytes: Int64(resident.totalBytes),
                 volatileByteCap: Int64(resident.byteCap),
@@ -628,10 +669,9 @@ actor HybridFrameRepository: FrameRepository {
                 volatileObservationCount: resident.observationCount,
                 volatileCoverageStart: resident.coverageStart,
                 volatileCoverageEnd: resident.coverageEnd,
-                displayCoverage: FrameCoverageCalculator.calculate(
-                    durable: durableTimeline,
-                    volatile: residentTimeline,
-                    combined: timeline
+                displayCoverage: FrameCoverageCalculator.attachingVolatile(
+                    to: durable.displayCoverage,
+                    volatile: residentTimeline
                 )
             )
         }
@@ -964,6 +1004,39 @@ actor HybridFrameRepository: FrameRepository {
             !spanIDs.contains($0.value.entry.span.id)
                 && !frameIDs.contains($0.value.entry.frame.id)
         }
+    }
+
+    /// A durable operation may commit and enter an outbox before a later
+    /// session-close step fails. Retention is authoritative after it commits:
+    /// retries must never replay an upsert/newly-durable entry for a span that
+    /// was pruned in the meantime.
+    private func reconcilePendingEffectsAfterPrune(spanIDs: Set<UUID>) {
+        guard !spanIDs.isEmpty else { return }
+        for key in Array(pendingCaptureEffects.keys) {
+            guard let effects = pendingCaptureEffects[key] else { continue }
+            pendingCaptureEffects[key] = removingPrunedSpans(spanIDs, from: effects)
+        }
+        for sessionID in Array(pendingSessionEndEffects.keys) {
+            guard let effects = pendingSessionEndEffects[sessionID] else { continue }
+            pendingSessionEndEffects[sessionID] = removingPrunedSpans(spanIDs, from: effects)
+        }
+    }
+
+    private func removingPrunedSpans(
+        _ spanIDs: Set<UUID>,
+        from effects: FrameRepositoryEffects
+    ) -> FrameRepositoryEffects {
+        FrameRepositoryEffects(
+            timelineUpserts: effects.timelineUpserts.filter { !spanIDs.contains($0.span.id) },
+            invalidation: effects.invalidation,
+            newlyDurableEntries: effects.newlyDurableEntries.filter {
+                !spanIDs.contains($0.span.id)
+            },
+            // Persistence events are aggregate receipts and cannot resurrect
+            // policy state. Retain them so a committed logical write is still
+            // reported exactly once even if retention immediately removes it.
+            persistenceEvents: effects.persistenceEvents
+        )
     }
 
     private func coalesce(

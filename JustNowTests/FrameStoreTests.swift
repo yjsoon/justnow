@@ -38,8 +38,8 @@ final class FrameStoreTests: XCTestCase {
         XCTAssertEqual(allMetadata.map(\.id), [metadata.id])
         XCTAssertGreaterThan(metadata.fileSize, 0)
 
-        let totalSize = await store.totalStorageSize()
-        XCTAssertEqual(totalSize, metadata.fileSize)
+        let durableJPEGPayloadBytes = await store.durableJPEGPayloadBytes()
+        XCTAssertEqual(durableJPEGPayloadBytes, metadata.fileSize)
     }
 
     func testStorageStatisticsAggregateManifestSnapshot() async throws {
@@ -61,13 +61,101 @@ final class FrameStoreTests: XCTestCase {
 
         let statistics = await store.storageStatistics()
 
-        XCTAssertEqual(statistics.storedBytes, first.fileSize + second.fileSize + legacy.fileSize)
+        XCTAssertEqual(statistics.durableJPEGPayloadBytes, first.fileSize + second.fileSize + legacy.fileSize)
+        XCTAssertGreaterThan(statistics.knownSQLiteAllocatedBytes, 0)
+        XCTAssertGreaterThanOrEqual(statistics.sqliteWALAllocatedBytes, 0)
+        XCTAssertLessThanOrEqual(
+            statistics.sqliteWALAllocatedBytes,
+            statistics.knownSQLiteAllocatedBytes
+        )
         XCTAssertEqual(statistics.frameCount, 3)
         XCTAssertEqual(
             Set(statistics.projectionSamples.map(\.displayID)),
             Set<UUID?>([firstDisplayID, secondDisplayID, nil])
         )
         XCTAssertEqual(statistics.projectionSamples.reduce(0) { $0 + $1.frameCount }, 3)
+    }
+
+    func testStorageStatisticsIncludeAllocatedRollbackJournalSpace() async throws {
+        let store = try FrameStore(directory: directory)
+        let before = await store.storageStatistics()
+        let journalURL = directory.appendingPathComponent("frames.sqlite-journal")
+        try Data(repeating: 0xA5, count: 8_192).write(to: journalURL)
+
+        let after = await store.storageStatistics()
+
+        XCTAssertGreaterThan(after.knownSQLiteAllocatedBytes, before.knownSQLiteAllocatedBytes)
+        XCTAssertEqual(after.sqliteWALAllocatedBytes, before.sqliteWALAllocatedBytes)
+    }
+
+    func testStorageStatisticsAggregatesDurableCoverageInSQL() async throws {
+        let store = try FrameStore(directory: directory)
+        let displayID = UUID()
+        let session = try await store.beginCaptureSession(at: Date(timeIntervalSince1970: 0))
+        let firstJPEG = try XCTUnwrap(
+            ImageEncoder.jpegData(from: makeImage(width: 8, height: 8), quality: 0.8)
+        )
+        let secondJPEG = try XCTUnwrap(
+            ImageEncoder.jpegData(from: makeImage(width: 12, height: 9), quality: 0.8)
+        )
+        let observations: [(TimeInterval, UInt64, Data)] = [
+            (0, 1, firstJPEG),
+            (2, 1, firstJPEG),
+            (10, 2, secondJPEG),
+            (13, 2, secondJPEG),
+        ]
+        for (timestamp, hash, jpeg) in observations {
+            let frame = StoredFrame(
+                id: UUID(),
+                timestamp: Date(timeIntervalSince1970: timestamp),
+                hash: hash,
+                displayID: displayID,
+                displayName: "Test Display"
+            )
+            _ = try await store.recordEncodedCapture(frame: frame, jpegData: jpeg)
+        }
+
+        let statistics = await store.storageStatistics()
+        let coverage = try XCTUnwrap(
+            statistics.displayCoverage.first { $0.displayID == displayID }
+        )
+
+        XCTAssertEqual(statistics.timelineSpanCount, 2)
+        XCTAssertEqual(statistics.observationCount, 4)
+        XCTAssertEqual(coverage.durable.oldest, Date(timeIntervalSince1970: 0))
+        XCTAssertEqual(coverage.durable.newest, Date(timeIntervalSince1970: 13))
+        XCTAssertEqual(coverage.durable.coveredSeconds, 5, accuracy: 0.000_001)
+        XCTAssertTrue(coverage.durable.hasGaps)
+        XCTAssertEqual(coverage.combined, coverage.durable)
+
+        let overlayFrame = StoredFrame(
+            id: UUID(),
+            timestamp: Date(timeIntervalSince1970: 2),
+            hash: 3,
+            displayID: displayID,
+            displayName: "Test Display"
+        )
+        let overlay = TimelineEntry(
+            span: TimelineSpan(
+                id: UUID(),
+                frameID: overlayFrame.id,
+                sessionID: session.id,
+                startedAt: Date(timeIntervalSince1970: 2),
+                observedThroughAt: Date(timeIntervalSince1970: 10),
+                observationCount: 2,
+                displayID: displayID,
+                displayName: "Test Display"
+            ),
+            frame: overlayFrame
+        )
+        let combinedSnapshot = await store.storageSnapshot(logicalOverlay: [overlay])
+        let combinedCoverage = try XCTUnwrap(
+            combinedSnapshot.statistics.displayCoverage.first { $0.displayID == displayID }
+        )
+        XCTAssertEqual(combinedCoverage.durable.coveredSeconds, 5, accuracy: 0.000_001)
+        XCTAssertTrue(combinedCoverage.durable.hasGaps)
+        XCTAssertEqual(combinedCoverage.combined.coveredSeconds, 13, accuracy: 0.000_001)
+        XCTAssertFalse(combinedCoverage.combined.hasGaps)
     }
 
     func testStorageStatisticsSamplesNewestFramesByTimestamp() async throws {
@@ -100,7 +188,7 @@ final class FrameStoreTests: XCTestCase {
         )
 
         XCTAssertEqual(sample.frameCount, 50)
-        XCTAssertEqual(sample.storedBytes, expectedSampleBytes)
+        XCTAssertEqual(sample.jpegPayloadBytes, expectedSampleBytes)
     }
 
     func testLoadUnknownFrameThrowsFileNotFound() async throws {
@@ -323,6 +411,12 @@ final class FrameStoreTests: XCTestCase {
     func testMigratesLegacyISO8601DatesAndRetainsBackup() async throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let legacyTimestamp = Date(timeIntervalSince1970: 2_000)
+        let legacyJPEG = try XCTUnwrap(
+            ImageEncoder.jpegData(from: makeImage(), quality: 0.8)
+        )
+        let framesDirectory = directory.appendingPathComponent("frames", isDirectory: true)
+        try FileManager.default.createDirectory(at: framesDirectory, withIntermediateDirectories: true)
+        try legacyJPEG.write(to: framesDirectory.appendingPathComponent("legacy.jpg"))
         let legacyManifest = FrameManifest(
             frames: [
                 FrameMetadata(
@@ -331,7 +425,7 @@ final class FrameStoreTests: XCTestCase {
                     hash: 7,
                     filename: "legacy.jpg",
                     thumbnailFilename: "legacy_thumb.jpg",
-                    fileSize: 1,
+                    fileSize: Int64(legacyJPEG.count),
                     displayID: nil,
                     displayName: nil
                 )
@@ -356,6 +450,9 @@ final class FrameStoreTests: XCTestCase {
     func testMigratesNumericLegacyDatesAndUInt64HashesExactlyOnce() async throws {
         let timestamp = Date(timeIntervalSince1970: 2_000.125)
         let hashes: [UInt64] = [0, UInt64(Int64.max) + 1, UInt64.max]
+        let legacyJPEG = try XCTUnwrap(
+            ImageEncoder.jpegData(from: makeImage(), quality: 0.8)
+        )
         let frames = hashes.enumerated().map { offset, hash in
             let id = UUID()
             return FrameMetadata(
@@ -364,7 +461,7 @@ final class FrameStoreTests: XCTestCase {
                 hash: hash,
                 filename: "\(id.uuidString).jpg",
                 thumbnailFilename: "\(id.uuidString)_thumb.jpg",
-                fileSize: Int64(offset + 1),
+                fileSize: Int64(legacyJPEG.count),
                 displayID: nil,
                 displayName: nil
             )
@@ -372,7 +469,7 @@ final class FrameStoreTests: XCTestCase {
         let framesDirectory = directory.appendingPathComponent("frames", isDirectory: true)
         try FileManager.default.createDirectory(at: framesDirectory, withIntermediateDirectories: true)
         for frame in frames {
-            try Data("legacy frame".utf8).write(
+            try legacyJPEG.write(
                 to: framesDirectory.appendingPathComponent(frame.filename)
             )
         }
@@ -406,7 +503,7 @@ final class FrameStoreTests: XCTestCase {
     }
 
     func testMigratedManifestBackupSurvivesOneLaterHealthyLaunch() async throws {
-        let frame = makeLegacyMetadata(hash: 7)
+        let frame = try makeLegacyMetadata(hash: 7)
         try writeLegacyManifest(frames: [frame], dateEncodingStrategy: .secondsSince1970)
 
         do {
@@ -433,7 +530,7 @@ final class FrameStoreTests: XCTestCase {
             let partiallyInitialised = try FrameDatabase(url: databaseURL)
             partiallyInitialised.close()
         }
-        let frame = makeLegacyMetadata(hash: UInt64.max)
+        let frame = try makeLegacyMetadata(hash: UInt64.max)
         try writeLegacyManifest(frames: [frame], dateEncodingStrategy: .secondsSince1970)
 
         let store = try FrameStore(directory: directory)
@@ -445,7 +542,7 @@ final class FrameStoreTests: XCTestCase {
     }
 
     func testCommittedMigrationWithUnrenamedManifestFinalisesWithoutDuplicates() async throws {
-        let frame = makeLegacyMetadata(hash: 99)
+        let frame = try makeLegacyMetadata(hash: 99)
         try writeLegacyManifest(frames: [frame], dateEncodingStrategy: .secondsSince1970)
         do {
             _ = try FrameStore(directory: directory)
@@ -530,6 +627,8 @@ final class FrameStoreTests: XCTestCase {
         try FileManager.default.createDirectory(at: framesDirectory, withIntermediateDirectories: true)
         try Data("recover me".utf8).write(to: framesDirectory.appendingPathComponent("preserved.jpg"))
         try Data("not a sqlite database".utf8).write(to: directory.appendingPathComponent("frames.sqlite"))
+        let journalEvidence = Data("journal evidence".utf8)
+        try journalEvidence.write(to: directory.appendingPathComponent("frames.sqlite-journal"))
         try Data("wal evidence".utf8).write(to: directory.appendingPathComponent("frames.sqlite-wal"))
         try Data("shm evidence".utf8).write(to: directory.appendingPathComponent("frames.sqlite-shm"))
 
@@ -537,9 +636,12 @@ final class FrameStoreTests: XCTestCase {
         let metadata = await store.getAllMetadata()
         XCTAssertTrue(metadata.isEmpty)
         XCTAssertTrue(recoveryContains(filename: "frames.sqlite"))
+        XCTAssertTrue(recoveryContains(filename: "frames.sqlite-journal"))
         XCTAssertTrue(recoveryContains(filename: "frames.sqlite-wal"))
         XCTAssertTrue(recoveryContains(filename: "frames.sqlite-shm"))
         XCTAssertTrue(recoveryContains(filename: "preserved.jpg"))
+        let recoveredJournalURL = try XCTUnwrap(recoveryFileURL(filename: "frames.sqlite-journal"))
+        XCTAssertEqual(try Data(contentsOf: recoveredJournalURL), journalEvidence)
 
         _ = try await store.saveFrame(
             makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
@@ -578,11 +680,13 @@ final class FrameStoreTests: XCTestCase {
         let framesDirectory = directory.appendingPathComponent("frames", isDirectory: true)
         try FileManager.default.createDirectory(at: framesDirectory, withIntermediateDirectories: true)
         try Data("recover me".utf8).write(to: framesDirectory.appendingPathComponent("preserved.jpg"))
+        try Data("orphan journal".utf8).write(to: directory.appendingPathComponent("frames.sqlite-journal"))
         try Data("orphan wal".utf8).write(to: directory.appendingPathComponent("frames.sqlite-wal"))
         try Data("orphan shm".utf8).write(to: directory.appendingPathComponent("frames.sqlite-shm"))
 
         _ = try FrameStore(directory: directory)
 
+        XCTAssertTrue(recoveryContains(filename: "frames.sqlite-journal"))
         XCTAssertTrue(recoveryContains(filename: "frames.sqlite-wal"))
         XCTAssertTrue(recoveryContains(filename: "frames.sqlite-shm"))
         XCTAssertTrue(recoveryContains(filename: "preserved.jpg"))
@@ -901,8 +1005,8 @@ final class FrameStoreTests: XCTestCase {
         let metadata = await store.getAllMetadata()
         XCTAssertTrue(metadata.isEmpty)
 
-        let totalSize = await store.totalStorageSize()
-        XCTAssertEqual(totalSize, 0)
+        let durableJPEGPayloadBytes = await store.durableJPEGPayloadBytes()
+        XCTAssertEqual(durableJPEGPayloadBytes, 0)
 
         let framesDirectory = directory.appendingPathComponent("frames", isDirectory: true)
         let files = try FileManager.default.contentsOfDirectory(atPath: framesDirectory.path)
@@ -911,10 +1015,11 @@ final class FrameStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: FrameStore.migratedManifestURL(in: directory).path))
     }
 
-    func testClearCommittedDatabaseStateRemainsRecoverableWhenPayloadRemovalFails() async throws {
+    func testClearReportsRetainedPayloadAndRetryEventuallyDeletesIt() async throws {
+        let removal = ClearRemovalFailureProbe()
         let store = try FrameStore(
             directory: directory,
-            clearPayloadRemoval: { _ in throw CocoaError(.fileWriteNoPermission) }
+            clearPayloadRemoval: removal.remove
         )
         let oldMetadata = try await store.saveFrame(
             makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
@@ -923,16 +1028,23 @@ final class FrameStoreTests: XCTestCase {
             .appendingPathComponent("frames", isDirectory: true)
             .appendingPathComponent(oldMetadata.filename)
 
-        try await store.clear()
+        do {
+            try await store.clear()
+            XCTFail("Expected clear to report retained payloads")
+        } catch FrameStoreError.clearIncomplete(let paths) {
+            let retainedPayloads = paths.map {
+                URL(fileURLWithPath: $0).resolvingSymlinksInPath().path
+            }
+            XCTAssertTrue(retainedPayloads.contains(oldPayload.resolvingSymlinksInPath().path))
+        }
 
         let clearedMetadata = await store.getAllMetadata()
         XCTAssertTrue(clearedMetadata.isEmpty)
         XCTAssertTrue(FileManager.default.fileExists(atPath: oldPayload.path))
 
-        // A failed unlink is now an unreferenced owned orphan, not a falsely
-        // failed clear. Startup recovery can quarantine it, after which a new
-        // session and capture proceed normally.
-        try await store.cleanupOrphans()
+        removal.allowRemoval()
+        try await store.clear()
+
         XCTAssertFalse(FileManager.default.fileExists(atPath: oldPayload.path))
         let startedAt = Date().addingTimeInterval(1)
         _ = try await store.beginCaptureSession(at: startedAt)
@@ -947,6 +1059,94 @@ final class FrameStoreTests: XCTestCase {
         _ = try await store.recordEncodedCapture(frame: nextFrame, jpegData: jpeg)
         let timeline = await store.getTimelineEntries()
         XCTAssertEqual(timeline.map(\.frame.id), [nextFrame.id])
+    }
+
+    func testStartupQuarantinesZeroLengthPayloadEvenWhenExpectedLengthIsZero() async throws {
+        let metadata: FrameMetadata
+        do {
+            let store = try FrameStore(directory: directory)
+            metadata = try await store.saveFrame(
+                makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+            )
+            await store.flush()
+        }
+        let payloadURL = framesDirectoryURL().appendingPathComponent(metadata.filename)
+        try Data().write(to: payloadURL)
+        try executeSQLite(
+            databaseURL: directory.appendingPathComponent("frames.sqlite"),
+            sql: "UPDATE frames SET file_size = 0 WHERE id = '\(metadata.id.uuidString)';"
+        )
+
+        let reopened = try FrameStore(directory: directory)
+
+        let reopenedMetadata = await reopened.getAllMetadata()
+        XCTAssertTrue(reopenedMetadata.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: payloadURL.path))
+        XCTAssertTrue(recoveryContains(filename: metadata.filename))
+    }
+
+    func testStartupQuarantinesCorruptPayloadWithMatchingExpectedLength() async throws {
+        let metadata: FrameMetadata
+        do {
+            let store = try FrameStore(directory: directory)
+            metadata = try await store.saveFrame(
+                makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+            )
+            await store.flush()
+        }
+        let payloadURL = framesDirectoryURL().appendingPathComponent(metadata.filename)
+        try Data(repeating: 0x41, count: Int(metadata.fileSize)).write(to: payloadURL)
+
+        let reopened = try FrameStore(directory: directory)
+
+        let reopenedMetadata = await reopened.getAllMetadata()
+        XCTAssertTrue(reopenedMetadata.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: payloadURL.path))
+        XCTAssertTrue(recoveryContains(filename: metadata.filename))
+    }
+
+    func testStartupQuarantinesTruncatedPayload() async throws {
+        let metadata: FrameMetadata
+        do {
+            let store = try FrameStore(directory: directory)
+            metadata = try await store.saveFrame(
+                makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+            )
+            await store.flush()
+        }
+        let payloadURL = framesDirectoryURL().appendingPathComponent(metadata.filename)
+        let original = try Data(contentsOf: payloadURL)
+        try original.prefix(max(1, original.count / 2)).write(to: payloadURL)
+
+        let reopened = try FrameStore(directory: directory)
+
+        let reopenedMetadata = await reopened.getAllMetadata()
+        XCTAssertTrue(reopenedMetadata.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: payloadURL.path))
+        XCTAssertTrue(recoveryContains(filename: metadata.filename))
+    }
+
+    func testStartupQuarantinesDecodablePayloadWithLengthMismatch() async throws {
+        let metadata: FrameMetadata
+        do {
+            let store = try FrameStore(directory: directory)
+            metadata = try await store.saveFrame(
+                makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+            )
+            await store.flush()
+        }
+        let payloadURL = framesDirectoryURL().appendingPathComponent(metadata.filename)
+        var payload = try Data(contentsOf: payloadURL)
+        payload.append(contentsOf: [0, 1, 2, 3])
+        XCTAssertNotNil(ImageEncoder.cgImage(from: payload))
+        try payload.write(to: payloadURL)
+
+        let reopened = try FrameStore(directory: directory)
+
+        let reopenedMetadata = await reopened.getAllMetadata()
+        XCTAssertTrue(reopenedMetadata.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: payloadURL.path))
+        XCTAssertTrue(recoveryContains(filename: metadata.filename))
     }
 
     func testThumbnailIsGeneratedLazilyAndCachedToDisk() async throws {
@@ -1235,7 +1435,9 @@ final class FrameStoreTests: XCTestCase {
         let displayID = UUID()
         let filename = "\(frameID.uuidString).jpg"
         let thumbnailFilename = "\(frameID.uuidString)_thumb.jpg"
-        let jpeg = Data([0xFF, 0xD8, 0x4A, 0x4E, 0xFF, 0xD9])
+        let jpeg = try XCTUnwrap(
+            ImageEncoder.jpegData(from: makeImage(), quality: 0.8)
+        )
         try jpeg.write(to: framesDirectory.appendingPathComponent(filename))
         let databaseURL = directory.appendingPathComponent("frames.sqlite")
         try executeSQLite(
@@ -1397,15 +1599,21 @@ final class FrameStoreTests: XCTestCase {
         return url
     }
 
-    private func makeLegacyMetadata(hash: UInt64) -> FrameMetadata {
+    private func makeLegacyMetadata(hash: UInt64) throws -> FrameMetadata {
         let id = UUID()
+        let jpeg = try XCTUnwrap(
+            ImageEncoder.jpegData(from: makeImage(), quality: 0.8)
+        )
+        let framesDirectory = directory.appendingPathComponent("frames", isDirectory: true)
+        try FileManager.default.createDirectory(at: framesDirectory, withIntermediateDirectories: true)
+        try jpeg.write(to: framesDirectory.appendingPathComponent("\(id.uuidString).jpg"))
         return FrameMetadata(
             id: id,
             timestamp: Date(timeIntervalSince1970: 2_000.125),
             hash: hash,
             filename: "\(id.uuidString).jpg",
             thumbnailFilename: "\(id.uuidString)_thumb.jpg",
-            fileSize: 42,
+            fileSize: Int64(jpeg.count),
             displayID: UUID(),
             displayName: "Legacy Display"
         )
@@ -1432,17 +1640,21 @@ final class FrameStoreTests: XCTestCase {
     }
 
     private func recoveryContains(filename: String) -> Bool {
+        recoveryFileURL(filename: filename) != nil
+    }
+
+    private func recoveryFileURL(filename: String) -> URL? {
         let recoveryURL = FrameStore.recoveryDirectory(in: directory)
         guard let enumerator = FileManager.default.enumerator(
             at: recoveryURL,
             includingPropertiesForKeys: nil
         ) else {
-            return false
+            return nil
         }
         for case let url as URL in enumerator where url.lastPathComponent == filename {
-            return true
+            return url
         }
-        return false
+        return nil
     }
 
     private func sqliteText(databaseURL: URL, sql: String) throws -> String {
@@ -1501,5 +1713,26 @@ final class FrameStoreTests: XCTestCase {
         guard sqlite3_exec(connection, sql, nil, nil, nil) == SQLITE_OK else {
             throw FrameDatabaseError.sqlite("Failed to create malformed test schema")
         }
+    }
+}
+
+private final class ClearRemovalFailureProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    nonisolated(unsafe) private var removalAllowed = false
+
+    nonisolated func remove(_ url: URL) throws {
+        lock.lock()
+        let isAllowed = removalAllowed
+        lock.unlock()
+        guard isAllowed else {
+            throw CocoaError(.fileWriteNoPermission)
+        }
+        try FileManager.default.removeItem(at: url)
+    }
+
+    nonisolated func allowRemoval() {
+        lock.lock()
+        removalAllowed = true
+        lock.unlock()
     }
 }

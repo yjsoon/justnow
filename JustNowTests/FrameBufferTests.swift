@@ -40,7 +40,8 @@ final class FrameBufferTests: XCTestCase {
         let buffer = try await FrameBuffer(
             retentionPolicy: .default24Hours,
             storageDirectory: directory,
-            diagnosticsLog: diagnosticsLog
+            diagnosticsLog: diagnosticsLog,
+            historyStorageMode: .allDisk
         )
         try await buffer.beginCaptureSession(at: Date(timeIntervalSince1970: 0))
         return buffer
@@ -84,6 +85,7 @@ final class FrameBufferTests: XCTestCase {
             storageDirectory: directory,
             diagnosticsLog: nil,
             frameRepository: repository,
+            historyStorageMode: .hybridRAM(byteCap: 64),
             jpegEncoder: FrameJPEGEncoder { _, _ in Data(repeating: 7, count: 16) }
         )
         try await buffer.beginCaptureSession(at: Date(timeIntervalSince1970: 0))
@@ -313,6 +315,7 @@ final class FrameBufferTests: XCTestCase {
             storageDirectory: directory,
             diagnosticsLog: nil,
             frameRepository: repository,
+            historyStorageMode: .hybridRAM(byteCap: 64),
             jpegEncoder: FrameJPEGEncoder { _, _ in Data(repeating: 7, count: 16) }
         )
         let base = Date()
@@ -331,7 +334,7 @@ final class FrameBufferTests: XCTestCase {
         XCTAssertEqual(metrics.volatileRepositorySaves, 0)
         XCTAssertEqual(metrics.duplicateRepositorySaves, 1)
         let statistics = await buffer.storageStatistics()
-        XCTAssertGreaterThan(statistics.storedBytes, 0)
+        XCTAssertGreaterThan(statistics.durableJPEGPayloadBytes, 0)
         XCTAssertEqual(statistics.volatileObservationCount, 2)
     }
 
@@ -354,6 +357,7 @@ final class FrameBufferTests: XCTestCase {
             storageDirectory: directory,
             diagnosticsLog: nil,
             frameRepository: repository,
+            historyStorageMode: .hybridRAM(byteCap: max(firstJPEG.count, secondJPEG.count)),
             jpegEncoder: FrameJPEGEncoder { image, quality in
                 encoder.encode(image: image, quality: quality)
             }
@@ -373,13 +377,14 @@ final class FrameBufferTests: XCTestCase {
         let snapshot = buffer.captureInstrumentationSnapshot()
         XCTAssertEqual(snapshot.encodedFrames, 3)
         XCTAssertEqual(snapshot.persistedFrames, 1)
-        XCTAssertEqual(snapshot.logicalJPEGBytesWritten, Int64(firstJPEG.count))
-        XCTAssertGreaterThan(snapshot.metadataBytesWritten, 0)
+        XCTAssertEqual(snapshot.logicalDurableJPEGEventBytes, Int64(firstJPEG.count))
+        XCTAssertGreaterThan(snapshot.logicalMetadataEventBytes, 0)
         XCTAssertEqual(snapshot.metadataTransactions, 1)
         XCTAssertEqual(snapshot.durableRepositorySaves, 1)
         XCTAssertEqual(snapshot.firstAnchorRepositorySaves, 1)
         XCTAssertEqual(snapshot.volatileRepositorySaves, 1)
         XCTAssertEqual(snapshot.duplicateRepositorySaves, 1)
+        XCTAssertEqual(snapshot.repositoryExactDuplicateFrames, 1)
         let durableMutationCalls = await durable.capturedMutationCallCounts()
         XCTAssertEqual(durableMutationCalls.promoteVolatileEntry, 1)
         XCTAssertEqual(durableMutationCalls.checkpointPromotedSpan, 0)
@@ -405,6 +410,37 @@ final class FrameBufferTests: XCTestCase {
         XCTAssertEqual(statistics.volatileObservationCount, 2)
     }
 
+    func testHybridExactMetricsDoNotCompareAgainstOlderDurablePayload() async throws {
+        let image = try makeStructuredImage(seed: 703)
+        let a = Data([1])
+        let b = Data([2])
+        let encoder = SequencedJPEGEncoderProbe(data: [a, b, a])
+        let store = try FrameStore(directory: directory)
+        let repository = HybridFrameRepository(frameStore: store, byteCap: 1_000)
+        let buffer = try await FrameBuffer(
+            retentionPolicy: .default24Hours,
+            storageDirectory: directory,
+            diagnosticsLog: nil,
+            frameRepository: repository,
+            historyStorageMode: .hybridRAM(byteCap: 1_000),
+            jpegEncoder: FrameJPEGEncoder { source, quality in
+                encoder.encode(image: source, quality: quality)
+            }
+        )
+        let base = Date()
+        try await buffer.beginCaptureSession(at: base)
+
+        await buffer.addFrameSync(image, timestamp: base, display: nil)
+        await buffer.addFrameSync(image, timestamp: base.addingTimeInterval(0.5), display: nil)
+        await buffer.addFrameSync(image, timestamp: base.addingTimeInterval(0.75), display: nil)
+
+        let snapshot = buffer.captureInstrumentationSnapshot()
+        XCTAssertEqual(snapshot.exactComparisonBaselineAvailableFrames, 2)
+        XCTAssertEqual(snapshot.repositoryExactDuplicateFrames, 0)
+        XCTAssertEqual(snapshot.duplicateRepositorySaves, 0)
+        XCTAssertEqual(buffer.getTimelineEntries().count, 3)
+    }
+
     func testHybridEvictionInvalidatesTimelineDecodedCacheWithoutOCRWrites() async throws {
         let firstImage = try makeStructuredImage(seed: 704)
         let secondImage = try makeStructuredImage(seed: 705)
@@ -421,6 +457,7 @@ final class FrameBufferTests: XCTestCase {
             storageDirectory: directory,
             diagnosticsLog: nil,
             frameRepository: repository,
+            historyStorageMode: .hybridRAM(byteCap: max(firstJPEG.count, secondJPEG.count)),
             jpegEncoder: FrameJPEGEncoder { image, quality in
                 encoder.encode(image: image, quality: quality)
             }
@@ -455,7 +492,8 @@ final class FrameBufferTests: XCTestCase {
         let allDisk = try await FrameBuffer(
             retentionPolicy: .default24Hours,
             storageDirectory: allDiskDirectory,
-            diagnosticsLog: nil
+            diagnosticsLog: nil,
+            historyStorageMode: .allDisk
         )
         try await allDisk.beginCaptureSession(at: Date())
         let allDiskBaseline = await allDisk.textCache.mutationTransactionCountForTesting()
@@ -476,6 +514,7 @@ final class FrameBufferTests: XCTestCase {
             storageDirectory: hybridDirectory,
             diagnosticsLog: nil,
             frameRepository: repository,
+            historyStorageMode: .hybridRAM(byteCap: 1_000),
             jpegEncoder: FrameJPEGEncoder { image, quality in
                 encoder.encode(image: image, quality: quality)
             }
@@ -505,6 +544,7 @@ final class FrameBufferTests: XCTestCase {
             storageDirectory: directory,
             diagnosticsLog: nil,
             frameRepository: repository,
+            historyStorageMode: .hybridRAM(byteCap: 1_000),
             jpegEncoder: FrameJPEGEncoder { image, quality in
                 encoder.encode(image: image, quality: quality)
             }
@@ -544,6 +584,7 @@ final class FrameBufferTests: XCTestCase {
             storageDirectory: directory,
             diagnosticsLog: nil,
             frameRepository: repository,
+            historyStorageMode: .hybridRAM(byteCap: 1_000),
             jpegEncoder: FrameJPEGEncoder { image, quality in
                 encoder.encode(image: image, quality: quality)
             }
@@ -587,6 +628,7 @@ final class FrameBufferTests: XCTestCase {
             storageDirectory: directory,
             diagnosticsLog: nil,
             frameRepository: repository,
+            historyStorageMode: .hybridRAM(byteCap: jpeg.count + 1),
             jpegEncoder: FrameJPEGEncoder { _, _ in jpeg }
         )
         let base = Date()
@@ -619,6 +661,7 @@ final class FrameBufferTests: XCTestCase {
             storageDirectory: directory,
             diagnosticsLog: nil,
             frameRepository: repository,
+            historyStorageMode: .hybridRAM(byteCap: jpeg.count + 1),
             jpegEncoder: FrameJPEGEncoder { _, _ in jpeg }
         )
         let base = Date()
@@ -648,6 +691,7 @@ final class FrameBufferTests: XCTestCase {
             storageDirectory: directory,
             diagnosticsLog: nil,
             frameRepository: repository,
+            historyStorageMode: .hybridRAM(byteCap: 64),
             jpegEncoder: FrameJPEGEncoder { source, quality in
                 encoder.encode(image: source, quality: quality)
             }
@@ -774,8 +818,8 @@ final class FrameBufferTests: XCTestCase {
         let snapshot = buffer.captureInstrumentationSnapshot()
         XCTAssertEqual(snapshot.encodedFrames, 1)
         XCTAssertEqual(snapshot.persistedFrames, 1)
-        XCTAssertEqual(snapshot.logicalJPEGBytesWritten, Int64(exactJPEG.count))
-        XCTAssertEqual(snapshot.metadataBytesWritten, 37)
+        XCTAssertEqual(snapshot.logicalDurableJPEGEventBytes, Int64(exactJPEG.count))
+        XCTAssertEqual(snapshot.logicalMetadataEventBytes, 37)
         XCTAssertEqual(snapshot.metadataTransactions, 1)
         XCTAssertEqual(snapshot.durableRepositorySaves, 1)
         XCTAssertEqual(snapshot.volatileRepositorySaves, 0)
@@ -831,7 +875,7 @@ final class FrameBufferTests: XCTestCase {
         XCTAssertEqual(snapshot.metadataTransactions, 2)
         XCTAssertEqual(snapshot.persistedFrames, 1)
         XCTAssertEqual(snapshot.spanCheckpointRepositorySaves, 1)
-        XCTAssertEqual(snapshot.logicalJPEGBytesWritten, Int64(exactJPEG.count))
+        XCTAssertEqual(snapshot.logicalDurableJPEGEventBytes, Int64(exactJPEG.count))
     }
 
     func testFirstOCRWriteAfterSpanExtensionUsesCurrentLogicalTimestampForSinceSearch() async throws {
@@ -1482,10 +1526,10 @@ final class FrameBufferTests: XCTestCase {
         XCTAssertEqual(snapshot.exactComparisonBaselineAvailableFrames, 1)
         XCTAssertEqual(snapshot.exactComparisonSkippedFrames, 0)
         XCTAssertEqual(snapshot.perceptuallyEqualFrames, 1)
-        XCTAssertEqual(snapshot.byteIdenticalEncodedFrames, 1)
-        XCTAssertEqual(snapshot.logicalJPEGBytesWritten, Int64(snapshot.largestEncodedJPEGBytes))
+        XCTAssertEqual(snapshot.repositoryExactDuplicateFrames, 1)
+        XCTAssertEqual(snapshot.logicalDurableJPEGEventBytes, Int64(snapshot.largestEncodedJPEGBytes))
         XCTAssertEqual(snapshot.metadataTransactions, 2)
-        XCTAssertGreaterThan(snapshot.metadataBytesWritten, 0)
+        XCTAssertGreaterThan(snapshot.logicalMetadataEventBytes, 0)
         XCTAssertGreaterThanOrEqual(snapshot.maximumIngestQueueDepth, 1)
     }
 
@@ -1502,7 +1546,8 @@ final class FrameBufferTests: XCTestCase {
         XCTAssertEqual(entry.category, "CaptureMetrics")
         XCTAssertTrue(entry.message.contains("captured=1"))
         XCTAssertTrue(entry.message.contains("encoded=1"))
-        XCTAssertTrue(entry.message.contains("persisted=1"))
+        XCTAssertTrue(entry.message.contains("durableJPEGEvents=1"))
+        XCTAssertTrue(entry.message.contains("logicalJPEGEventBytes="))
         XCTAssertFalse(entry.message.contains("TestImageFactory"))
     }
 
@@ -1526,7 +1571,7 @@ final class FrameBufferTests: XCTestCase {
         XCTAssertEqual(afterNewCapture.capturedFrames, 1)
         XCTAssertEqual(afterNewCapture.exactComparisonEligibleFrames, 1)
         XCTAssertEqual(afterNewCapture.exactComparisonBaselineAvailableFrames, 0)
-        XCTAssertEqual(afterNewCapture.byteIdenticalEncodedFrames, 0)
+        XCTAssertEqual(afterNewCapture.repositoryExactDuplicateFrames, 0)
     }
 
     func testVisuallyDistinctFramesWithinSpacingAreBothStored() async throws {
@@ -1859,7 +1904,8 @@ final class FrameBufferTests: XCTestCase {
             let buffer = try await FrameBuffer(
                 retentionPolicy: .default24Hours,
                 storageDirectory: directory,
-                diagnosticsLog: nil
+                diagnosticsLog: nil,
+                historyStorageMode: .allDisk
             )
             try await buffer.beginCaptureSession(at: base.addingTimeInterval(-1))
             await buffer.addFrameSync(imageA, timestamp: base, display: displayA)
@@ -1883,7 +1929,8 @@ final class FrameBufferTests: XCTestCase {
         let reopened = try await FrameBuffer(
             retentionPolicy: .default24Hours,
             storageDirectory: directory,
-            diagnosticsLog: nil
+            diagnosticsLog: nil,
+            historyStorageMode: .allDisk
         )
         let frames = reopened.getFrames()
         XCTAssertEqual(frames.count, 2)
@@ -1914,7 +1961,8 @@ final class FrameBufferTests: XCTestCase {
             let buffer = try await FrameBuffer(
                 retentionPolicy: .default24Hours,
                 storageDirectory: directory,
-                diagnosticsLog: nil
+                diagnosticsLog: nil,
+                historyStorageMode: .allDisk
             )
             try await buffer.beginCaptureSession(at: base.addingTimeInterval(-1))
             await buffer.addFrameSync(
@@ -1936,7 +1984,8 @@ final class FrameBufferTests: XCTestCase {
         let reopened = try await FrameBuffer(
             retentionPolicy: .default24Hours,
             storageDirectory: directory,
-            diagnosticsLog: nil
+            diagnosticsLog: nil,
+            historyStorageMode: .allDisk
         )
 
         XCTAssertEqual(reopened.getTimelineEntries().map(\.span.id), liveTimelineIDs)
@@ -2529,7 +2578,7 @@ private actor FrameRepositoryProbe: FrameRepository {
         jpegByFrameID.removeAll()
     }
 
-    func totalStorageSize() -> Int64 {
+    func durableJPEGPayloadBytes() -> Int64 {
         0
     }
 

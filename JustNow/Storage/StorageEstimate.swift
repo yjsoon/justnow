@@ -1,7 +1,35 @@
 import Foundation
 
+nonisolated enum StorageProjectionKind: Sendable, Equatable {
+    case allDiskJPEGPayloadEstimate
+    case conservativeAllDiskJPEGBound
+
+    var title: String {
+        switch self {
+        case .allDiskJPEGPayloadEstimate: "Projected JPEG payloads"
+        case .conservativeAllDiskJPEGBound: "Conservative disk JPEG bound"
+        }
+    }
+
+    var qualifier: String {
+        switch self {
+        case .allDiskJPEGPayloadEstimate:
+            "This estimates encoded JPEG payload bytes, not total allocated disk space."
+        case .conservativeAllDiskJPEGBound:
+            "This is a conservative all-disk JPEG bound; hybrid mode normally keeps fewer JPEG bytes durably."
+        }
+    }
+}
+
 nonisolated enum StorageEstimate {
     static let minimumSampleFrameCount = 10
+
+    static func projectionKind(for storageMode: HistoryStorageMode) -> StorageProjectionKind {
+        switch storageMode {
+        case .allDisk: .allDiskJPEGPayloadEstimate
+        case .hybridRAM: .conservativeAllDiskJPEGBound
+        }
+    }
 
     static func projectedFrameCountPerDisplay(
         policy: RetentionPolicy,
@@ -35,7 +63,7 @@ nonisolated enum StorageEstimate {
         samples: [FrameStorageSample],
         connectedDisplayIDs: [UUID]
     ) -> Int64? {
-        let fallbackStoredBytes = samples.reduce(Int64(0)) { $0 + $1.storedBytes }
+        let fallbackStoredBytes = samples.reduce(Int64(0)) { $0 + $1.jpegPayloadBytes }
         let fallbackFrameCount = samples.reduce(0) { $0 + $1.frameCount }
         guard fallbackFrameCount >= minimumSampleFrameCount,
               fallbackStoredBytes > 0,
@@ -52,8 +80,8 @@ nonisolated enum StorageEstimate {
         let estimate = connectedDisplayIDs.reduce(0.0) { total, displayID in
             let sample = samples.first { $0.displayID == displayID }
             let averageFrameSize: Double
-            if let sample, sample.frameCount >= minimumSampleFrameCount, sample.storedBytes > 0 {
-                averageFrameSize = Double(sample.storedBytes) / Double(sample.frameCount)
+            if let sample, sample.frameCount >= minimumSampleFrameCount, sample.jpegPayloadBytes > 0 {
+                averageFrameSize = Double(sample.jpegPayloadBytes) / Double(sample.frameCount)
             } else {
                 averageFrameSize = fallbackAverageFrameSize
             }

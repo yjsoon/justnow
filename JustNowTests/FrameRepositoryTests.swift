@@ -86,7 +86,7 @@ final class FrameRepositoryTests: XCTestCase {
         let snapshot = instrumentation.currentSnapshot()
         XCTAssertEqual(snapshot.encodedFrames, 0, "The repository must not claim an encode it did not perform")
         XCTAssertEqual(snapshot.persistedFrames, 0, "FrameBuffer owns repository-outcome metrics")
-        XCTAssertEqual(snapshot.logicalJPEGBytesWritten, 0)
+        XCTAssertEqual(snapshot.logicalDurableJPEGEventBytes, 0)
     }
 
     func testDiskRepositoryMemoryPressureIsANoOpAndPreservesDurableHistory() async throws {
@@ -181,7 +181,7 @@ final class FrameRepositoryTests: XCTestCase {
         let snapshot = instrumentation.currentSnapshot()
         XCTAssertEqual(snapshot.encodedFrames, 1)
         XCTAssertEqual(snapshot.persistedFrames, 1)
-        XCTAssertEqual(snapshot.logicalJPEGBytesWritten, metadata.fileSize)
+        XCTAssertEqual(snapshot.logicalDurableJPEGEventBytes, metadata.fileSize)
         XCTAssertEqual(snapshot.metadataTransactions, 1)
         XCTAssertEqual(snapshot.durableRepositorySaves, 0)
     }
@@ -597,7 +597,7 @@ final class FrameRepositoryTests: XCTestCase {
         instrumentation.recordMetadataWrite(byteCount: retry.logicalMetadataByteCount)
         let instrumentationSnapshot = instrumentation.currentSnapshot()
         XCTAssertEqual(instrumentationSnapshot.persistedFrames, 1)
-        XCTAssertEqual(instrumentationSnapshot.logicalJPEGBytesWritten, Int64(jpegData.count))
+        XCTAssertEqual(instrumentationSnapshot.logicalDurableJPEGEventBytes, Int64(jpegData.count))
         XCTAssertEqual(instrumentationSnapshot.metadataTransactions, 1)
         let timeline = await repository.orderedTimeline()
         XCTAssertEqual(timeline, [entry])
@@ -732,7 +732,9 @@ final class FrameRepositoryTests: XCTestCase {
 
     func testPromotedEntrySurvivesRestartWithExactPayloadAndTimeline() async throws {
         let entry: TimelineEntry
-        let jpegData = Data(repeating: 11, count: 23)
+        let jpegData = try XCTUnwrap(
+            ImageEncoder.jpegData(from: makeImage(width: 12, height: 8), quality: 0.8)
+        )
         do {
             let store = try FrameStore(directory: directory)
             let repository = DiskFrameRepository(frameStore: store)

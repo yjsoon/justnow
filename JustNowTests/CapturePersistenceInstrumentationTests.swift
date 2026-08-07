@@ -59,10 +59,10 @@ final class CapturePersistenceInstrumentationTests: XCTestCase {
         XCTAssertEqual(snapshot.exactComparisonEligibleFrames, 2)
         XCTAssertEqual(snapshot.exactComparisonBaselineAvailableFrames, 1)
         XCTAssertEqual(snapshot.exactComparisonSkippedFrames, 0)
-        XCTAssertEqual(snapshot.byteIdenticalEncodedFrames, 1)
+        XCTAssertEqual(snapshot.repositoryExactDuplicateFrames, 1)
         XCTAssertEqual(snapshot.perceptuallyEqualFrames, 2)
-        XCTAssertEqual(snapshot.logicalJPEGBytesWritten, 8)
-        XCTAssertEqual(snapshot.metadataBytesWritten, 52)
+        XCTAssertEqual(snapshot.logicalDurableJPEGEventBytes, 8)
+        XCTAssertEqual(snapshot.logicalMetadataEventBytes, 52)
         XCTAssertEqual(snapshot.metadataTransactions, 2)
         XCTAssertEqual(snapshot.proposedOrdinaryAnchors, 2)
         XCTAssertEqual(snapshot.proposedMajorAnchors, 1)
@@ -90,7 +90,7 @@ final class CapturePersistenceInstrumentationTests: XCTestCase {
 
         // The failed/not-yet-persisted attempts do not become comparison
         // baselines, and a display never compares against another display.
-        XCTAssertEqual(snapshot.byteIdenticalEncodedFrames, 1)
+        XCTAssertEqual(snapshot.repositoryExactDuplicateFrames, 1)
         XCTAssertEqual(snapshot.encodedFrames, 4)
         XCTAssertEqual(snapshot.exactComparisonEligibleFrames, 4)
         XCTAssertEqual(snapshot.exactComparisonBaselineAvailableFrames, 1)
@@ -121,7 +121,7 @@ final class CapturePersistenceInstrumentationTests: XCTestCase {
         var snapshot = instrumentation.currentSnapshot()
         XCTAssertEqual(snapshot.epoch, 0)
         XCTAssertEqual(snapshot.persistedFrames, 2)
-        XCTAssertEqual(snapshot.logicalJPEGBytesWritten, 5)
+        XCTAssertEqual(snapshot.logicalDurableJPEGEventBytes, 5)
 
         instrumentation.reset()
         instrumentation.recordPersistedJPEG(receipt: copiedReceipt)
@@ -130,7 +130,7 @@ final class CapturePersistenceInstrumentationTests: XCTestCase {
         snapshot = instrumentation.currentSnapshot()
         XCTAssertEqual(snapshot.epoch, 1)
         XCTAssertEqual(snapshot.persistedFrames, 1)
-        XCTAssertEqual(snapshot.logicalJPEGBytesWritten, 3)
+        XCTAssertEqual(snapshot.logicalDurableJPEGEventBytes, 3)
     }
 
     func testPromotionWriteReceiptLedgerRetainsOldestTokenForEntireEpoch() {
@@ -158,7 +158,7 @@ final class CapturePersistenceInstrumentationTests: XCTestCase {
         let snapshot = instrumentation.currentSnapshot()
         XCTAssertEqual(snapshot.epoch, 0)
         XCTAssertEqual(snapshot.persistedFrames, 4_097)
-        XCTAssertEqual(snapshot.logicalJPEGBytesWritten, 4_097)
+        XCTAssertEqual(snapshot.logicalDurableJPEGEventBytes, 4_097)
     }
 
     func testRepositoryOutcomesExposeEveryStorageDispositionAndWriteEffect() {
@@ -185,16 +185,22 @@ final class CapturePersistenceInstrumentationTests: XCTestCase {
             jpegData: jpeg,
             displayID: nil
         )
+        instrumentation.recordRepositorySaveOutcome(
+            .pressureDrop,
+            jpegData: jpeg,
+            displayID: nil
+        )
 
         let snapshot = instrumentation.currentSnapshot()
         XCTAssertEqual(snapshot.durableRepositorySaves, 1)
         XCTAssertEqual(snapshot.volatileRepositorySaves, 1)
         XCTAssertEqual(snapshot.duplicateRepositorySaves, 1)
         XCTAssertEqual(snapshot.spanCheckpointRepositorySaves, 1)
+        XCTAssertEqual(snapshot.pressureDroppedRepositorySaves, 1)
         XCTAssertEqual(snapshot.persistedFrames, 1)
-        XCTAssertEqual(snapshot.logicalJPEGBytesWritten, 4)
+        XCTAssertEqual(snapshot.logicalDurableJPEGEventBytes, 4)
         XCTAssertEqual(snapshot.metadataTransactions, 2)
-        XCTAssertEqual(snapshot.metadataBytesWritten, 29)
+        XCTAssertEqual(snapshot.logicalMetadataEventBytes, 29)
         XCTAssertEqual(snapshot.largestMetadataWriteBytes, 21)
     }
 
@@ -214,7 +220,7 @@ final class CapturePersistenceInstrumentationTests: XCTestCase {
         XCTAssertEqual(snapshot.exactComparisonEligibleFrames, 0)
         XCTAssertEqual(snapshot.exactComparisonBaselineAvailableFrames, 0)
         XCTAssertEqual(snapshot.exactComparisonSkippedFrames, 2)
-        XCTAssertEqual(snapshot.byteIdenticalEncodedFrames, 0)
+        XCTAssertEqual(snapshot.repositoryExactDuplicateFrames, 0)
     }
 
     func testResetStartsANewEpochAndDiscardsComparisonAndAnchorBaselines() {
@@ -236,7 +242,7 @@ final class CapturePersistenceInstrumentationTests: XCTestCase {
         XCTAssertEqual(snapshot.proposedOrdinaryAnchors, 0)
         XCTAssertEqual(snapshot.exactComparisonEligibleFrames, 1)
         XCTAssertEqual(snapshot.exactComparisonBaselineAvailableFrames, 0)
-        XCTAssertEqual(snapshot.byteIdenticalEncodedFrames, 0)
+        XCTAssertEqual(snapshot.repositoryExactDuplicateFrames, 0)
     }
 
     func testDisplayStateUsesABoundedLRU() {
@@ -290,9 +296,28 @@ final class CapturePersistenceInstrumentationTests: XCTestCase {
         )
 
         XCTAssertTrue(line.contains("epoch=0"))
-        XCTAssertTrue(line.contains("repository{durable=0 volatile=0 duplicate=0 checkpoint=0}"))
-        XCTAssertTrue(line.contains("exact{eligible=1 baseline=0 identical=0 skipped=0}"))
+        XCTAssertTrue(line.contains(
+            "repository{durable=0 volatile=0 duplicate=0 checkpoint=0 pressureDropped=0}"
+        ))
+        XCTAssertTrue(line.contains(
+            "exact{eligible=1 baseline=0 repositoryDuplicate=0 skipped=0}"
+        ))
+        XCTAssertTrue(line.contains("logicalJPEGEventBytes=0"))
+        XCTAssertTrue(line.contains("logicalMetadata{eventBytes=12 transactions=1}"))
         XCTAssertTrue(line.contains("queue{preTrimHigh=0 retainedHigh=0 asyncDropped=0"))
         XCTAssertFalse(line.contains("displayID"))
+    }
+
+    func testEveryReplayedExactDuplicateEventIsCountedWithoutJPEGContext() {
+        let instrumentation = CapturePersistenceInstrumentation()
+        var replayedEffects = FrameRepositoryEffects.empty
+        replayedEffects.persistenceEvents = [.exactDuplicate, .exactDuplicate]
+
+        instrumentation.recordRepositoryEffects(replayedEffects)
+
+        let snapshot = instrumentation.currentSnapshot()
+        XCTAssertEqual(snapshot.duplicateRepositorySaves, 2)
+        XCTAssertEqual(snapshot.repositoryExactDuplicateFrames, 2)
+        XCTAssertEqual(snapshot.exactComparisonBaselineAvailableFrames, 0)
     }
 }

@@ -365,7 +365,7 @@ nonisolated protocol FrameRepository: Sendable {
     /// reference was removed.
     func pruneSpans(ids: Set<UUID>) async throws -> FrameRepositoryInvalidation
     func clear() async throws
-    func totalStorageSize() async -> Int64
+    func durableJPEGPayloadBytes() async -> Int64
     func storageStatistics() async -> FrameStorageStatistics
     func flush() async
 }
@@ -400,6 +400,9 @@ extension FrameRepository {
 /// source-neutral contract. Keeping this injectable makes durable failures and
 /// suspended exact comparisons deterministic in repository tests.
 nonisolated protocol HybridDurableRepository: FrameRepository {
+    func durableStorageSnapshot(
+        logicalOverlay: [TimelineEntry]
+    ) async -> DurableFrameStorageSnapshot
     func recordEncodedCapture(
         _ frame: StoredFrame,
         jpegData: Data,
@@ -575,12 +578,18 @@ nonisolated final class DiskFrameRepository: HybridDurableRepository, Sendable {
         try await frameStore.clear()
     }
 
-    func totalStorageSize() async -> Int64 {
-        await frameStore.totalStorageSize()
+    func durableJPEGPayloadBytes() async -> Int64 {
+        await frameStore.durableJPEGPayloadBytes()
     }
 
     func storageStatistics() async -> FrameStorageStatistics {
         await frameStore.storageStatistics()
+    }
+
+    func durableStorageSnapshot(
+        logicalOverlay: [TimelineEntry]
+    ) async -> DurableFrameStorageSnapshot {
+        await frameStore.storageSnapshot(logicalOverlay: logicalOverlay)
     }
 
     func flush() async {

@@ -152,10 +152,55 @@ nonisolated enum FrameCoverageCalculator {
         }
     }
 
+    /// Adds source-specific RAM coverage to the exact durable/combined SQL
+    /// aggregates. The output remains bounded to one row per display.
+    static func attachingVolatile(
+        to exactValues: [FrameDisplayCoverageStatistics],
+        volatile volatileEntries: [TimelineEntry]
+    ) -> [FrameDisplayCoverageStatistics] {
+        let exact = Dictionary(uniqueKeysWithValues: exactValues.map {
+            (DisplayKey($0.displayID), $0)
+        })
+        let volatile = Dictionary(grouping: volatileEntries) {
+            DisplayKey($0.span.displayID)
+        }
+        let keys = Set(exact.keys).union(volatile.keys)
+
+        return keys.map { key in
+            let exactValue = exact[key]
+            let volatileValues = volatile[key] ?? []
+            let volatileStatistics = intervalStatistics(for: volatileValues)
+            let newestVolatileName = volatileValues
+                .sorted { timelineSpanBounds(for: $0).end > timelineSpanBounds(for: $1).end }
+                .lazy
+                .compactMap { $0.span.displayName ?? $0.frame.displayName }
+                .first
+
+            return FrameDisplayCoverageStatistics(
+                displayID: key.displayID,
+                displayName: newestVolatileName ?? exactValue?.displayName,
+                durable: exactValue?.durable ?? .empty,
+                volatile: volatileStatistics,
+                combined: exactValue?.combined ?? volatileStatistics
+            )
+        }.sorted { lhs, rhs in
+            if lhs.displayID == nil { return false }
+            if rhs.displayID == nil { return true }
+            if lhs.displayLabel != rhs.displayLabel { return lhs.displayLabel < rhs.displayLabel }
+            return lhs.id < rhs.id
+        }
+    }
+
     static func intervalStatistics(
         for entries: [TimelineEntry]
     ) -> FrameCoverageIntervalStatistics {
-        let sorted = entries.map(timelineSpanBounds(for:)).sorted { lhs, rhs in
+        intervalStatistics(forBounds: entries.map(timelineSpanBounds(for:)))
+    }
+
+    private static func intervalStatistics(
+        forBounds bounds: [TimelineSpanBounds]
+    ) -> FrameCoverageIntervalStatistics {
+        let sorted = bounds.sorted { lhs, rhs in
             if lhs.start != rhs.start { return lhs.start < rhs.start }
             return lhs.end < rhs.end
         }
@@ -179,6 +224,7 @@ nonisolated enum FrameCoverageCalculator {
             hasGaps: merged.count > 1
         )
     }
+
 }
 
 /// Durable spans normally advance monotonically, but imported data and wall
@@ -200,10 +246,16 @@ nonisolated struct FrameManifest: Codable, Sendable {
 }
 
 nonisolated struct FrameStorageStatistics: Sendable, Equatable {
-    /// Durable bytes currently retained on disk. This deliberately excludes
-    /// volatile RAM history so callers do not mistake memory use for storage
-    /// or NAND activity.
-    let storedBytes: Int64
+    /// Logical encoded-JPEG payload bytes represented by durable frame rows.
+    /// This is not allocated filesystem space or physical/NAND write volume.
+    let durableJPEGPayloadBytes: Int64
+    /// Allocated bytes for known SQLite database and sidecar files in the
+    /// JustNow store (frame metadata plus OCR). Payloads and thumbnails are
+    /// deliberately separate, so this must not be presented as a disk total.
+    let knownSQLiteAllocatedBytes: Int64
+    /// The WAL subset of `knownSQLiteAllocatedBytes`, useful for observing
+    /// checkpoint behaviour without claiming a physical-write measurement.
+    let sqliteWALAllocatedBytes: Int64
     /// Number of unique physical JPEG payloads.
     let frameCount: Int
     /// Unique physical JPEG payloads backed by the durable store. In an
@@ -236,7 +288,9 @@ nonisolated struct FrameStorageStatistics: Sendable, Equatable {
     let displayCoverage: [FrameDisplayCoverageStatistics]
 
     init(
-        storedBytes: Int64,
+        durableJPEGPayloadBytes: Int64,
+        knownSQLiteAllocatedBytes: Int64 = 0,
+        sqliteWALAllocatedBytes: Int64 = 0,
         frameCount: Int,
         durableFrameCount: Int? = nil,
         timelineSpanCount: Int? = nil,
@@ -252,7 +306,9 @@ nonisolated struct FrameStorageStatistics: Sendable, Equatable {
         volatileCoverageEnd: Date? = nil,
         displayCoverage: [FrameDisplayCoverageStatistics] = []
     ) {
-        self.storedBytes = storedBytes
+        self.durableJPEGPayloadBytes = durableJPEGPayloadBytes
+        self.knownSQLiteAllocatedBytes = knownSQLiteAllocatedBytes
+        self.sqliteWALAllocatedBytes = sqliteWALAllocatedBytes
         self.frameCount = frameCount
         self.durableFrameCount = durableFrameCount ?? frameCount
         self.timelineSpanCount = timelineSpanCount ?? frameCount
@@ -270,7 +326,7 @@ nonisolated struct FrameStorageStatistics: Sendable, Equatable {
     }
 
     static let empty = FrameStorageStatistics(
-        storedBytes: 0,
+        durableJPEGPayloadBytes: 0,
         frameCount: 0,
         timelineSpanCount: 0,
         observationCount: 0,
@@ -280,6 +336,13 @@ nonisolated struct FrameStorageStatistics: Sendable, Equatable {
 
 nonisolated struct FrameStorageSample: Sendable, Equatable {
     let displayID: UUID?
-    let storedBytes: Int64
+    /// Logical encoded-JPEG bytes in this bounded projection sample.
+    let jpegPayloadBytes: Int64
     let frameCount: Int
+}
+
+/// Bounded durable statistics assembled by SQLite aggregates plus filesystem
+/// allocation metadata. It intentionally carries no whole-history timeline.
+nonisolated struct DurableFrameStorageSnapshot: Sendable, Equatable {
+    let statistics: FrameStorageStatistics
 }

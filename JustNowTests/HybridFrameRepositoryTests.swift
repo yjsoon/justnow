@@ -236,12 +236,12 @@ final class HybridFrameRepositoryTests: XCTestCase {
         XCTAssertEqual(spillResult.outcome.disposition, .durableFrame)
         XCTAssertEqual(anchorReason(in: spillResult.effects), .capacitySpill)
         let statistics = await repository.storageStatistics()
-        let totalStorageSize = await repository.totalStorageSize()
+        let durableJPEGPayloadBytes = await repository.durableJPEGPayloadBytes()
         XCTAssertEqual(statistics.volatileBytes, 16)
         XCTAssertEqual(statistics.frameCount, 2)
         XCTAssertEqual(statistics.durableFrameCount, 2)
         XCTAssertEqual(statistics.volatileFrameCount, 1)
-        XCTAssertGreaterThan(totalStorageSize, 0)
+        XCTAssertGreaterThan(durableJPEGPayloadBytes, 0)
     }
 
     func testExactRingOnlySpanPromotesSameIdentityAndFullCoverageAtFiveSeconds() async throws {
@@ -272,7 +272,7 @@ final class HybridFrameRepositoryTests: XCTestCase {
         XCTAssertEqual(extended.observedThroughAt, second.timestamp)
 
         let statistics = await repository.storageStatistics()
-        XCTAssertGreaterThan(statistics.storedBytes, 0)
+        XCTAssertGreaterThan(statistics.durableJPEGPayloadBytes, 0)
         XCTAssertEqual(statistics.frameCount, 2)
         XCTAssertEqual(statistics.durableFrameCount, 2)
         XCTAssertEqual(statistics.volatileBytes, Int64(jpeg.count + 1))
@@ -307,7 +307,7 @@ final class HybridFrameRepositoryTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: exported), jpeg)
         let statistics = await repository.storageStatistics()
         let resolutionStatistics = await source.payloadResolutionStatistics()
-        XCTAssertGreaterThan(statistics.storedBytes, 0)
+        XCTAssertGreaterThan(statistics.durableJPEGPayloadBytes, 0)
         XCTAssertEqual(resolutionStatistics.volatilePayloadResolutions, 4)
         XCTAssertEqual(resolutionStatistics.durablePayloadResolutions, 0)
     }
@@ -755,6 +755,13 @@ final class HybridFrameRepositoryTests: XCTestCase {
             }.count,
             1
         )
+        let instrumentation = CapturePersistenceInstrumentation()
+        // Replayed outbox effects do not carry the current capture's JPEG
+        // context; the repository decision must still be counted exactly once.
+        instrumentation.recordRepositoryEffects(recovered.effects)
+        let snapshot = instrumentation.currentSnapshot()
+        XCTAssertEqual(snapshot.duplicateRepositorySaves, 1)
+        XCTAssertEqual(snapshot.repositoryExactDuplicateFrames, 1)
         let counts = await durable.capturedMutationCallCounts()
         XCTAssertEqual(counts.promoteVolatileEntry, 5)
     }
@@ -866,6 +873,63 @@ final class HybridFrameRepositoryTests: XCTestCase {
         XCTAssertEqual(counts.promoteVolatileEntry, 2)
     }
 
+    func testFailedTerminationThenPruneThenRetryCannotResurrectTail() async throws {
+        let store = try FrameStore(directory: directory)
+        let durable = HybridDurableRepositoryProbe(base: DiskFrameRepository(frameStore: store))
+        let repository = HybridFrameRepository(durableRepository: durable, byteCap: 1_000)
+        let displayID = UUID()
+        let session = try await repository.beginCaptureSession(at: Date(timeIntervalSince1970: 0))
+        _ = try await repository.recordEncodedCapture(
+            makeFrame(at: 0, displayID: displayID),
+            jpegData: Data([1])
+        )
+        let tailResult = try await repository.recordEncodedCapture(
+            makeFrame(at: 1, displayID: displayID),
+            jpegData: Data([2])
+        )
+        guard case .inserted(let tailEntry) = tailResult.mutation else {
+            return XCTFail("Expected a volatile tail")
+        }
+        await durable.failNextEnd()
+        do {
+            _ = try await repository.endCaptureSession(id: session.id, reason: .termination)
+            XCTFail("Expected injected close failure")
+        } catch HybridDurableRepositoryProbeError.injectedEndFailure {
+            // Tail promotion committed and entered the session-end outbox.
+        }
+
+        _ = try await repository.pruneSpans(ids: [tailEntry.span.id])
+        let retryEffects = try await repository.endCaptureSession(
+            id: session.id,
+            reason: .termination
+        )
+
+        XCTAssertFalse(retryEffects.timelineUpserts.contains { $0.span.id == tailEntry.span.id })
+        XCTAssertFalse(retryEffects.newlyDurableEntries.contains { $0.span.id == tailEntry.span.id })
+        let timelineAfterRetry = await repository.orderedTimeline()
+        XCTAssertFalse(timelineAfterRetry.contains { $0.span.id == tailEntry.span.id })
+    }
+
+    func testConcurrentHybridStatisticsUseOneDurableSnapshotPerRequest() async throws {
+        let store = try FrameStore(directory: directory)
+        let durable = HybridDurableRepositoryProbe(base: DiskFrameRepository(frameStore: store))
+        let repository = HybridFrameRepository(durableRepository: durable, byteCap: 1_000)
+        _ = try await repository.beginCaptureSession(at: Date(timeIntervalSince1970: 0))
+        _ = try await repository.recordEncodedCapture(
+            makeFrame(at: 0, displayID: UUID()),
+            jpegData: Data([1])
+        )
+
+        async let first = repository.storageStatistics()
+        async let second = repository.storageStatistics()
+        let values = await [first, second]
+        let reads = await durable.capturedStorageReadCounts()
+
+        XCTAssertEqual(values.count, 2)
+        XCTAssertEqual(reads.snapshot, 2)
+        XCTAssertEqual(reads.orderedTimeline, 0)
+    }
+
     private func makeFrame(
         at timestamp: TimeInterval,
         displayID: UUID?,
@@ -939,6 +1003,8 @@ actor HybridDurableRepositoryProbe: HybridDurableRepository {
     private var shouldSuspendNextOrderedTimeline = false
     private var orderedTimelineContinuation: CheckedContinuation<Void, Never>?
     private var orderedTimelineWaiters: [CheckedContinuation<Void, Never>] = []
+    private var orderedTimelineCallCount = 0
+    private var durableStorageSnapshotCallCount = 0
 
     init(base: DiskFrameRepository) {
         self.base = base
@@ -949,6 +1015,7 @@ actor HybridDurableRepositoryProbe: HybridDurableRepository {
     func orderedFrames() async -> [StoredFrame] { await base.orderedFrames() }
 
     func orderedTimeline() async -> [TimelineEntry] {
+        orderedTimelineCallCount += 1
         if shouldSuspendNextOrderedTimeline {
             shouldSuspendNextOrderedTimeline = false
             let waiters = orderedTimelineWaiters
@@ -1062,8 +1129,18 @@ actor HybridDurableRepositoryProbe: HybridDurableRepository {
         try await base.clear()
     }
 
-    func totalStorageSize() async -> Int64 { await base.totalStorageSize() }
+    func durableJPEGPayloadBytes() async -> Int64 { await base.durableJPEGPayloadBytes() }
     func storageStatistics() async -> FrameStorageStatistics { await base.storageStatistics() }
+    func durableStorageSnapshot(
+        logicalOverlay: [TimelineEntry]
+    ) async -> DurableFrameStorageSnapshot {
+        durableStorageSnapshotCallCount += 1
+        return await base.durableStorageSnapshot(logicalOverlay: logicalOverlay)
+    }
+
+    func capturedStorageReadCounts() -> (snapshot: Int, orderedTimeline: Int) {
+        (durableStorageSnapshotCallCount, orderedTimelineCallCount)
+    }
     func flush() async { await base.flush() }
 
     func encodedPayload(id: UUID) async throws -> Data {
