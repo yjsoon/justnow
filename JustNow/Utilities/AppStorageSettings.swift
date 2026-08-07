@@ -23,6 +23,9 @@ enum AppStorageKey {
     nonisolated static let hasSeenSaveQualityInfo = "hasSeenSaveQualityInfo"
     nonisolated static let regionScreenshotShortcutHintCount = "regionScreenshotShortcutHintCount"
     nonisolated static let settingsMigrationVersion = "settingsMigrationVersion"
+    /// Launch-scoped beta. This is the sole enable flag for hybrid RAM history.
+    nonisolated static let reducedDiskWritesEnabled = "reducedDiskWritesEnabled"
+    nonisolated static let recentDetailMemoryMiB = "recentDetailMemoryMiB"
 }
 
 enum RewindDragAction: String, CaseIterable, Identifiable {
@@ -79,6 +82,31 @@ enum AppStorageDefault {
     nonisolated static let screenshotSaveToFolder = true
     nonisolated static let screenshotSaveToClipboard = false
     nonisolated static let hasSeenSaveQualityInfo = false
+    nonisolated static let reducedDiskWritesEnabled = true
+    nonisolated static let recentDetailMemoryMiB = RecentDetailMemoryLimit.defaultValue.rawValue
+}
+
+nonisolated enum RecentDetailMemoryLimit: Int, CaseIterable, Identifiable, Sendable {
+    case mb256 = 256
+    case mb512 = 512
+    case mb1024 = 1024
+
+    static let defaultValue: Self = .mb512
+
+    var id: Int { rawValue }
+    var byteCount: Int { rawValue * 1024 * 1024 }
+
+    var label: String {
+        switch self {
+        case .mb256: "256 MB"
+        case .mb512: "512 MB"
+        case .mb1024: "1 GB"
+        }
+    }
+
+    static func resolved(from rawValue: Int) -> Self {
+        Self(rawValue: rawValue) ?? .defaultValue
+    }
 }
 
 nonisolated enum CaptureIntervalSetting {

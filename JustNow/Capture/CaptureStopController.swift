@@ -6,17 +6,23 @@ private let captureLogger = Logger(subsystem: "sg.tk.JustNow", category: "Captur
 struct CaptureStopRequest {
     let status: String
     let logMessage: String?
+    let sessionEndReason: CaptureSessionEndReason
 
-    init(status: String, logMessage: String? = nil) {
+    init(
+        status: String,
+        logMessage: String? = nil,
+        sessionEndReason: CaptureSessionEndReason = .paused
+    ) {
         self.status = status
         self.logMessage = logMessage
+        self.sessionEndReason = sessionEndReason
     }
 }
 
 @MainActor
 final class CaptureStopController {
     private let updateStatus: (String) -> Void
-    private let stopCapture: () async -> Void
+    private let stopCapture: (CaptureSessionEndReason) async -> Void
     private let endForegroundActivity: () -> Void
     private let logger: (String) -> Void
     private var pendingStopTask: Task<Void, Never>?
@@ -24,7 +30,7 @@ final class CaptureStopController {
 
     init(
         updateStatus: @escaping (String) -> Void,
-        stopCapture: @escaping () async -> Void,
+        stopCapture: @escaping (CaptureSessionEndReason) async -> Void,
         endForegroundActivity: @escaping () -> Void,
         logger: ((String) -> Void)? = nil
     ) {
@@ -65,7 +71,7 @@ final class CaptureStopController {
 
     func performStop(_ request: CaptureStopRequest) async {
         updateStatus(request.status)
-        await stopCapture()
+        await stopCapture(request.sessionEndReason)
         endForegroundActivity()
 
         if let logMessage = request.logMessage {

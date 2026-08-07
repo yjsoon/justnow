@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import SQLite3
 import XCTest
 @testable import JustNow
 
@@ -102,6 +103,34 @@ final class TextCacheTests: XCTestCase {
         XCTAssertEqual(hits, [recent])
     }
 
+    func testLateOCRUpsertsCannotRegressExtendedSpanRecencyInSameRun() async throws {
+        let cache = TextCache(directory: directory)
+        let frameID = UUID()
+        let original = Date(timeIntervalSince1970: 100)
+        let extensionTimestamp = Date(timeIntervalSince1970: 500)
+        let lateOCRTimestamp = Date(timeIntervalSince1970: 150)
+        let layout = makeLayout()
+
+        await cache.setText("first OCR", for: frameID, timestamp: original)
+        await cache.setSearchLayout(layout, for: frameID, timestamp: original)
+        await cache.updateTimestamp(for: frameID, timestamp: extensionTimestamp)
+
+        // Simulate OCR/layout work that started before the exact-byte span
+        // extension and completed afterwards with its older frame timestamp.
+        await cache.setText("late OCR", for: frameID, timestamp: lateOCRTimestamp)
+        await cache.setSearchLayout(layout, for: frameID, timestamp: lateOCRTimestamp)
+
+        let recentHits = await cache.searchFrameIDs(
+            matching: "late OCR",
+            limit: 10,
+            since: Date(timeIntervalSince1970: 400)
+        )
+        XCTAssertEqual(recentHits, [frameID])
+        let timestamps = try cachedTimestamps(for: frameID)
+        XCTAssertEqual(timestamps.text, extensionTimestamp.timeIntervalSince1970, accuracy: 0.000_001)
+        XCTAssertEqual(timestamps.layout, extensionTimestamp.timeIntervalSince1970, accuracy: 0.000_001)
+    }
+
     func testSearchWithNonPositiveLimitReturnsNothing() async {
         let cache = TextCache(directory: directory)
         await cache.setText("anything", for: UUID())
@@ -174,13 +203,13 @@ final class TextCacheTests: XCTestCase {
         XCTAssertTrue(staleHits.isEmpty)
     }
 
-    func testClearEmptiesTextSearchAndLayouts() async {
+    func testClearEmptiesTextSearchAndLayouts() async throws {
         let cache = TextCache(directory: directory)
         let frameID = UUID()
         await cache.setText("something", for: frameID)
         await cache.setSearchLayout(makeLayout(), for: frameID)
 
-        await cache.clear()
+        try await cache.clear()
 
         let count = await cache.count
         XCTAssertEqual(count, 0)
@@ -188,6 +217,46 @@ final class TextCacheTests: XCTestCase {
         XCTAssertTrue(hits.isEmpty)
         let layout = await cache.getSearchLayout(for: frameID)
         XCTAssertNil(layout)
+    }
+
+    func testClearFailureIsReportedAndLaterRetryIsVerified() async throws {
+        final class FailureState: @unchecked Sendable {
+            private let lock = NSLock()
+            nonisolated(unsafe) private var shouldFail = true
+
+            nonisolated func failOnce() throws {
+                lock.lock()
+                defer { lock.unlock() }
+                if shouldFail {
+                    shouldFail = false
+                    throw TextCacheError.sqlite("Injected OCR clear failure")
+                }
+            }
+        }
+
+        let state = FailureState()
+        let cache = TextCache(directory: directory, clearHook: state.failOnce)
+        let frameID = UUID()
+        await cache.setText("must eventually disappear", for: frameID)
+        await cache.setSearchLayout(makeLayout(), for: frameID)
+
+        do {
+            try await cache.clear()
+            XCTFail("Expected the first clear to report its failure")
+        } catch TextCacheError.sqlite(let message) {
+            XCTAssertTrue(message.contains("Injected OCR clear failure"))
+        }
+        let countAfterFailure = await cache.count
+        XCTAssertEqual(countAfterFailure, 1)
+
+        try await cache.clear()
+
+        let countAfterRetry = await cache.count
+        let hitsAfterRetry = await cache.searchFrameIDs(matching: "eventually", limit: 10)
+        let layoutAfterRetry = await cache.getSearchLayout(for: frameID)
+        XCTAssertEqual(countAfterRetry, 0)
+        XCTAssertTrue(hitsAfterRetry.isEmpty)
+        XCTAssertNil(layoutAfterRetry)
     }
 
     func testSearchLayoutRoundTrip() async {
@@ -233,5 +302,34 @@ final class TextCacheTests: XCTestCase {
                 )
             ]
         )
+    }
+
+    private func cachedTimestamps(for frameID: UUID) throws -> (text: Double, layout: Double) {
+        var connection: OpaquePointer?
+        let databaseURL = directory.appendingPathComponent("text_cache.sqlite")
+        guard sqlite3_open_v2(databaseURL.path, &connection, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+              let connection else {
+            throw TextCacheError.sqlite("Failed to open test text cache")
+        }
+        defer { sqlite3_close(connection) }
+
+        var statement: OpaquePointer?
+        let sql =
+            """
+            SELECT frame_text.timestamp, frame_search_layout.updated_at
+            FROM frame_text
+            JOIN frame_search_layout ON frame_search_layout.frame_id = frame_text.frame_id
+            WHERE frame_text.frame_id = ?;
+            """
+        guard sqlite3_prepare_v2(connection, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else {
+            throw TextCacheError.sqlite("Failed to prepare timestamp query")
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, frameID.uuidString, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        guard sqlite3_step(statement) == SQLITE_ROW else {
+            throw TextCacheError.sqlite("Missing timestamp rows")
+        }
+        return (sqlite3_column_double(statement, 0), sqlite3_column_double(statement, 1))
     }
 }

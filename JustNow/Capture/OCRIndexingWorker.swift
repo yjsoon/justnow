@@ -12,7 +12,10 @@ struct OCRIndexingWorkerDependencies: Sendable {
     let hasCachedText: @Sendable (UUID) async -> Bool
     let indexFrame: @Sendable (StoredFrame, Int) async -> OCRIndexedFrame?
 
-    static func live(frameStore: FrameStore, textCache: TextCache) -> OCRIndexingWorkerDependencies {
+    static func live(
+        frameRepository: any FrameRepository,
+        textCache: TextCache
+    ) -> OCRIndexingWorkerDependencies {
         OCRIndexingWorkerDependencies(
             hasCachedText: { frameID in
                 await textCache.hasCachedText(for: frameID)
@@ -23,12 +26,12 @@ struct OCRIndexingWorkerDependencies: Sendable {
                 do {
                     let image: CGImage
                     if imageMaxPixelSize > 0 {
-                        image = try await frameStore.loadSearchIndexImage(
+                        image = try await frameRepository.loadSearchIndexImage(
                             id: frame.id,
                             maxPixelSize: imageMaxPixelSize
                         )
                     } else {
-                        image = try await frameStore.loadFullImage(id: frame.id)
+                        image = try await frameRepository.loadFullImage(id: frame.id)
                     }
 
                     let text = await TextRecognitionManager.extractText(from: image, mode: .searchIndex)

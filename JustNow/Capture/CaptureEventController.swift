@@ -64,12 +64,23 @@ final class CaptureEventController {
         )
     }
 
+    func blockedSessionEndReason(includeOverlay: Bool = true) -> CaptureSessionEndReason {
+        let current = context()
+        if lifecycle.isUserPaused { return .paused }
+        if includeOverlay, lifecycle.isPausedForOverlay || current.isOverlayVisible {
+            return .overlay
+        }
+        if lifecycle.isPausedForSession { return .sessionInactive }
+        return .paused
+    }
+
     func handleSleep() {
         cancelPendingStart()
         scheduleStop(
             CaptureStopRequest(
                 status: "Sleeping...",
-                logMessage: "Capture paused for system sleep"
+                logMessage: "Capture paused for system sleep",
+                sessionEndReason: .sleep
             )
         )
     }
@@ -84,7 +95,8 @@ final class CaptureEventController {
         scheduleStop(
             CaptureStopRequest(
                 status: "Screen Off",
-                logMessage: "Capture paused for screen sleep"
+                logMessage: "Capture paused for screen sleep",
+                sessionEndReason: .screenSleep
             )
         )
     }
@@ -99,7 +111,8 @@ final class CaptureEventController {
         scheduleStop(
             CaptureStopRequest(
                 status: "Screen Locked",
-                logMessage: "Capture paused because the screen locked"
+                logMessage: "Capture paused because the screen locked",
+                sessionEndReason: .screenLock
             )
         )
     }
@@ -128,7 +141,8 @@ final class CaptureEventController {
         scheduleStop(
             CaptureStopRequest(
                 status: "Session Inactive",
-                logMessage: "Capture paused because the login session resigned active"
+                logMessage: "Capture paused because the login session resigned active",
+                sessionEndReason: .sessionInactive
             )
         )
     }
@@ -183,7 +197,8 @@ final class CaptureEventController {
             scheduleStop(
                 CaptureStopRequest(
                     status: "Paused (User)",
-                    logMessage: "Capture paused by user"
+                    logMessage: "Capture paused by user",
+                    sessionEndReason: .paused
                 )
             )
             return
@@ -220,7 +235,8 @@ final class CaptureEventController {
         scheduleStop(
             CaptureStopRequest(
                 status: "Paused (Overlay)",
-                logMessage: "Capture paused while overlay is visible"
+                logMessage: "Capture paused while overlay is visible",
+                sessionEndReason: .overlay
             )
         )
     }

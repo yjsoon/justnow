@@ -7,28 +7,41 @@ import Foundation
 import SQLite3
 import os.log
 
-enum TextCacheError: Error {
+enum TextCacheError: LocalizedError {
     case sqlite(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .sqlite(let message): message
+        }
+    }
 }
+
+typealias TextCacheClearHook = @Sendable () throws -> Void
 
 /// Caches OCR-extracted text for frames to speed up subsequent searches
 actor TextCache {
     nonisolated private static let logger = Logger(subsystem: "sg.tk.JustNow", category: "TextCache")
     private let databaseURL: URL
     private let legacyCacheURL: URL
+    private let clearHook: TextCacheClearHook?
     private var db: OpaquePointer?
+    /// Diagnostic seam counting attempted SQLite write transactions. Reads do
+    /// not affect it, so tests can prove capture stayed off the OCR database.
+    private var mutationTransactionCount = 0
 
     private static let inClauseChunkSize = 400
     private static let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
     /// `directory` is injectable so tests can run against a temporary
     /// location instead of the live Application Support store.
-    init(directory: URL? = nil) {
+    init(directory: URL? = nil, clearHook: TextCacheClearHook? = nil) {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory() + "/Library/Application Support")
         let appDir = directory ?? appSupport.appendingPathComponent("JustNow", isDirectory: true)
         self.databaseURL = appDir.appendingPathComponent("text_cache.sqlite")
         self.legacyCacheURL = appDir.appendingPathComponent("text_cache.json")
+        self.clearHook = clearHook
 
         do {
             try FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
@@ -81,7 +94,7 @@ actor TextCache {
                     INSERT INTO frame_text (frame_id, timestamp, text)
                     VALUES (?, ?, ?)
                     ON CONFLICT(frame_id) DO UPDATE SET
-                        timestamp = excluded.timestamp,
+                        timestamp = MAX(frame_text.timestamp, excluded.timestamp),
                         text = excluded.text;
                     """
                 ) { upsert in
@@ -113,6 +126,35 @@ actor TextCache {
         }
     }
 
+    /// Advances search recency for an already-indexed physical asset without
+    /// re-running OCR or rewriting its FTS content.
+    func updateTimestamp(for frameID: UUID, timestamp: Date) {
+        do {
+            try withTransaction {
+                try withPreparedStatement(
+                    "UPDATE frame_text SET timestamp = MAX(timestamp, ?) WHERE frame_id = ?;"
+                ) { statement in
+                    guard bindDouble(timestamp.timeIntervalSince1970, to: statement, index: 1),
+                          bindFrameID(frameID, to: statement, index: 2),
+                          sqlite3_step(statement) == SQLITE_DONE else {
+                        throw sqliteError(message: "Failed to update OCR text timestamp")
+                    }
+                }
+                try withPreparedStatement(
+                    "UPDATE frame_search_layout SET updated_at = MAX(updated_at, ?) WHERE frame_id = ?;"
+                ) { statement in
+                    guard bindDouble(timestamp.timeIntervalSince1970, to: statement, index: 1),
+                          bindFrameID(frameID, to: statement, index: 2),
+                          sqlite3_step(statement) == SQLITE_DONE else {
+                        throw sqliteError(message: "Failed to update search-layout timestamp")
+                    }
+                }
+            }
+        } catch {
+            Self.logger.error("Failed to update OCR cache timestamp: \(error.localizedDescription)")
+        }
+    }
+
     func setSearchLayout(_ layout: SearchTextLayout, for frameID: UUID, timestamp: Date = Date()) {
         do {
             let data = try JSONEncoder().encode(layout)
@@ -126,7 +168,7 @@ actor TextCache {
                     INSERT INTO frame_search_layout (frame_id, updated_at, layout_json)
                     VALUES (?, ?, ?)
                     ON CONFLICT(frame_id) DO UPDATE SET
-                        updated_at = excluded.updated_at,
+                        updated_at = MAX(frame_search_layout.updated_at, excluded.updated_at),
                         layout_json = excluded.layout_json;
                     """
                 ) { upsert in
@@ -144,8 +186,16 @@ actor TextCache {
     }
 
     func removeText(for frameID: UUID) {
+        removeText(forFrameIDs: [frameID])
+    }
+
+    /// Deletes OCR text, FTS content, and cached layouts for known physical
+    /// assets. Unlike `prune(keepingFrameIDs:)`, an empty remaining history is
+    /// a valid caller state here.
+    func removeText(forFrameIDs frameIDs: Set<UUID>) {
+        guard !frameIDs.isEmpty else { return }
         do {
-            try delete(frameIDs: [frameID])
+            try delete(frameIDs: Array(frameIDs))
         } catch {
             Self.logger.error("Failed to remove OCR text: \(error.localizedDescription)")
         }
@@ -158,6 +208,26 @@ actor TextCache {
                 return false
             }
 
+            return sqlite3_step(statement) == SQLITE_ROW
+        }) ?? false
+    }
+
+    /// Read-only existence check for either cache representation. Repository
+    /// checkpoints use it to avoid opening an empty write transaction when a
+    /// newly durable frame has not been indexed yet.
+    func hasCachedRecord(for frameID: UUID) -> Bool {
+        (try? withPreparedStatement(
+            """
+            SELECT 1 FROM frame_text WHERE frame_id = ?
+            UNION ALL
+            SELECT 1 FROM frame_search_layout WHERE frame_id = ?
+            LIMIT 1;
+            """
+        ) { statement in
+            guard bindFrameID(frameID, to: statement, index: 1),
+                  bindFrameID(frameID, to: statement, index: 2) else {
+                return false
+            }
             return sqlite3_step(statement) == SQLITE_ROW
         }) ?? false
     }
@@ -298,15 +368,26 @@ actor TextCache {
     }
 
     /// Clear all cached text
-    func clear() {
-        do {
-            try withTransaction {
-                try execute("DELETE FROM frame_search_layout;")
-                try execute("DELETE FROM frame_text_fts;")
-                try execute("DELETE FROM frame_text;")
+    func clear() throws {
+        try clearHook?()
+        try withTransaction {
+            try execute("DELETE FROM frame_search_layout;")
+            try execute("DELETE FROM frame_text_fts;")
+            try execute("DELETE FROM frame_text;")
+        }
+        let remainingRows = try ["frame_search_layout", "frame_text_fts", "frame_text"].reduce(0) {
+            partialResult, table in
+            try partialResult + withPreparedStatement("SELECT COUNT(*) FROM \(table);") { statement in
+                guard sqlite3_step(statement) == SQLITE_ROW else {
+                    throw sqliteError(message: "Failed to verify OCR cache clear")
+                }
+                return Int(sqlite3_column_int64(statement, 0))
             }
-        } catch {
-            Self.logger.error("Failed to clear OCR cache: \(error.localizedDescription)")
+        }
+        guard remainingRows == 0 else {
+            throw TextCacheError.sqlite(
+                "OCR cache clear verification found \(remainingRows) remaining row(s)"
+            )
         }
     }
 
@@ -315,6 +396,10 @@ actor TextCache {
             guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
             return Int(sqlite3_column_int64(statement, 0))
         }) ?? 0
+    }
+
+    func mutationTransactionCountForTesting() -> Int {
+        mutationTransactionCount
     }
 
     // MARK: - SQLite Helpers
@@ -535,6 +620,7 @@ actor TextCache {
     }
 
     private func withTransaction(_ body: () throws -> Void) throws {
+        mutationTransactionCount += 1
         try execute("BEGIN IMMEDIATE TRANSACTION;")
         do {
             try body()

@@ -110,6 +110,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     private var lastAppliedRetentionPolicy: RetentionPolicy?
     private var overlayPresentationTask: Task<Void, Never>?
     private var setupCaptureTask: Task<Void, Never>?
+    private var memoryPressureMonitor: MemoryPressureMonitor?
     private var isTerminationFlushInProgress = false
     private var idleTransitionTimer: Timer?
     private var screenRecordingPermission = ScreenRecordingPermissionState()
@@ -119,8 +120,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     private let captureStartController = CaptureStartController()
     private lazy var captureStopController = CaptureStopController(
         updateStatus: { [weak self] in self?.updateCaptureStatus($0) },
-        stopCapture: { [weak self] in
-            await self?.captureCoordinator.stopCapture()
+        stopCapture: { [weak self] reason in
+            await self?.captureCoordinator.stopCapture(reason: reason)
         },
         endForegroundActivity: { [weak self] in
             self?.appNapPreventer.stopActivity()
@@ -182,6 +183,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        memoryPressureMonitor?.cancelWithoutWaiting()
         appNapPreventer.stopActivity()
         capturePolicyTimer?.invalidate()
         idleTransitionTimer?.invalidate()
@@ -201,6 +203,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
 
         // A session that ends without this line means the OS killed the app.
         DiagnosticsLog.shared.log("App", "Termination requested; flushing capture and caches")
+        memoryPressureMonitor?.cancelWithoutWaiting()
         isTerminationFlushInProgress = true
         overlayPresentationTask?.cancel()
         setupCaptureTask?.cancel()
@@ -217,8 +220,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 sender.reply(toApplicationShouldTerminate: true)
             }
 
+            await self.memoryPressureMonitor?.cancel()
             await self.setupCaptureTask?.value
-            await self.captureCoordinator?.stopCapture()
+            await self.captureCoordinator?.stopCapture(reason: .termination)
             await self.frameBuffer?.flushCaches()
         }
 
@@ -329,13 +333,56 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
 
     private func initializeFrameBufferForStartup() async throws {
         let retentionPolicy = currentRetentionPolicy()
-        let buffer = try await FrameBuffer(retentionPolicy: retentionPolicy)
+        let buffer = try await FrameBuffer(
+            retentionPolicy: retentionPolicy,
+            diagnosticsLog: DiagnosticsLog.shared,
+            // Storage source is fixed for this launch. Settings changes are
+            // surfaced as pending until the next app launch.
+            historyStorageMode: HistoryStorageMode.launchDefault()
+        )
         guard !Task.isCancelled else { return }
 
         frameBuffer = buffer
         lastAppliedRetentionPolicy = retentionPolicy
         settingsContext.frameBuffer = buffer
+        startMemoryPressureMonitoringIfNeeded()
         logLoadedFrameCount(buffer.frameCount)
+    }
+
+    private func startMemoryPressureMonitoringIfNeeded() {
+        guard memoryPressureMonitor == nil else { return }
+        let monitor = MemoryPressureMonitor { [weak self] level in
+            await self?.handleMemoryPressure(level)
+        }
+        memoryPressureMonitor = monitor
+        monitor.start()
+    }
+
+    private func handleMemoryPressure(_ level: FrameMemoryPressureLevel) async {
+        guard let frameBuffer else { return }
+
+        switch level {
+        case .warning:
+            let result = await frameBuffer.respondToMemoryPressure(.warning)
+            captureLogger.info(
+                "Memory warning trim: \(result.bytesBefore, privacy: .public) -> \(result.bytesAfter, privacy: .public) bytes; target=\(result.targetBytes, privacy: .public), residual=\(result.residualBytes, privacy: .public)"
+            )
+
+        case .critical:
+            let presentationTask = overlayPresentationTask
+            presentationTask?.cancel()
+            _ = await overlayController?.dismissForMemoryPressure()
+            await presentationTask?.value
+
+            // A cancelled presentation which was already inside snapshot
+            // acquisition finishes its lease release before this task returns.
+            _ = await overlayController?.dismissForMemoryPressure()
+            let result = await frameBuffer.respondToMemoryPressure(.critical)
+            overlayController?.completeMemoryPressureDismissal()
+            captureLogger.info(
+                "Critical memory purge: \(result.bytesBefore, privacy: .public) -> \(result.bytesAfter, privacy: .public) bytes; residual leased=\(result.residualBytes, privacy: .public)"
+            )
+        }
     }
 
     private func handleFrameBufferInitializationFailure(_ error: Error) {
@@ -391,7 +438,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             try await captureCoordinator.startCapture()
             guard !Task.isCancelled else { return }
             guard captureEventController.canStartCapture() else {
-                await captureCoordinator.stopCapture()
+                await captureCoordinator.stopCapture(
+                    reason: captureEventController.blockedSessionEndReason()
+                )
                 applyBlockedCaptureStatusIfAvailable()
                 return
             }
@@ -632,7 +681,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             try await captureCoordinator.startCapture()
             guard !Task.isCancelled else { return .failed }
             guard captureEventController.canStartCapture() else {
-                await captureCoordinator.stopCapture()
+                await captureCoordinator.stopCapture(
+                    reason: captureEventController.blockedSessionEndReason()
+                )
                 applyBlockedCaptureStatusIfAvailable()
                 return .failed
             }
@@ -723,6 +774,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         from display: DisplayInfo
     ) {
         frameBuffer?.addFrame(image, timestamp: timestamp, display: display)
+    }
+
+    func captureCoordinatorDidBeginCaptureSession(_ coordinator: CaptureCoordinator) async throws {
+        guard let frameBuffer else {
+            throw CaptureCoordinatorSessionError.missingDelegate
+        }
+        _ = try await frameBuffer.beginCaptureSession()
+    }
+
+    func captureCoordinator(
+        _ coordinator: CaptureCoordinator,
+        didEndCaptureSession reason: CaptureSessionEndReason
+    ) async throws {
+        try await frameBuffer?.endCaptureSession(reason: reason)
     }
 
     func captureCoordinatorDidStopUnexpectedly(_ coordinator: CaptureCoordinator) {
@@ -820,7 +885,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             let recentTimelineWindow = RecentTimelineWindow.resolved(from: self.recentTimelineWindowSeconds)
             let rewindHistoryOption = RewindHistoryOption.resolved(from: self.rewindHistorySeconds)
             let availableDisplays = self.mergedDisplays(frameBuffer: frameBuffer)
-            self.overlayController?.showOverlay(
+            await self.overlayController?.showOverlay(
                 recentTimelineWindow: recentTimelineWindow.rawValue,
                 rewindHistoryOption: rewindHistoryOption,
                 activeDisplay: targetDisplay,

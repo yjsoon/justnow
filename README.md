@@ -64,7 +64,7 @@ You can adjust:
 
 JustNow has no telemetry: your screen history, indexed text, and settings never leave your Mac.
 
-To help debug capture issues, JustNow keeps a small local diagnostics log at `~/Library/Logs/JustNow/`. It records capture lifecycle events only (starts, stops, errors, sleep/lock transitions) — never screen content or recognised text — is capped at about 1 MB, and is never transmitted anywhere. You can delete it at any time.
+To help debug capture issues, JustNow keeps a small local diagnostics log at `~/Library/Logs/JustNow/`. It records capture lifecycle events (starts, stops, errors, sleep/lock transitions) and occasional aggregate capture/storage measurements such as frame counts, logical JPEG/metadata event-byte totals, queue peaks, and bounded comparison coverage. These logical event sizes are not measurements of filesystem growth, physical device writes, SSD wear, or NAND writes. Settings separately reports allocated SQLite/WAL space where macOS exposes it reliably. JustNow never records screen content, recognised text, image bytes, file paths, display names or IDs, or perceptual hashes. The log is capped at about 1 MB, is never transmitted anywhere, and you can delete it at any time.
 
 The only network requests JustNow makes are update checks via Sparkle.
 

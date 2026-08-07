@@ -116,6 +116,34 @@ final class CaptureEventControllerTests: XCTestCase {
         )
     }
 
+    func testCorrectiveStopReasonPreservesOverlayAndSessionBlockers() {
+        let overlayRecorder = CaptureEventControllerRecorder(
+            context: CaptureEventContext(
+                hasCaptureManager: true,
+                isCapturing: true,
+                isSetupCaptureInProgress: false,
+                hasPendingStart: false,
+                isOverlayVisible: true
+            )
+        )
+        let overlayController = overlayRecorder.makeController()
+        overlayController.handleOverlayVisibilityChanged(isVisible: true)
+        XCTAssertEqual(overlayController.blockedSessionEndReason(), .overlay)
+
+        let sessionRecorder = CaptureEventControllerRecorder(
+            context: CaptureEventContext(
+                hasCaptureManager: true,
+                isCapturing: true,
+                isSetupCaptureInProgress: false,
+                hasPendingStart: false,
+                isOverlayVisible: false
+            )
+        )
+        let sessionController = sessionRecorder.makeController()
+        sessionController.handleSessionResignActive()
+        XCTAssertEqual(sessionController.blockedSessionEndReason(), .sessionInactive)
+    }
+
     func testWakePreservesResumeIntentWhileLaunchSetupIsInProgress() {
         let recorder = CaptureEventControllerRecorder(
             context: CaptureEventContext(

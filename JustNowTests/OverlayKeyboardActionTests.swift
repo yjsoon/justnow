@@ -125,4 +125,28 @@ final class OverlayKeyboardActionTests: XCTestCase {
             .goToEnd
         )
     }
+
+    func testPageAndBoundaryKeysMapToElapsedNavigation() {
+        let state = OverlayKeyboardState(
+            isSearchAvailable: true,
+            isSearching: false,
+            hasSearchQuery: false,
+            isTextGrabActive: false
+        )
+
+        func action(for keyCode: Int) -> OverlayKeyboardAction {
+            resolveOverlayKeyboardAction(
+                keyCode: UInt16(keyCode),
+                modifiers: [],
+                dismissShortcutKeyCode: Int(kVK_Escape),
+                dismissShortcutModifiers: 0,
+                state: state
+            )
+        }
+
+        XCTAssertEqual(action(for: kVK_PageUp), .jumpLeft)
+        XCTAssertEqual(action(for: kVK_PageDown), .jumpRight)
+        XCTAssertEqual(action(for: kVK_Home), .goToStart)
+        XCTAssertEqual(action(for: kVK_End), .goToEnd)
+    }
 }

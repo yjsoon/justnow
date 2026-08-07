@@ -4,14 +4,25 @@ import XCTest
 final class StorageEstimateTests: XCTestCase {
     private let displayID = UUID()
 
+    func testProjectionCopyDistinguishesAllDiskEstimateFromHybridBound() {
+        let allDisk = StorageEstimate.projectionKind(for: .allDisk)
+        let hybrid = StorageEstimate.projectionKind(for: .hybridRAM(byteCap: 512))
+
+        XCTAssertEqual(allDisk, .allDiskJPEGPayloadEstimate)
+        XCTAssertTrue(allDisk.qualifier.contains("not total allocated disk space"))
+        XCTAssertEqual(hybrid, .conservativeAllDiskJPEGBound)
+        XCTAssertTrue(hybrid.title.contains("Conservative"))
+        XCTAssertTrue(hybrid.qualifier.contains("all-disk JPEG bound"))
+    }
+
     private func sample(
         displayID: UUID? = nil,
-        storedBytes: Int64,
+        jpegPayloadBytes: Int64,
         frameCount: Int
     ) -> FrameStorageSample {
         FrameStorageSample(
             displayID: displayID,
-            storedBytes: storedBytes,
+            jpegPayloadBytes: jpegPayloadBytes,
             frameCount: frameCount
         )
     }
@@ -43,7 +54,7 @@ final class StorageEstimateTests: XCTestCase {
             StorageEstimate.projectedBytes(
                 policy: policy,
                 captureInterval: 1,
-                samples: [sample(displayID: displayID, storedBytes: 5_000, frameCount: 10)],
+                samples: [sample(displayID: displayID, jpegPayloadBytes: 5_000, frameCount: 10)],
                 connectedDisplayIDs: [displayID]
             ),
             5_500
@@ -61,8 +72,8 @@ final class StorageEstimateTests: XCTestCase {
                 policy: policy,
                 captureInterval: 1,
                 samples: [
-                    sample(displayID: displayID, storedBytes: 5_000, frameCount: 10),
-                    sample(displayID: secondDisplayID, storedBytes: 10_000, frameCount: 10)
+                    sample(displayID: displayID, jpegPayloadBytes: 5_000, frameCount: 10),
+                    sample(displayID: secondDisplayID, jpegPayloadBytes: 10_000, frameCount: 10)
                 ],
                 connectedDisplayIDs: [displayID, secondDisplayID]
             ),
@@ -79,7 +90,7 @@ final class StorageEstimateTests: XCTestCase {
             StorageEstimate.projectedBytes(
                 policy: policy,
                 captureInterval: 1,
-                samples: [sample(storedBytes: 5_000, frameCount: 10)],
+                samples: [sample(jpegPayloadBytes: 5_000, frameCount: 10)],
                 connectedDisplayIDs: [displayID]
             ),
             5_500
@@ -139,7 +150,7 @@ final class StorageEstimateTests: XCTestCase {
                 policy: policy,
                 captureInterval: 1,
                 samples: [sample(
-                    storedBytes: 9_000,
+                    jpegPayloadBytes: 9_000,
                     frameCount: StorageEstimate.minimumSampleFrameCount - 1
                 )],
                 connectedDisplayIDs: [displayID]
@@ -157,7 +168,7 @@ final class StorageEstimateTests: XCTestCase {
                 policy: policy,
                 captureInterval: 1,
                 samples: [sample(
-                    storedBytes: 0,
+                    jpegPayloadBytes: 0,
                     frameCount: StorageEstimate.minimumSampleFrameCount
                 )],
                 connectedDisplayIDs: [displayID]
@@ -174,7 +185,7 @@ final class StorageEstimateTests: XCTestCase {
             StorageEstimate.projectedBytes(
                 policy: policy,
                 captureInterval: 1,
-                samples: [sample(storedBytes: 5_000, frameCount: 10)],
+                samples: [sample(jpegPayloadBytes: 5_000, frameCount: 10)],
                 connectedDisplayIDs: []
             )
         )
@@ -182,7 +193,7 @@ final class StorageEstimateTests: XCTestCase {
             StorageEstimate.projectedBytes(
                 policy: RetentionPolicy(tiers: []),
                 captureInterval: 1,
-                samples: [sample(storedBytes: 5_000, frameCount: 10)],
+                samples: [sample(jpegPayloadBytes: 5_000, frameCount: 10)],
                 connectedDisplayIDs: [displayID]
             )
         )
@@ -197,7 +208,7 @@ final class StorageEstimateTests: XCTestCase {
             StorageEstimate.projectedBytes(
                 policy: policy,
                 captureInterval: 0.25,
-                samples: [sample(storedBytes: .max, frameCount: 10)],
+                samples: [sample(jpegPayloadBytes: .max, frameCount: 10)],
                 connectedDisplayIDs: (0..<10).map { _ in UUID() }
             )
         )

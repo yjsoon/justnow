@@ -2,6 +2,66 @@ import XCTest
 @testable import JustNow
 
 final class AppSettingsMigrationTests: XCTestCase {
+    func testReducedDiskWritesDefaultsOnWhenPreferenceIsMissing() {
+        let defaults = makeDefaults()
+        defaults.set(true, forKey: "hiddenHybridRAMHistory")
+
+        XCTAssertEqual(
+            HistoryStorageMode.launchDefault(defaults: defaults),
+            .hybridRAM(byteCap: RecentDetailMemoryLimit.defaultValue.byteCount)
+        )
+        XCTAssertTrue(AppStorageDefault.reducedDiskWritesEnabled)
+    }
+
+    func testReducedDiskWritesPreservesExplicitOptOut() {
+        let defaults = makeDefaults()
+        defaults.set(false, forKey: AppStorageKey.reducedDiskWritesEnabled)
+
+        XCTAssertEqual(HistoryStorageMode.launchDefault(defaults: defaults), .allDisk)
+    }
+
+    func testReducedDiskWritesDefaultsOnWhenPreferenceIsMalformed() {
+        let malformedValues: [Any] = ["garbage", Data([0]), -1, 2]
+
+        for value in malformedValues {
+            let defaults = makeDefaults()
+            defaults.set(value, forKey: AppStorageKey.reducedDiskWritesEnabled)
+
+            XCTAssertEqual(
+                HistoryStorageMode.launchDefault(defaults: defaults),
+                .hybridRAM(byteCap: RecentDetailMemoryLimit.defaultValue.byteCount)
+            )
+        }
+    }
+
+    func testReducedDiskWritesResolvesEverySupportedMemoryLimit() {
+        for limit in RecentDetailMemoryLimit.allCases {
+            let defaults = makeDefaults()
+            defaults.set(true, forKey: AppStorageKey.reducedDiskWritesEnabled)
+            defaults.set(limit.rawValue, forKey: AppStorageKey.recentDetailMemoryMiB)
+
+            XCTAssertEqual(
+                HistoryStorageMode.launchDefault(defaults: defaults),
+                .hybridRAM(byteCap: limit.byteCount)
+            )
+        }
+    }
+
+    func testReducedDiskWritesSanitisesMissingAndCorruptMemoryLimits() {
+        for rawValue in [0, -1, 257, Int.max] {
+            let defaults = makeDefaults()
+            defaults.set(true, forKey: AppStorageKey.reducedDiskWritesEnabled)
+            if rawValue != 0 {
+                defaults.set(rawValue, forKey: AppStorageKey.recentDetailMemoryMiB)
+            }
+
+            XCTAssertEqual(
+                HistoryStorageMode.launchDefault(defaults: defaults),
+                .hybridRAM(byteCap: RecentDetailMemoryLimit.defaultValue.byteCount)
+            )
+        }
+    }
+
     func testExistingInstallReceivesLegacyDefaultsWhenValuesWereNeverStored() {
         let defaults = makeDefaults()
 

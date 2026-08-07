@@ -75,6 +75,139 @@ enum SearchTimeScope: String, CaseIterable {
     }
 }
 
+nonisolated struct TimelineSelection: Equatable {
+    let spanID: UUID
+    let timestamp: Date
+    let entryIndex: Int
+}
+
+nonisolated struct OverlayFrameExportSelection: Equatable {
+    let frame: StoredFrame
+    let timestamp: Date
+}
+
+/// Resolve a real point in time to a logical span.
+///
+/// Inside coverage, the requested timestamp is preserved. In a gap the nearest
+/// endpoint wins; an exact distance tie picks the older endpoint. Equal
+/// boundaries and overlapping coverage pick the later durable entry.
+nonisolated func resolveTimelineSelection(
+    entries: [TimelineEntry],
+    target: Date
+) -> TimelineSelection? {
+    guard !entries.isEmpty else { return nil }
+
+    if let containingIndex = entries.indices.reversed().first(where: { index in
+        let bounds = timelineSpanBounds(for: entries[index])
+        return bounds.start <= target && target <= bounds.end
+    }) {
+        return TimelineSelection(
+            spanID: entries[containingIndex].span.id,
+            timestamp: target,
+            entryIndex: containingIndex
+        )
+    }
+
+    struct Endpoint {
+        let date: Date
+        let entryIndex: Int
+    }
+
+    var best: Endpoint?
+    var bestDistance = TimeInterval.greatestFiniteMagnitude
+    for index in entries.indices {
+        let bounds = timelineSpanBounds(for: entries[index])
+        for date in [bounds.start, bounds.end] {
+            let distance = abs(date.timeIntervalSince(target))
+            if distance < bestDistance {
+                best = Endpoint(date: date, entryIndex: index)
+                bestDistance = distance
+            } else if distance == bestDistance, let current = best {
+                if date < current.date || (date == current.date && index > current.entryIndex) {
+                    best = Endpoint(date: date, entryIndex: index)
+                }
+            }
+        }
+    }
+
+    guard let best else { return nil }
+    return TimelineSelection(
+        spanID: entries[best.entryIndex].span.id,
+        timestamp: best.date,
+        entryIndex: best.entryIndex
+    )
+}
+
+nonisolated func clampedTimelineReferenceDate(
+    requested: Date,
+    entries: [TimelineEntry]
+) -> Date {
+    entries.reduce(requested) { partial, entry in
+        max(partial, timelineSpanBounds(for: entry).end)
+    }
+}
+
+nonisolated func latestTimelineSelection(in entries: [TimelineEntry]) -> TimelineSelection? {
+    guard let latestObservation = entries.map({ timelineSpanBounds(for: $0).end }).max() else {
+        return nil
+    }
+    return resolveTimelineSelection(entries: entries, target: latestObservation)
+}
+
+nonisolated func preservingTimelineSelection(
+    in entries: [TimelineEntry],
+    preferredSpanID: UUID?,
+    target: Date,
+    preferLatestWhenMissing: Bool
+) -> TimelineSelection? {
+    if let preferredSpanID,
+       let index = entries.firstIndex(where: { $0.span.id == preferredSpanID }) {
+        let bounds = timelineSpanBounds(for: entries[index])
+        return TimelineSelection(
+            spanID: preferredSpanID,
+            timestamp: min(max(target, bounds.start), bounds.end),
+            entryIndex: index
+        )
+    }
+    if preferLatestWhenMissing {
+        return latestTimelineSelection(in: entries)
+    }
+    return resolveTimelineSelection(entries: entries, target: target)
+}
+
+nonisolated func timelinePrefetchFrames(
+    entries: [TimelineEntry],
+    selectedIndex: Int,
+    radius: Int
+) -> [StoredFrame] {
+    guard entries.indices.contains(selectedIndex), radius > 0 else { return [] }
+    let lowerBound = max(0, selectedIndex - radius)
+    let upperBound = min(entries.count - 1, selectedIndex + radius)
+    var seenFrameIDs: Set<UUID> = [entries[selectedIndex].frame.id]
+    return (lowerBound...upperBound).compactMap { index in
+        guard index != selectedIndex else { return nil }
+        let frame = entries[index].frame
+        return seenFrameIDs.insert(frame.id).inserted ? frame : nil
+    }
+}
+
+nonisolated func timelinePrefetchProjectionKey(
+    entries: [TimelineEntry],
+    selectedSpanID: UUID?,
+    radius: Int
+) -> String {
+    guard let selectedSpanID,
+          let selectedIndex = entries.firstIndex(where: { $0.span.id == selectedSpanID }) else {
+        return "none|\(entries.count)"
+    }
+    let lowerBound = max(0, selectedIndex - max(0, radius))
+    let upperBound = min(entries.count - 1, selectedIndex + max(0, radius))
+    let projection = entries[lowerBound...upperBound].map { entry in
+        "\(entry.span.id.uuidString):\(entry.frame.id.uuidString)"
+    }
+    return "\(selectedSpanID.uuidString)|\(entries.count)|\(projection.joined(separator: ","))"
+}
+
 @Observable
 @MainActor
 class OverlayViewModel {
@@ -86,13 +219,20 @@ class OverlayViewModel {
     private static let searchDebounceDelay: Duration = .milliseconds(220)
     private static let fullImagePrefetchRadius = 3
 
-    var selectedIndex: Int = 0
+    private(set) var selectedTimestamp: Date
+    private(set) var selectedSpanID: UUID?
     var presentedFrame: StoredFrame?
-    private(set) var timelineFrames: [StoredFrame]
+    private(set) var timelineEntries: [TimelineEntry]
+    /// Full repository snapshot protected by the overlay's payload lease.
+    /// Display switching and search are projections of this immutable set.
+    private let leasedTimelineEntries: [TimelineEntry]
     let frameBuffer: FrameBuffer
     let recentTimelineWindow: TimeInterval
     let rewindHistoryOption: RewindHistoryOption
-    let timelineReferenceDate: Date
+    /// Immutable wall-clock snapshot used for retention and search semantics.
+    let semanticReferenceDate: Date
+    /// Drawable range end, clamped forward only so future/rollback spans remain visible.
+    private(set) var timelineReferenceDate: Date
     let onDismiss: () -> Void
     let onOpenSettings: () -> Void
     let availableDisplays: [DisplayInfo]
@@ -102,7 +242,7 @@ class OverlayViewModel {
     var isSearching = false
     var searchQuery = ""
     var searchTimeScope: SearchTimeScope = .all
-    var searchResults: [StoredFrame] = []
+    var searchResults: [TimelineEntry] = []
     var isSearchPending = false
     var isSearchInProgress = false
     var searchIndexStatus: SearchIndexStatus = .empty
@@ -115,6 +255,8 @@ class OverlayViewModel {
 
     var saveToast: OverlayToast?
     private var saveToastTask: Task<Void, Never>?
+    private var screenshotSaveTasks: [UUID: Task<Void, Never>] = [:]
+    private var acceptsScreenshotSaves = true
 
     /// Tracks whether ⌘ is currently held inside the overlay window. The
     /// modifier-flag monitor in OverlayWindowController writes here so the
@@ -152,13 +294,42 @@ class OverlayViewModel {
             && searchResults.isEmpty
     }
 
-    var selectedFramePrefetchKey: String {
-        let selectedFrameID = displayedFrames[safe: selectedIndex]?.id.uuidString ?? "none"
-        return "\(selectedFrameID)|\(displayedFrameCount)"
+    var selectedIndex: Int {
+        get {
+            guard let selectedSpanID,
+                  let index = displayedEntries.firstIndex(where: { $0.span.id == selectedSpanID }) else {
+                return 0
+            }
+            return index
+        }
+        set {
+            guard let entry = displayedEntries[safe: newValue] else { return }
+            let bounds = timelineSpanBounds(for: entry)
+            let timestamp = min(max(selectedTimestamp, bounds.start), bounds.end)
+            select(spanID: entry.span.id, timestamp: timestamp)
+        }
     }
 
+    var selectedFramePrefetchKey: String {
+        timelinePrefetchProjectionKey(
+            entries: displayedEntries,
+            selectedSpanID: selectedSpanID,
+            radius: Self.fullImagePrefetchRadius
+        )
+    }
+
+    var displayedEntries: [TimelineEntry] {
+        isSearchAvailable && isSearching && hasSearchQuery ? searchResults : timelineEntries
+    }
+
+    /// Compatibility projection for image consumers. Logical identity and
+    /// geometry always come from `displayedEntries`.
     var displayedFrames: [StoredFrame] {
-        isSearchAvailable && isSearching && hasSearchQuery ? searchResults : timelineFrames
+        displayedEntries.map(\.frame)
+    }
+
+    var timelineFrames: [StoredFrame] {
+        timelineEntries.map(\.frame)
     }
 
     var displayedFrameCount: Int {
@@ -173,36 +344,75 @@ class OverlayViewModel {
         displayedFrameCount > 0 && selectedIndex < displayedFrameCount - 1
     }
 
+    var currentEntry: TimelineEntry? {
+        guard let selectedSpanID else { return nil }
+        return displayedEntries.first { $0.span.id == selectedSpanID }
+    }
+
+    var currentFrame: StoredFrame? {
+        currentEntry?.frame
+    }
+
+    var currentExportSelection: OverlayFrameExportSelection? {
+        currentFrame.map { OverlayFrameExportSelection(frame: $0, timestamp: selectedTimestamp) }
+    }
+
+    var timelineStartDate: Date? {
+        displayedEntries.map { timelineSpanBounds(for: $0).start }.min()
+    }
+
+    var accessibilityTimelineValue: String {
+        guard currentEntry != nil else { return "No timeline spans" }
+        let ordinal = selectedIndex + 1
+        let relative = formatRelativeTime(selectedTimestamp, now: timelineReferenceDate)
+        let selectedTime = selectedTimestamp.formatted(date: .abbreviated, time: .standard)
+        return "Span \(ordinal) of \(displayedFrameCount), \(relative), selected time \(selectedTime)"
+    }
+
     var hasRetainedFrames: Bool {
         frameBuffer.frameCount > 0
     }
 
     var hasAnyFrames: Bool {
-        !timelineFrames.isEmpty || hasRetainedFrames
+        !timelineEntries.isEmpty || hasRetainedFrames
     }
 
     init(
-        timelineFrames: [StoredFrame],
+        timelineEntries: [TimelineEntry],
+        leasedTimelineEntries: [TimelineEntry]? = nil,
         frameBuffer: FrameBuffer,
         recentTimelineWindow: TimeInterval,
         rewindHistoryOption: RewindHistoryOption,
         availableDisplays: [DisplayInfo],
         activeDisplay: DisplayInfo?,
         primaryDisplayID: UUID?,
+        timelineReferenceDate: Date = Date(),
         onDismiss: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void
     ) {
-        self.timelineFrames = timelineFrames
+        self.timelineEntries = timelineEntries
+        self.leasedTimelineEntries = leasedTimelineEntries ?? frameBuffer.getTimelineEntries()
         self.frameBuffer = frameBuffer
         self.recentTimelineWindow = recentTimelineWindow
         self.rewindHistoryOption = rewindHistoryOption
-        self.timelineReferenceDate = Date()
+        self.semanticReferenceDate = timelineReferenceDate
+        let resolvedReferenceDate = clampedTimelineReferenceDate(
+            requested: timelineReferenceDate,
+            entries: timelineEntries
+        )
+        self.timelineReferenceDate = resolvedReferenceDate
         self.availableDisplays = availableDisplays
         self.activeDisplay = activeDisplay
         self.primaryDisplayID = primaryDisplayID
         self.onDismiss = onDismiss
         self.onOpenSettings = onOpenSettings
-        self.selectedIndex = max(0, timelineFrames.count - 1)
+        if let latest = latestTimelineSelection(in: timelineEntries) {
+            self.selectedTimestamp = latest.timestamp
+            self.selectedSpanID = latest.spanID
+        } else {
+            self.selectedTimestamp = resolvedReferenceDate
+            self.selectedSpanID = nil
+        }
     }
 
     func toggleSearch() {
@@ -229,7 +439,7 @@ class OverlayViewModel {
         isSearchPending = false
         isSearchInProgress = false
         resolvedSearchRequest = nil
-        selectedIndex = max(0, timelineFrames.count - 1)
+        selectLatest(in: timelineEntries)
     }
 
     func setTextGrabCancellationHandler(_ handler: (() -> Void)?) {
@@ -268,10 +478,10 @@ class OverlayViewModel {
             isSearchPending = false
             isSearchInProgress = false
             resolvedSearchRequest = nil
+            reconcileSelection(in: displayedEntries, preferLatestWhenMissing: true)
             return
         }
 
-        searchResults = []
         resolvedSearchRequest = nil
 
         if immediately {
@@ -292,36 +502,39 @@ class OverlayViewModel {
 
     func moveLeft() {
         guard ensureDisplayedSelection() else { return }
-        if selectedIndex > 0 {
-            selectedIndex -= 1
-        }
+        let previousIndex = selectedIndex - 1
+        guard let entry = displayedEntries[safe: previousIndex] else { return }
+        select(spanID: entry.span.id, timestamp: timelineSpanBounds(for: entry).end)
     }
 
     func moveRight() {
         guard ensureDisplayedSelection() else { return }
-        if selectedIndex < displayedFrameCount - 1 {
-            selectedIndex += 1
-        }
+        let nextIndex = selectedIndex + 1
+        guard let entry = displayedEntries[safe: nextIndex] else { return }
+        select(spanID: entry.span.id, timestamp: timelineSpanBounds(for: entry).start)
     }
 
     func jumpLeft() {
         guard ensureDisplayedSelection() else { return }
-        selectedIndex = max(0, selectedIndex - 10)
+        setSelectedTimestamp(selectedTimestamp.addingTimeInterval(-10))
     }
 
     func jumpRight() {
         guard ensureDisplayedSelection() else { return }
-        selectedIndex = min(displayedFrameCount - 1, selectedIndex + 10)
+        setSelectedTimestamp(selectedTimestamp.addingTimeInterval(10))
     }
 
     func goToStart() {
-        guard ensureDisplayedSelection() else { return }
-        selectedIndex = 0
+        guard let oldestIndex = displayedEntries.indices.min(by: {
+            timelineSpanBounds(for: displayedEntries[$0]).start
+                < timelineSpanBounds(for: displayedEntries[$1]).start
+        }) else { return }
+        let oldest = displayedEntries[oldestIndex]
+        select(spanID: oldest.span.id, timestamp: timelineSpanBounds(for: oldest).start)
     }
 
     func goToEnd() {
-        guard ensureDisplayedSelection() else { return }
-        selectedIndex = max(0, displayedFrameCount - 1)
+        selectLatest(in: displayedEntries)
     }
 
     func cycleDisplay(forward: Bool) {
@@ -336,19 +549,25 @@ class OverlayViewModel {
 
     func switchDisplay(to display: DisplayInfo) {
         guard display.id != activeDisplay?.id else { return }
-        let newFrames = frameBuffer.getFilteredFrames(
+        let newEntries = frameBuffer.filteredTimelineEntries(
+            from: leasedTimelineEntries,
             recentWindow: recentTimelineWindow,
             maximumAge: rewindHistoryOption.duration,
             displayID: display.id,
-            includeLegacyFrames: display.id == primaryDisplayID
+            includeLegacyFrames: display.id == primaryDisplayID,
+            now: semanticReferenceDate
         )
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
             clearSearch()
             activeDisplay = display
-            timelineFrames = newFrames
-            selectedIndex = max(0, newFrames.count - 1)
+            timelineEntries = newEntries
+            timelineReferenceDate = clampedTimelineReferenceDate(
+                requested: semanticReferenceDate,
+                entries: newEntries
+            )
+            selectLatest(in: newEntries)
             presentedFrame = nil
         }
     }
@@ -359,12 +578,11 @@ class OverlayViewModel {
 
         guard ensureDisplayedSelection() else { return }
 
-        let lowerBound = max(0, selectedIndex - Self.fullImagePrefetchRadius)
-        let upperBound = min(displayedFrameCount - 1, selectedIndex + Self.fullImagePrefetchRadius)
-        let framesToPrefetch = (lowerBound...upperBound).compactMap { index -> StoredFrame? in
-            guard index != selectedIndex else { return nil }
-            return displayedFrames[safe: index]
-        }
+        let framesToPrefetch = timelinePrefetchFrames(
+            entries: displayedEntries,
+            selectedIndex: selectedIndex,
+            radius: Self.fullImagePrefetchRadius
+        )
         guard !framesToPrefetch.isEmpty else { return }
 
         let buffer = frameBuffer
@@ -375,13 +593,11 @@ class OverlayViewModel {
 
     func scrollBy(_ delta: CGFloat) {
         guard ensureDisplayedSelection() else { return }
-        let step = delta > 0 ? -1 : 1
-        let newIndex = selectedIndex + step
-        selectedIndex = max(0, min(displayedFrameCount - 1, newIndex))
+        setSelectedTimestamp(selectedTimestamp.addingTimeInterval(delta > 0 ? -1 : 1))
     }
 
     var canSaveCurrentFrame: Bool {
-        displayedFrames[safe: selectedIndex] != nil
+        currentFrame != nil
     }
 
     func openSettings() {
@@ -390,15 +606,18 @@ class OverlayViewModel {
     }
 
     func saveCurrentFrameToScreenshotsLocation() {
-        guard let frame = displayedFrames[safe: selectedIndex] else { return }
+        guard let exportSelection = currentExportSelection else { return }
         let buffer = frameBuffer
         performScreenshotSave(operationName: "current frame") { destinations in
             var savedURL: URL? = nil
             if destinations.toFolder {
-                savedURL = try await buffer.saveFrameToScreenshotsLocation(frame)
+                savedURL = try await buffer.saveFrameToScreenshotsLocation(
+                    exportSelection.frame,
+                    timestamp: exportSelection.timestamp
+                )
             }
             if destinations.toClipboard {
-                let image = try await buffer.getFullImage(for: frame)
+                let image = try await buffer.getFullImage(for: exportSelection.frame)
                 Self.copyImageToClipboard(image)
             }
             return savedURL
@@ -408,11 +627,15 @@ class OverlayViewModel {
     /// Save a region cropped from the displayed frame. Called by the
     /// drag-to-region path when ⌘ is held during the drag.
     func saveCroppedScreenshot(image: CGImage) {
+        let logicalTimestamp = selectedTimestamp
         let buffer = frameBuffer
         performScreenshotSave(operationName: "cropped region") { destinations in
             var savedURL: URL? = nil
             if destinations.toFolder {
-                savedURL = try await buffer.saveCroppedImageToScreenshotsLocation(image)
+                savedURL = try await buffer.saveCroppedImageToScreenshotsLocation(
+                    image,
+                    timestamp: logicalTimestamp
+                )
             }
             if destinations.toClipboard {
                 Self.copyImageToClipboard(image)
@@ -425,8 +648,12 @@ class OverlayViewModel {
         operationName: String,
         operation: @escaping (_ destinations: SaveDestinations) async throws -> URL?
     ) {
+        guard acceptsScreenshotSaves else { return }
         let destinations = currentSaveDestinations()
-        Task { @MainActor in
+        let operationID = UUID()
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { screenshotSaveTasks[operationID] = nil }
             do {
                 let savedURL = try await operation(destinations)
                 playSavedSoundIfNeeded()
@@ -438,6 +665,23 @@ class OverlayViewModel {
                 )
                 showSaveToast(makeErrorToast(error))
             }
+        }
+        screenshotSaveTasks[operationID] = task
+    }
+
+    /// Prevents new save work from starting once overlay teardown begins.
+    /// The controller keeps the overlay payload lease alive until
+    /// `waitForPendingScreenshotSaves()` returns, so a suspended export cannot
+    /// lose its volatile JPEG to dismissal or memory-pressure trimming.
+    func prepareForDismissal() {
+        acceptsScreenshotSaves = false
+        clearSearch()
+    }
+
+    func waitForPendingScreenshotSaves() async {
+        let tasks = Array(screenshotSaveTasks.values)
+        for task in tasks {
+            await task.value
         }
     }
 
@@ -642,52 +886,116 @@ class OverlayViewModel {
         isSearchPending = false
         isSearchInProgress = true
 
-        let searchCutoff = request.scope.cutoff(using: rewindHistoryOption)
-        let buffer = frameBuffer
+        let searchCutoff = request.scope.cutoff(
+            using: rewindHistoryOption,
+            from: semanticReferenceDate
+        )
         let cache = frameBuffer.textCache
         let activeDisplayID = activeDisplay?.id
         let includeLegacy = activeDisplay?.id == primaryDisplayID
+        let leasedEntries = leasedTimelineEntries
 
         searchTask = Task {
             let matchedIDs = await cache.searchFrameIDs(matching: request.query, limit: 10_000, since: searchCutoff)
 
             guard !Task.isCancelled else { return }
 
-            let matchedFrames = buffer.frames(withIDs: matchedIDs)
-            var results: [StoredFrame] = []
-            results.reserveCapacity(matchedFrames.count)
-            for frame in matchedFrames {
-                if let activeDisplayID {
-                    if let frameDisplayID = frame.displayID {
-                        guard frameDisplayID == activeDisplayID else { continue }
-                    } else if !includeLegacy {
-                        continue
-                    }
+            let matchedIDSet = Set(matchedIDs)
+            let results = leasedEntries.filter { entry in
+                guard matchedIDSet.contains(entry.frame.id) else { return false }
+                if let searchCutoff, timelineSpanBounds(for: entry).end < searchCutoff {
+                    return false
                 }
-                results.append(frame)
+                if let activeDisplayID {
+                    if let entryDisplayID = entry.span.displayID {
+                        return entryDisplayID == activeDisplayID
+                    }
+                    return includeLegacy
+                }
+                return true
             }
-            results.reverse()
 
             guard !Task.isCancelled else { return }
 
             let finalResults = results
             await MainActor.run {
                 if !Task.isCancelled {
+                    let previousSpanID = selectedSpanID
+                    let previousTimestamp = selectedTimestamp
                     searchResults = finalResults
                     isSearchInProgress = false
                     resolvedSearchRequest = request
-                    selectedIndex = max(0, finalResults.count - 1)
+                    reconcileSelection(
+                        in: finalResults,
+                        preferredSpanID: previousSpanID,
+                        target: previousTimestamp,
+                        preferLatestWhenMissing: false
+                    )
                 }
             }
         }
     }
 
-    private func ensureDisplayedSelection() -> Bool {
-        guard displayedFrameCount > 0 else {
-            selectedIndex = 0
-            return false
+    func setSelectedTimestamp(_ timestamp: Date) {
+        guard let selection = resolveTimelineSelection(entries: displayedEntries, target: timestamp) else {
+            selectedSpanID = nil
+            selectedTimestamp = timelineReferenceDate
+            return
         }
-        selectedIndex = max(0, min(displayedFrameCount - 1, selectedIndex))
+        selectedSpanID = selection.spanID
+        selectedTimestamp = selection.timestamp
+    }
+
+    private func select(spanID: UUID, timestamp: Date) {
+        guard let entry = displayedEntries.first(where: { $0.span.id == spanID }) else {
+            setSelectedTimestamp(timestamp)
+            return
+        }
+        let bounds = timelineSpanBounds(for: entry)
+        selectedSpanID = spanID
+        selectedTimestamp = min(max(timestamp, bounds.start), bounds.end)
+    }
+
+    private func selectLatest(in entries: [TimelineEntry]) {
+        guard let selection = latestTimelineSelection(in: entries) else {
+            selectedSpanID = nil
+            selectedTimestamp = timelineReferenceDate
+            return
+        }
+        selectedSpanID = selection.spanID
+        selectedTimestamp = selection.timestamp
+    }
+
+    private func reconcileSelection(
+        in entries: [TimelineEntry],
+        preferredSpanID: UUID? = nil,
+        target: Date? = nil,
+        preferLatestWhenMissing: Bool
+    ) {
+        guard let selection = preservingTimelineSelection(
+            in: entries,
+            preferredSpanID: preferredSpanID ?? selectedSpanID,
+            target: target ?? selectedTimestamp,
+            preferLatestWhenMissing: preferLatestWhenMissing
+        ) else {
+            selectedSpanID = nil
+            selectedTimestamp = timelineReferenceDate
+            return
+        }
+        selectedSpanID = selection.spanID
+        selectedTimestamp = selection.timestamp
+    }
+
+    private func ensureDisplayedSelection() -> Bool {
+        // Search intentionally shows an empty result projection while its
+        // first request is pending. Preserve the authoritative selection so a
+        // matching logical span can be restored when results arrive.
+        guard displayedFrameCount > 0 else { return false }
+        if let selectedSpanID,
+           displayedEntries.contains(where: { $0.span.id == selectedSpanID }) {
+            return true
+        }
+        setSelectedTimestamp(selectedTimestamp)
         return true
     }
 }

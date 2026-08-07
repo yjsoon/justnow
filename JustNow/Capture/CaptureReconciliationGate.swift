@@ -23,11 +23,11 @@ final class CaptureReconciliationGate {
     }
 
     func withPermitIgnoringCancellation<T>(
-        _ operation: @escaping @MainActor () async -> T
-    ) async -> T {
+        _ operation: @escaping @MainActor () async throws -> T
+    ) async rethrows -> T {
         await acquireIgnoringCancellation()
         defer { release() }
-        return await operation()
+        return try await operation()
     }
 
     private func acquireUnlessCancelled() async -> Bool {

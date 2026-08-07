@@ -9,21 +9,23 @@ final class CaptureStopControllerTests: XCTestCase {
             updateStatus: { status in
                 recorder.recordStatus(status)
             },
-            stopCapture: {
-                recorder.recordStopCapture()
+            stopCapture: { reason in
+                recorder.recordStopCapture(reason: reason)
             },
             endForegroundActivity: {
                 recorder.recordEndForegroundActivity()
             }
         )
 
-        await controller.performStop(CaptureStopRequest(status: "Paused (Overlay)"))
+        await controller.performStop(
+            CaptureStopRequest(status: "Paused (Overlay)", sessionEndReason: .overlay)
+        )
 
         XCTAssertEqual(
             recorder.events,
             [
                 "status:Paused (Overlay)",
-                "stopCapture",
+                "stopCapture:overlay",
                 "endForegroundActivity"
             ]
         )
@@ -35,8 +37,8 @@ final class CaptureStopControllerTests: XCTestCase {
             updateStatus: { status in
                 recorder.recordStatus(status)
             },
-            stopCapture: {
-                recorder.recordStopCapture()
+            stopCapture: { reason in
+                recorder.recordStopCapture(reason: reason)
             },
             endForegroundActivity: {
                 recorder.recordEndForegroundActivity()
@@ -49,7 +51,8 @@ final class CaptureStopControllerTests: XCTestCase {
         await controller.performStop(
             CaptureStopRequest(
                 status: "Sleeping...",
-                logMessage: "Capture paused for system sleep"
+                logMessage: "Capture paused for system sleep",
+                sessionEndReason: .sleep
             )
         )
 
@@ -57,7 +60,7 @@ final class CaptureStopControllerTests: XCTestCase {
             recorder.events,
             [
                 "status:Sleeping...",
-                "stopCapture",
+                "stopCapture:sleep",
                 "endForegroundActivity",
                 "log:Capture paused for system sleep"
             ]
@@ -69,7 +72,7 @@ final class CaptureStopControllerTests: XCTestCase {
         var events: [String] = []
         let controller = CaptureStopController(
             updateStatus: { _ in },
-            stopCapture: {
+            stopCapture: { _ in
                 events.append("stop-enter")
                 await stopGate.wait()
                 events.append("stop-exit")
@@ -98,7 +101,7 @@ final class CaptureStopControllerTests: XCTestCase {
         var stopCount = 0
         let controller = CaptureStopController(
             updateStatus: { _ in },
-            stopCapture: {
+            stopCapture: { _ in
                 stopCount += 1
                 events.append("stop-\(stopCount)-enter")
                 if stopCount == 1 {
@@ -153,8 +156,8 @@ private final class CaptureStopControllerRecorder {
         events.append("status:\(status)")
     }
 
-    func recordStopCapture() {
-        events.append("stopCapture")
+    func recordStopCapture(reason: CaptureSessionEndReason) {
+        events.append("stopCapture:\(reason.rawValue)")
     }
 
     func recordEndForegroundActivity() {
