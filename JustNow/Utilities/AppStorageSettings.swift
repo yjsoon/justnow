@@ -82,7 +82,7 @@ enum AppStorageDefault {
     nonisolated static let screenshotSaveToFolder = true
     nonisolated static let screenshotSaveToClipboard = false
     nonisolated static let hasSeenSaveQualityInfo = false
-    nonisolated static let reducedDiskWritesEnabled = false
+    nonisolated static let reducedDiskWritesEnabled = true
     nonisolated static let recentDetailMemoryMiB = RecentDetailMemoryLimit.defaultValue.rawValue
 }
 

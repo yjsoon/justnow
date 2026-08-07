@@ -85,7 +85,10 @@ nonisolated enum HistoryStorageMode: Sendable, Equatable {
     static let defaultHybridByteCap = 512 * 1024 * 1024
 
     static func launchDefault(defaults: UserDefaults = .standard) -> Self {
-        guard defaults.bool(forKey: AppStorageKey.reducedDiskWritesEnabled) else {
+        let isReducedDiskWritesEnabled =
+            defaults.object(forKey: AppStorageKey.reducedDiskWritesEnabled) as? Bool
+            ?? AppStorageDefault.reducedDiskWritesEnabled
+        guard isReducedDiskWritesEnabled else {
             return .allDisk
         }
         let limit = RecentDetailMemoryLimit.resolved(

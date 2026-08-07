@@ -2,12 +2,36 @@ import XCTest
 @testable import JustNow
 
 final class AppSettingsMigrationTests: XCTestCase {
-    func testReducedDiskWritesDefaultsOffForNewAndExistingPreferences() {
+    func testReducedDiskWritesDefaultsOnWhenPreferenceIsMissing() {
         let defaults = makeDefaults()
         defaults.set(true, forKey: "hiddenHybridRAMHistory")
 
+        XCTAssertEqual(
+            HistoryStorageMode.launchDefault(defaults: defaults),
+            .hybridRAM(byteCap: RecentDetailMemoryLimit.defaultValue.byteCount)
+        )
+        XCTAssertTrue(AppStorageDefault.reducedDiskWritesEnabled)
+    }
+
+    func testReducedDiskWritesPreservesExplicitOptOut() {
+        let defaults = makeDefaults()
+        defaults.set(false, forKey: AppStorageKey.reducedDiskWritesEnabled)
+
         XCTAssertEqual(HistoryStorageMode.launchDefault(defaults: defaults), .allDisk)
-        XCTAssertFalse(AppStorageDefault.reducedDiskWritesEnabled)
+    }
+
+    func testReducedDiskWritesDefaultsOnWhenPreferenceIsMalformed() {
+        let malformedValues: [Any] = ["garbage", Data([0]), -1, 2]
+
+        for value in malformedValues {
+            let defaults = makeDefaults()
+            defaults.set(value, forKey: AppStorageKey.reducedDiskWritesEnabled)
+
+            XCTAssertEqual(
+                HistoryStorageMode.launchDefault(defaults: defaults),
+                .hybridRAM(byteCap: RecentDetailMemoryLimit.defaultValue.byteCount)
+            )
+        }
     }
 
     func testReducedDiskWritesResolvesEverySupportedMemoryLimit() {
