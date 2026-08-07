@@ -7,6 +7,39 @@ import AppKit
 import SwiftUI
 import Carbon.HIToolbox
 
+/// Keeps the capture-resume callback behind the asynchronous RAM lease
+/// release. A newer visible overlay invalidates an older hide operation, so a
+/// delayed release cannot resume capture underneath that new overlay.
+@MainActor
+final class OverlayPayloadLeaseReleaseGate {
+    private var visibilityGeneration = 0
+
+    func becameVisible() -> Int {
+        visibilityGeneration += 1
+        return visibilityGeneration
+    }
+
+    func isCurrent(_ generation: Int) -> Bool {
+        visibilityGeneration == generation
+    }
+
+    func release(
+        _ lease: (any FrameRepositoryPayloadLease)?,
+        generation: Int?,
+        beforeResume: @escaping @MainActor (FrameRepositoryMaintenanceResult) async -> Void = { _ in },
+        onReleasedForCurrentVisibility: @escaping () -> Void
+    ) -> Task<Void, Never> {
+        Task { @MainActor [weak self] in
+            let result = await lease?.release() ?? .noOp
+            await beforeResume(result)
+            if let generation {
+                guard self?.visibilityGeneration == generation else { return }
+            }
+            onReleasedForCurrentVisibility()
+        }
+    }
+}
+
 @MainActor
 class OverlayWindowController: NSObject {
     private var window: OverlayWindow?
@@ -19,6 +52,14 @@ class OverlayWindowController: NSObject {
     private var scrollEventMonitor: Any?
     private var flagsChangedMonitor: Any?
     private var viewModel: OverlayViewModel?
+    private var payloadLease: (any FrameRepositoryPayloadLease)?
+    private let payloadLeaseReleaseGate = OverlayPayloadLeaseReleaseGate()
+    private var visibleGeneration: Int?
+    private var pendingPresentationGeneration: Int?
+    private var cancelledPresentationGenerations: Set<Int> = []
+    private var payloadLeaseReleaseTask: Task<Void, Never>?
+    private var defersCaptureResumeForMemoryPressure = false
+    private var memoryPressureDismissedVisibleOverlay = false
 
     init(
         frameBuffer: FrameBuffer,
@@ -45,8 +86,10 @@ class OverlayWindowController: NSObject {
         rewindHistoryOption: RewindHistoryOption,
         activeDisplay: DisplayInfo?,
         availableDisplays: [DisplayInfo]
-    ) {
-        guard window == nil else { return }
+    ) async {
+        guard !defersCaptureResumeForMemoryPressure,
+              window == nil,
+              pendingPresentationGeneration == nil else { return }
 
         // Open on the screen that owns the active display; fall back to main.
         let resolvedScreen: NSScreen? = {
@@ -59,29 +102,68 @@ class OverlayWindowController: NSObject {
         }()
         guard let screen = resolvedScreen else { return }
 
-        // Pause pruning while overlay is visible
+        let primaryDisplayID = Self.primaryDisplayID(among: availableDisplays)
+        let timelineReferenceDate = Date()
+
+        // Retention must stop before the repository begins taking its
+        // snapshot. Otherwise a forced policy update can delete durable
+        // entries while snapshot acquisition is suspended, leaving the
+        // overlay with metadata whose payload disappeared before its lease was
+        // installed. This generation owns the pause until it either becomes
+        // visible or releases an aborted snapshot.
+        let presentationGeneration = payloadLeaseReleaseGate.becameVisible()
+        pendingPresentationGeneration = presentationGeneration
         frameBuffer.isPruningPaused = true
 
-        let primaryDisplayID = Self.primaryDisplayID(among: availableDisplays)
+        let leasedSnapshot = await frameBuffer.acquireCurrentTimelineSnapshotLease()
+        let lease = leasedSnapshot.lease
+        let wasExplicitlyCancelled = cancelledPresentationGenerations.remove(
+            presentationGeneration
+        ) != nil
+        guard !Task.isCancelled,
+              !wasExplicitlyCancelled,
+              pendingPresentationGeneration == presentationGeneration,
+              payloadLeaseReleaseGate.isCurrent(presentationGeneration),
+              window == nil else {
+            if pendingPresentationGeneration == presentationGeneration {
+                pendingPresentationGeneration = nil
+            }
+            _ = await frameBuffer.releasePayloadLease(lease)
+            finishReleasedOverlay(
+                generation: presentationGeneration,
+                shouldResumeCapture: false
+            )
+            return
+        }
+        pendingPresentationGeneration = nil
 
-        // Get frames with near-duplicates filtered out for smoother browsing.
-        // Legacy (nil displayID) frames predate multi-display support so their
-        // source display is ambiguous — they stay hidden from display-scoped
-        // timelines rather than polluting whichever slot happens to be primary.
-        let timelineFrames = frameBuffer.getFilteredFrames(
+        // Filter only the exact repository snapshot whose volatile payloads
+        // were atomically leased. Display switching and search use this same
+        // snapshot, so no later unleased admission can surface in the overlay.
+        let timelineEntries = frameBuffer.filteredTimelineEntries(
+            from: leasedSnapshot.entries,
             recentWindow: recentTimelineWindow,
             maximumAge: rewindHistoryOption.duration,
             displayID: activeDisplay?.id,
-            includeLegacyFrames: activeDisplay?.id == primaryDisplayID
+            includeLegacyFrames: activeDisplay?.id == primaryDisplayID,
+            now: timelineReferenceDate
         )
+
+        // The overlay lease and pruning pause are separate protections: the
+        // former protects volatile bytes under the hard RAM cap, while the
+        // latter preserves retention semantics for the existing disk history.
+        payloadLease = lease
+        visibleGeneration = presentationGeneration
         let vm = OverlayViewModel(
-            timelineFrames: timelineFrames,
+            timelineEntries: timelineEntries,
+            leasedTimelineEntries: leasedSnapshot.entries,
             frameBuffer: frameBuffer,
             recentTimelineWindow: recentTimelineWindow,
             rewindHistoryOption: rewindHistoryOption,
             availableDisplays: availableDisplays,
             activeDisplay: activeDisplay,
             primaryDisplayID: primaryDisplayID,
+            timelineReferenceDate: timelineReferenceDate,
             onDismiss: { [weak self] in
                 self?.hideOverlay()
             },
@@ -215,8 +297,19 @@ class OverlayWindowController: NSObject {
     }
 
     func hideOverlay() {
-        // Resume pruning
-        frameBuffer.isPruningPaused = false
+        if let pendingPresentationGeneration,
+           window == nil,
+           viewModel == nil,
+           payloadLease == nil {
+            // Snapshot acquisition itself is not cancellable. Leave pruning
+            // paused until that attempt returns and releases whatever it
+            // acquired; a newer show attempt will take ownership through a
+            // later generation in the meantime.
+            cancelledPresentationGenerations.insert(pendingPresentationGeneration)
+            self.pendingPresentationGeneration = nil
+            return
+        }
+        guard window != nil || viewModel != nil || payloadLease != nil else { return }
         viewModel?.clearSearch()
 
         // Capture pending educational alert before tearing down the
@@ -238,7 +331,23 @@ class OverlayWindowController: NSObject {
         window?.orderOut(nil)
         window = nil
         viewModel = nil
-        onVisibilityChanged?(false)
+        let lease = payloadLease
+        payloadLease = nil
+        let generation = visibleGeneration
+        visibleGeneration = nil
+        payloadLeaseReleaseTask = payloadLeaseReleaseGate.release(
+            nil,
+            generation: generation,
+            beforeResume: { [weak self] _ in
+                guard let self, let lease else { return }
+                _ = await self.frameBuffer.releasePayloadLease(lease)
+            }
+        ) { [weak self] in
+            self?.finishReleasedOverlay(
+                generation: generation,
+                shouldResumeCapture: true
+            )
+        }
 
         if shouldShowQualityInfo {
             // Run-loop tick so the overlay is fully torn down before the
@@ -247,6 +356,88 @@ class OverlayWindowController: NSObject {
             DispatchQueue.main.async { [weak self] in
                 self?.presentSaveQualityInfoAlert()
             }
+        }
+    }
+
+    /// Tears down any pending or visible overlay and waits for its known RAM
+    /// lease without resuming capture. AppDelegate completes the dismissal
+    /// only after critical repository and decoded-cache reclamation finishes.
+    @discardableResult
+    func dismissForMemoryPressure() async -> Bool {
+        defersCaptureResumeForMemoryPressure = true
+
+        if let pendingPresentationGeneration,
+           window == nil,
+           viewModel == nil,
+           payloadLease == nil {
+            cancelledPresentationGenerations.insert(pendingPresentationGeneration)
+            self.pendingPresentationGeneration = nil
+        }
+
+        if let payloadLeaseReleaseTask {
+            await payloadLeaseReleaseTask.value
+            self.payloadLeaseReleaseTask = nil
+        }
+
+        let wasVisible = window != nil || viewModel != nil || payloadLease != nil
+        guard wasVisible else { return memoryPressureDismissedVisibleOverlay }
+
+        viewModel?.clearSearch()
+        if let monitor = keyEventMonitor {
+            NSEvent.removeMonitor(monitor)
+            keyEventMonitor = nil
+        }
+        if let monitor = scrollEventMonitor {
+            NSEvent.removeMonitor(monitor)
+            scrollEventMonitor = nil
+        }
+        if let monitor = flagsChangedMonitor {
+            NSEvent.removeMonitor(monitor)
+            flagsChangedMonitor = nil
+        }
+        window?.orderOut(nil)
+        window = nil
+        viewModel = nil
+
+        let lease = payloadLease
+        payloadLease = nil
+        let generation = visibleGeneration
+        visibleGeneration = nil
+        if let lease {
+            _ = await frameBuffer.releasePayloadLease(lease)
+        }
+        if generation.map(payloadLeaseReleaseGate.isCurrent) ?? true {
+            memoryPressureDismissedVisibleOverlay = true
+        }
+        return memoryPressureDismissedVisibleOverlay
+    }
+
+    func completeMemoryPressureDismissal() {
+        let shouldResumeCapture = memoryPressureDismissedVisibleOverlay
+        memoryPressureDismissedVisibleOverlay = false
+        defersCaptureResumeForMemoryPressure = false
+        frameBuffer.isPruningPaused = false
+        if shouldResumeCapture {
+            onVisibilityChanged?(false)
+        }
+    }
+
+    private func finishReleasedOverlay(
+        generation: Int?,
+        shouldResumeCapture: Bool
+    ) {
+        if let generation,
+           !payloadLeaseReleaseGate.isCurrent(generation) {
+            return
+        }
+        if defersCaptureResumeForMemoryPressure {
+            memoryPressureDismissedVisibleOverlay =
+                memoryPressureDismissedVisibleOverlay || shouldResumeCapture
+            return
+        }
+        frameBuffer.isPruningPaused = false
+        if shouldResumeCapture {
+            onVisibilityChanged?(false)
         }
     }
 

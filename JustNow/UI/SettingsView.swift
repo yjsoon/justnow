@@ -31,12 +31,15 @@ struct SettingsView: View {
     private var screenshotSaveLocationOverride: String = AppStorageDefault.screenshotSaveLocationOverride
     @AppStorage(AppStorageKey.screenshotSaveToFolder) private var screenshotSaveToFolder: Bool = AppStorageDefault.screenshotSaveToFolder
     @AppStorage(AppStorageKey.screenshotSaveToClipboard) private var screenshotSaveToClipboard: Bool = AppStorageDefault.screenshotSaveToClipboard
+    @AppStorage(AppStorageKey.reducedDiskWritesEnabled)
+    private var reducedDiskWritesEnabled: Bool = AppStorageDefault.reducedDiskWritesEnabled
+    @AppStorage(AppStorageKey.recentDetailMemoryMiB)
+    private var recentDetailMemoryMiB: Int = AppStorageDefault.recentDetailMemoryMiB
     @State private var showHideIconInfoAlert: Bool = false
 
     var context: SettingsContext = SettingsContext()
 
-    @State private var storageSize: Int64 = 0
-    @State private var frameCount: Int = 0
+    @State private var storageStatistics: FrameStorageStatistics = .empty
     @State private var projectionSamples: [FrameStorageSample] = []
     @State private var connectedDisplayIDs: [UUID] = []
     @State private var showClearConfirmation = false
@@ -47,6 +50,7 @@ struct SettingsView: View {
     @State private var allowsAutomaticUpdates = false
     @State private var launchAtLoginEnabled = false
     @State private var launchAtLoginAlertMessage: String?
+    @State private var clearHistoryAlertMessage: String?
 
     var body: some View {
         TabView {
@@ -74,12 +78,23 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) { }
             Button("Clear All", role: .destructive) {
                 Task {
-                    try? await context.frameBuffer?.clear()
+                    do {
+                        try await context.frameBuffer?.clear()
+                    } catch {
+                        clearHistoryAlertMessage = error.localizedDescription
+                    }
                     await updateStorageInfo()
                 }
             }
         } message: {
             Text("This will delete all captured frames. This cannot be undone.")
+        }
+        .alert("History clear needs attention", isPresented: clearHistoryAlertIsPresented) {
+            Button("OK", role: .cancel) {
+                clearHistoryAlertMessage = nil
+            }
+        } message: {
+            Text(clearHistoryAlertMessage ?? "")
         }
         .alert("Launch on startup", isPresented: launchAtLoginAlertIsPresented) {
             Button("OK", role: .cancel) {
@@ -93,6 +108,13 @@ struct SettingsView: View {
         } message: {
             Text("To bring it back, relaunch JustNow from Finder or Spotlight to reopen Settings, or switch it back on from the rewind overlay.")
         }
+    }
+
+    private var clearHistoryAlertIsPresented: Binding<Bool> {
+        Binding(
+            get: { clearHistoryAlertMessage != nil },
+            set: { if !$0 { clearHistoryAlertMessage = nil } }
+        )
     }
 
     private var generalSettingsTab: some View {
@@ -270,6 +292,36 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Recent detail") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Reduced disk writes (Beta)", isOn: $reducedDiskWritesEnabled)
+
+                    Text("Keeps recent detail in memory and saves fewer recovery points to disk. Memory detail may be shorter than your rewind window and is lost on restart, unexpected quit, or memory pressure.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                LabeledContent {
+                    Picker("", selection: resolvedRecentDetailMemoryMiB) {
+                        ForEach(RecentDetailMemoryLimit.allCases) { limit in
+                            Text(limit.label).tag(limit.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .disabled(!reducedDiskWritesEnabled)
+                } label: {
+                    Text("Memory for recent detail")
+                }
+
+                if historyStorageChangeNeedsRelaunch {
+                    Text("Changes apply after you relaunch JustNow.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+
             Section("Battery") {
                 Toggle("Reduce power use automatically", isOn: $reduceCaptureOnBattery)
                 Text("On battery / in Low Power Mode / under thermal pressure / when idle for a while: This setting makes JustNow capture less often, save lower-quality images, and slow background search indexing.")
@@ -279,14 +331,43 @@ struct SettingsView: View {
             }
 
             Section("Storage") {
-                LabeledContent("Frames stored") {
-                    Text("\(frameCount)")
+                LabeledContent("Durable disk payloads") {
+                    Text("\(storageStatistics.durableFrameCount)")
                         .foregroundStyle(.secondary)
                 }
 
-                LabeledContent("Frame storage used") {
-                    Text(formatBytes(storageSize))
+                LabeledContent("Durable disk storage") {
+                    Text(formatBytes(storageStatistics.storedBytes))
                         .foregroundStyle(.secondary)
+                }
+
+                LabeledContent("RAM payloads") {
+                    Text("\(storageStatistics.volatileFrameCount)")
+                        .foregroundStyle(.secondary)
+                }
+
+                LabeledContent("Coalesced payloads") {
+                    Text("\(storageStatistics.frameCount)")
+                        .foregroundStyle(.secondary)
+                }
+
+                LabeledContent("RAM recent detail") {
+                    Text(ramUsageDescription)
+                        .foregroundStyle(.secondary)
+                }
+
+                if !storageStatistics.displayCoverage.isEmpty {
+                    ForEach(storageStatistics.displayCoverage) { coverage in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(coverage.displayLabel)
+                            Text(
+                                "Disk \(formatCoveredTime(coverage.durable.coveredSeconds)) · RAM \(formatCoveredTime(coverage.volatile.coveredSeconds)) · Combined \(formatCoveredTime(coverage.combined.coveredSeconds))\(coverage.combined.hasGaps ? " · has gaps" : "")"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                 }
 
                 HStack(spacing: 8) {
@@ -421,6 +502,25 @@ struct SettingsView: View {
         )
     }
 
+    private var resolvedRecentDetailMemoryMiB: Binding<Int> {
+        Binding(
+            get: { RecentDetailMemoryLimit.resolved(from: recentDetailMemoryMiB).rawValue },
+            set: { recentDetailMemoryMiB = RecentDetailMemoryLimit.resolved(from: $0).rawValue }
+        )
+    }
+
+    private var desiredHistoryStorageMode: HistoryStorageMode {
+        guard reducedDiskWritesEnabled else { return .allDisk }
+        return .hybridRAM(
+            byteCap: RecentDetailMemoryLimit.resolved(from: recentDetailMemoryMiB).byteCount
+        )
+    }
+
+    private var historyStorageChangeNeedsRelaunch: Bool {
+        guard let frameBuffer = context.frameBuffer else { return false }
+        return frameBuffer.historyStorageMode != desiredHistoryStorageMode
+    }
+
     private var projectedStorage: Int64? {
         StorageEstimate.projectedBytes(
             policy: .rewindHistory(
@@ -450,15 +550,13 @@ struct SettingsView: View {
             let bufferIdentity = ObjectIdentifier(buffer)
             let statistics = await buffer.storageStatistics()
             guard !Task.isCancelled, context.frameBuffer.map(ObjectIdentifier.init) == bufferIdentity else { return }
-            storageSize = statistics.storedBytes
-            frameCount = statistics.frameCount
+            storageStatistics = statistics
             projectionSamples = statistics.projectionSamples
             connectedDisplayIDs = NSScreen.screens.compactMap { screen in
                 DisplayIdentity.displayID(for: screen).map { DisplayIdentity.info(for: $0).id }
             }
         } else {
-            storageSize = 0
-            frameCount = 0
+            storageStatistics = .empty
             projectionSamples = []
             connectedDisplayIDs = []
         }
@@ -498,6 +596,26 @@ struct SettingsView: View {
 
     private func formatBytes(_ bytes: Int64) -> String {
         return bytes.formatted(.byteCount(style: .file))
+    }
+
+    private var ramUsageDescription: String {
+        guard storageStatistics.configuredVolatileByteCap > 0 else { return "Off" }
+        let effective = storageStatistics.volatileByteCap
+        let configured = storageStatistics.configuredVolatileByteCap
+        let base = "\(formatBytes(storageStatistics.volatileBytes)) of \(formatBytes(effective))"
+        guard effective < configured else { return base }
+        return "\(base) effective (\(formatBytes(configured)) configured)"
+    }
+
+    private func formatCoveredTime(_ seconds: TimeInterval) -> String {
+        let rounded = max(0, Int(seconds.rounded()))
+        if rounded >= 3600 {
+            return "\(rounded / 3600)h \((rounded % 3600) / 60)m"
+        }
+        if rounded >= 60 {
+            return "\(rounded / 60)m \(rounded % 60)s"
+        }
+        return "\(rounded)s"
     }
 
     private func formatRate(_ value: Double) -> String {

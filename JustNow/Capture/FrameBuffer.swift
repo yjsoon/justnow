@@ -9,15 +9,6 @@ import os.log
 
 private let captureLogger = Logger(subsystem: "sg.tk.JustNow", category: "Capture")
 
-/// Lightweight frame reference - actual image loaded from disk on demand
-struct StoredFrame: Identifiable, Sendable {
-    let id: UUID
-    let timestamp: Date
-    let hash: UInt64
-    let displayID: UUID?
-    let displayName: String?
-}
-
 struct DuplicateFramePolicy: Sendable, Equatable {
     let hashThreshold: Int
     let minimumSpacing: TimeInterval
@@ -67,6 +58,40 @@ private enum ClearWaitResult {
     case cancelled
 }
 
+enum FrameBufferCaptureSessionError: Error, Equatable {
+    case alreadyActive(UUID?)
+}
+
+enum FrameBufferClearError: LocalizedError {
+    case captureResumeFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .captureResumeFailed(let detail):
+            "History was cleared, but capture could not resume. JustNow will retry automatically. \(detail)"
+        }
+    }
+}
+
+private enum CaptureDisplayKey: Hashable {
+    case legacy
+    case display(UUID)
+
+    init(_ displayID: UUID?) {
+        self = displayID.map(Self.display) ?? .legacy
+    }
+}
+
+private struct AcceptedCaptureObservation {
+    let hash: UInt64
+    let timestamp: Date
+}
+
+private struct PendingCaptureSessionClose {
+    let session: CaptureSession
+    let reason: CaptureSessionEndReason
+}
+
 private struct PendingIngest {
     let cgImage: CGImage
     let timestamp: Date
@@ -76,15 +101,53 @@ private struct PendingIngest {
     let syncContinuation: CheckedContinuation<SyncIngestResult, Never>?
 }
 
+/// Performs the one capture JPEG encode on Swift's concurrent executor. The
+/// operation is injectable so tests can verify both scheduling and exact-byte
+/// handoff without asking ImageIO to produce a particular payload.
+nonisolated struct FrameJPEGEncoder: Sendable {
+    typealias Operation = @Sendable (CGImage, CGFloat) -> Data?
+
+    private let operation: Operation
+
+    init(operation: @escaping Operation = { image, quality in
+        ImageEncoder.jpegData(from: image, quality: quality)
+    }) {
+        self.operation = operation
+    }
+
+    @concurrent
+    func encode(_ image: CGImage, quality: CGFloat) async -> Data? {
+        guard !Task.isCancelled else { return nil }
+        let data = operation(image, quality)
+        guard !Task.isCancelled else { return nil }
+        return data
+    }
+}
+
 @MainActor
 class FrameBuffer {
     private var frames: [StoredFrame] = []
     private var frameLookup: [UUID: StoredFrame] = [:]
-    private let frameStore: FrameStore
+    private var timelineEntries: [TimelineEntry] = []
+    /// SQLite returns equal-time spans in durable insertion order. Preserve
+    /// that ordering in memory without adding another persisted column.
+    private var timelineOrderBySpanID: [UUID: Int] = [:]
+    private var nextTimelineOrder = 0
+    /// Background OCR is deliberately durable-only in hybrid mode. Volatile
+    /// payloads remain available for direct text grab and image viewing.
+    private var durablePhysicalFrameIDs: Set<UUID> = []
+    private var lastAcceptedObservation: [CaptureDisplayKey: AcceptedCaptureObservation] = [:]
+    private let captureInstrumentation: CapturePersistenceInstrumentation
+    private let diagnosticsLog: CaptureInstrumentationLogSink?
+    private let frameRepository: any FrameRepository
+    /// Effective source configuration fixed when this buffer was constructed.
+    /// Saved Settings changes are intentionally compared against this value.
+    let historyStorageMode: HistoryStorageMode
+    private let jpegEncoder: FrameJPEGEncoder
     private let retentionManager: RetentionManager
     private let blackFrameDetector = BlackFrameDetector.screenOff
     private lazy var ocrIndexingWorker = OCRIndexingWorker(
-        dependencies: .live(frameStore: frameStore, textCache: textCache)
+        dependencies: .live(frameRepository: frameRepository, textCache: textCache)
     )
     private var blackFrameFilterUntil: Date?
     private var saveOptions: FrameSaveOptions = .standard
@@ -101,10 +164,34 @@ class FrameBuffer {
     /// Incremented when starting each ingest drain and when clearing the buffer so a superseded drain cannot clear `ingestProcessorTask` or restart incorrectly.
     private var ingestProcessorSerial = 0
     private let maxIngestBacklog = 6
+    private static let captureInstrumentationDiagnosticInterval: TimeInterval = 300
+    private var lastCaptureInstrumentationDiagnosticAt: Date = .distantPast
     /// Bumped in `clear()` so in-flight ingest work can drop results and avoid racing a reset buffer.
     private var ingestGeneration = 0
+    /// Epoch for repository results that can change the in-memory projection.
+    /// Clear bypasses the reconciliation gate, so work admitted before the
+    /// reset must not apply stale effects after it returns.
+    private var repositoryEffectGeneration = 0
     /// While true, new captures are not queued and disk reset is in progress — avoids races with `frames.removeAll()` and ingest teardown.
     private var isBufferClearing = false
+    /// Pressure maintenance drains already-admitted ingest before repository
+    /// eviction, then blocks new admission until its effects are reconciled.
+    private var isMemoryPressureMaintenanceActive = false
+    private var isCaptureSessionActive = false
+    /// Desired coordinator state, kept separate from the currently open store
+    /// session so stop/start intent survives actor re-entrancy during clear.
+    private var captureSessionIntentActive = false
+    private var captureSessionIntentGeneration = 0
+    private var activeCaptureSession: CaptureSession?
+    private var pendingCaptureSessionClose: PendingCaptureSessionClose?
+    /// Orders capture lifecycle intent and repository session ownership. This
+    /// stays separate from effect reconciliation so clear can overtake a
+    /// suspended save without begin/end overtaking clear or each other.
+    private let captureSessionGate = CaptureReconciliationGate()
+    /// Serialises every repository mutation through application of its
+    /// source-neutral effects. No later maintenance/prune/session operation
+    /// can overtake a suspended mutation and resurrect stale timeline state.
+    private let repositoryReconciliationGate = CaptureReconciliationGate()
     private var activeClearOperationCount = 0
     private var clearWaiters: [(id: UUID, continuation: CheckedContinuation<ClearWaitResult, Never>)] = []
     private let searchTelemetry = SearchTelemetry.shared
@@ -116,6 +203,7 @@ class FrameBuffer {
     private let thumbnailCache = NSCache<NSUUID, CGImage>()
     private let fullImageCache = NSCache<NSUUID, CGImage>()
     private var inFlightFullImageLoads: [UUID: Task<CGImage, Error>] = [:]
+    private var decodedCacheGeneration = 0
 
     private static let fullImageCacheByteBudget: Int = 256 * 1024 * 1024
     private static let thumbnailCacheByteBudget: Int = 16 * 1024 * 1024
@@ -132,8 +220,34 @@ class FrameBuffer {
     /// `storageDirectory` is injectable so tests can point frame persistence
     /// and the OCR cache at a temporary directory. Production uses the
     /// default Application Support location.
-    init(retentionPolicy: RetentionPolicy, storageDirectory: URL? = nil) async throws {
-        self.frameStore = try FrameStore(directory: storageDirectory)
+    init(
+        retentionPolicy: RetentionPolicy,
+        storageDirectory: URL? = nil,
+        diagnosticsLog: CaptureInstrumentationLogSink?,
+        frameRepository: (any FrameRepository)? = nil,
+        historyStorageMode: HistoryStorageMode? = nil,
+        jpegEncoder: FrameJPEGEncoder = FrameJPEGEncoder()
+    ) async throws {
+        let instrumentation = CapturePersistenceInstrumentation()
+        self.captureInstrumentation = instrumentation
+        self.diagnosticsLog = diagnosticsLog
+        self.jpegEncoder = jpegEncoder
+        let resolvedHistoryStorageMode = historyStorageMode ?? HistoryStorageMode.launchDefault()
+        self.historyStorageMode = resolvedHistoryStorageMode
+        if let frameRepository {
+            self.frameRepository = frameRepository
+        } else {
+            let frameStore = try FrameStore(
+                directory: storageDirectory,
+                instrumentation: instrumentation
+            )
+            switch resolvedHistoryStorageMode {
+            case .allDisk:
+                self.frameRepository = DiskFrameRepository(frameStore: frameStore)
+            case .hybridRAM(let byteCap):
+                self.frameRepository = HybridFrameRepository(frameStore: frameStore, byteCap: byteCap)
+            }
+        }
         self.textCache = TextCache(directory: storageDirectory)
         self.retentionManager = RetentionManager(policy: retentionPolicy)
         // A single 5K BGRA frame is ~58 MB decoded. `countLimit` lets 24 of
@@ -144,40 +258,73 @@ class FrameBuffer {
         fullImageCache.countLimit = 12
         fullImageCache.totalCostLimit = Self.fullImageCacheByteBudget
 
+        // Reconcile disk and database before materialising the in-memory
+        // timeline, so rows whose full JPEG disappeared never become phantom
+        // frames for the rest of this launch.
+        try await self.frameRepository.cleanupOrphans()
+
         // Load persisted frames
         await loadPersistedFrames()
-
-        // Cleanup orphaned files
-        try await frameStore.cleanupOrphans()
 
         // Prune stale text cache entries
         let validIDs = Set(frames.map { $0.id })
         await textCache.prune(keepingFrameIDs: validIDs)
+        // The scheduled report is deliberately delayed; `flushCaches()` emits
+        // the one final aggregate line for short sessions.
+        lastCaptureInstrumentationDiagnosticAt = Date()
     }
 
     // MARK: - Capture
 
     func addFrame(_ cgImage: CGImage, timestamp: Date, display: DisplayInfo?) {
+        guard !isMemoryPressureMaintenanceActive,
+              isCaptureSessionActive || captureSessionIntentActive else { return }
+        captureInstrumentation.recordCapturedFrame(displayID: display?.id)
         // Skip black frames only during sleep/wake transitions.
         if shouldCheckBlackFrame(at: timestamp) && blackFrameDetector.isBlackFrame(cgImage) {
             captureLogger.debug("Skipping black frame")
             return
         }
 
-        enqueueIngest(
-            cgImage: cgImage,
-            timestamp: timestamp,
-            display: display,
-            syncContinuation: nil,
-            prioritiseSync: false
-        )
+        if isCaptureSessionActive {
+            enqueueIngest(
+                cgImage: cgImage,
+                timestamp: timestamp,
+                display: display,
+                syncContinuation: nil,
+                prioritiseSync: false
+            )
+        } else {
+            // A durable reopen after clear may fail transiently while capture
+            // intent remains live. Keep this observation and let it drive the
+            // next serialised reopen attempt instead of stranding capture.
+            Task { @MainActor [weak self] in
+                await self?.addFrameSyncAfterValidation(
+                    cgImage,
+                    timestamp: timestamp,
+                    display: display
+                )
+            }
+        }
     }
 
     /// Add a frame synchronously (awaits save completion). Used when opening overlay.
     func addFrameSync(_ cgImage: CGImage, timestamp: Date, display: DisplayInfo?) async {
+        guard !isMemoryPressureMaintenanceActive,
+              isCaptureSessionActive || captureSessionIntentActive || isBufferClearing else { return }
+        captureInstrumentation.recordCapturedFrame(displayID: display?.id)
         if shouldCheckBlackFrame(at: timestamp) && blackFrameDetector.isBlackFrame(cgImage) {
             return
         }
+
+        await addFrameSyncAfterValidation(cgImage, timestamp: timestamp, display: display)
+    }
+
+    private func addFrameSyncAfterValidation(
+        _ cgImage: CGImage,
+        timestamp: Date,
+        display: DisplayInfo?
+    ) async {
 
         while !Task.isCancelled {
             do {
@@ -188,7 +335,23 @@ class FrameBuffer {
                 return
             }
 
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, captureSessionIntentActive else { return }
+            if !isCaptureSessionActive {
+                do {
+                    try await recoverCaptureSessionIfNeeded(at: timestamp)
+                } catch is CancellationError {
+                    return
+                } catch {
+                    let detail = DiagnosticsLogFormat.describe(error)
+                    captureLogger.error("Failed to resume capture history after clear: \(detail, privacy: .public)")
+                    DiagnosticsLog.shared.log(
+                        "Capture",
+                        "Failed to resume capture history after clear: \(detail); retrying with a later frame"
+                    )
+                    return
+                }
+            }
+            guard !Task.isCancelled, isCaptureSessionActive else { return }
 
             let result = await withCheckedContinuation { continuation in
                 enqueueIngest(
@@ -217,8 +380,19 @@ class FrameBuffer {
         frames
     }
 
+    func getTimelineEntries() -> [TimelineEntry] {
+        timelineEntries
+    }
+
     func containsFrame(id: UUID) -> Bool {
         frameLookup[id] != nil
+    }
+
+    /// Physical payload IDs can be shared by more than one logical span. UI
+    /// snapshots therefore validate their span identity, not merely whether a
+    /// different span still references the same JPEG.
+    func containsTimelineSpan(id: UUID) -> Bool {
+        timelineEntries.contains { $0.span.id == id }
     }
 
     /// Return frames for the provided IDs in the same order as the IDs.
@@ -236,9 +410,39 @@ class FrameBuffer {
         return matchedFrames
     }
 
+    /// Return every logical span whose physical JPEG is one of `ids`.
+    ///
+    /// OCR remains keyed by the physical frame ID, while browsing is keyed by
+    /// the logical span ID. A physical payload may therefore produce more than
+    /// one result here. Results retain the durable timeline order rather than
+    /// the cache's relevance/recency ordering.
+    func timelineEntries(
+        matchingPhysicalFrameIDs ids: [UUID],
+        since cutoff: Date? = nil,
+        displayID: UUID? = nil,
+        includeLegacyFrames: Bool = false
+    ) -> [TimelineEntry] {
+        guard !ids.isEmpty else { return [] }
+        let matchedIDs = Set(ids)
+
+        return timelineEntries.filter { entry in
+            guard matchedIDs.contains(entry.frame.id) else { return false }
+            if let cutoff, timelineSpanBounds(for: entry).end < cutoff {
+                return false
+            }
+            if let displayID {
+                if let entryDisplayID = entry.span.displayID {
+                    return entryDisplayID == displayID
+                }
+                return includeLegacyFrames
+            }
+            return true
+        }
+    }
+
     func cacheOCRTextIfCurrent(_ text: String, for frame: StoredFrame) async -> Bool {
-        guard shouldContinueOCR(for: frame) else { return false }
-        await textCache.setText(text, for: frame.id, timestamp: frame.timestamp)
+        guard let currentTimestamp = currentOCRCacheTimestamp(for: frame) else { return false }
+        await textCache.setText(text, for: frame.id, timestamp: currentTimestamp)
 
         guard shouldContinueOCR(for: frame) else {
             await textCache.removeText(for: frame.id)
@@ -248,54 +452,93 @@ class FrameBuffer {
         return true
     }
 
-    /// Get frames with near-duplicates removed for smoother browsing.
-    /// The newest window keeps all stored frames so keyboard navigation tracks recent capture cadence.
-    /// When `displayID` is set, frames are filtered to that display. Pass
-    /// `includeLegacyFrames` for the primary-display slot so pre-multi-display
-    /// captures remain visible.
-    func getFilteredFrames(
+    /// Commits a generated layout using the physical frame's current logical
+    /// projection. OCR can begin before an exact-payload span extension; if no
+    /// cache row existed when that extension occurred, the queued frame's
+    /// timestamp is stale by the time generation finishes.
+    func cacheSearchLayoutIfCurrent(_ layout: SearchTextLayout, for frame: StoredFrame) async -> Bool {
+        guard let currentTimestamp = currentOCRCacheTimestamp(for: frame) else { return false }
+        await textCache.setSearchLayout(layout, for: frame.id, timestamp: currentTimestamp)
+
+        guard shouldContinueOCR(for: frame) else {
+            await textCache.removeText(for: frame.id)
+            return false
+        }
+
+        return true
+    }
+
+    /// Get logical timeline spans with near-duplicates removed for smoother
+    /// browsing. Recency and maximum age use the span's latest proved
+    /// observation, not the physical JPEG's original capture date.
+    func getFilteredTimelineEntries(
         hashThreshold: Int = 3,
         recentWindow: TimeInterval = 300,
         maximumAge: TimeInterval? = nil,
         displayID: UUID? = nil,
-        includeLegacyFrames: Bool = false
-    ) -> [StoredFrame] {
-        guard !frames.isEmpty else { return [] }
+        includeLegacyFrames: Bool = false,
+        now: Date = Date()
+    ) -> [TimelineEntry] {
+        filteredTimelineEntries(
+            from: timelineEntries,
+            hashThreshold: hashThreshold,
+            recentWindow: recentWindow,
+            maximumAge: maximumAge,
+            displayID: displayID,
+            includeLegacyFrames: includeLegacyFrames,
+            now: now
+        )
+    }
 
-        let now = Date()
-        var candidateFrames: [StoredFrame]
+    func filteredTimelineEntries(
+        from sourceEntries: [TimelineEntry],
+        hashThreshold: Int = 3,
+        recentWindow: TimeInterval = 300,
+        maximumAge: TimeInterval? = nil,
+        displayID: UUID? = nil,
+        includeLegacyFrames: Bool = false,
+        now: Date = Date()
+    ) -> [TimelineEntry] {
+        guard !sourceEntries.isEmpty else { return [] }
+
+        var candidates: [TimelineEntry]
         if let maximumAge {
             let cutoff = now.addingTimeInterval(-maximumAge)
-            candidateFrames = frames.filter { $0.timestamp >= cutoff }
+            candidates = sourceEntries.filter { timelineSpanBounds(for: $0).end >= cutoff }
         } else {
-            candidateFrames = frames
+            candidates = sourceEntries
         }
         if let displayID {
-            candidateFrames = candidateFrames.filter { frame in
-                if let frameDisplayID = frame.displayID {
-                    return frameDisplayID == displayID
+            candidates = candidates.filter { entry in
+                if let entryDisplayID = entry.span.displayID {
+                    return entryDisplayID == displayID
                 }
                 return includeLegacyFrames
             }
         }
 
-        var filtered: [StoredFrame] = []
-        var lastHash: UInt64?
+        var filtered: [TimelineEntry] = []
+        var lastHashByDisplay: [CaptureDisplayKey: UInt64] = [:]
 
-        for frame in candidateFrames {
-            let age = now.timeIntervalSince(frame.timestamp)
+        for entry in candidates {
+            let displayKey = CaptureDisplayKey(entry.span.displayID)
+            let age = now.timeIntervalSince(timelineSpanBounds(for: entry).end)
 
-            // Keep every stored frame in the recent window.
+            // Keep every logical span in the recent window.
             if age <= recentWindow {
-                filtered.append(frame)
-                lastHash = frame.hash
+                filtered.append(entry)
+                if entry.frame.hash == 0 {
+                    lastHashByDisplay.removeValue(forKey: displayKey)
+                } else {
+                    lastHashByDisplay[displayKey] = entry.frame.hash
+                }
                 continue
             }
 
             // Legacy frames without hash (hash=0) always kept, reset comparison chain
-            guard frame.hash != 0 else {
-                filtered.append(frame)
-                lastHash = nil
+            guard entry.frame.hash != 0 else {
+                filtered.append(entry)
+                lastHashByDisplay.removeValue(forKey: displayKey)
                 continue
             }
 
@@ -303,14 +546,37 @@ class FrameBuffer {
             let threshold = hashThreshold
 
             // Keep if different enough from last kept frame
-            let isDifferent = lastHash.map { PerceptualHash.hammingDistance(frame.hash, $0) > threshold } ?? true
+            let isDifferent = lastHashByDisplay[displayKey].map {
+                PerceptualHash.hammingDistance(entry.frame.hash, $0) > threshold
+            } ?? true
             if isDifferent {
-                filtered.append(frame)
-                lastHash = frame.hash
+                filtered.append(entry)
+                lastHashByDisplay[displayKey] = entry.frame.hash
             }
         }
 
         return filtered
+    }
+
+    /// Compatibility projection for callers that still consume physical
+    /// frames. New timeline UI should use `getFilteredTimelineEntries` so span
+    /// identity and coverage are not lost.
+    func getFilteredFrames(
+        hashThreshold: Int = 3,
+        recentWindow: TimeInterval = 300,
+        maximumAge: TimeInterval? = nil,
+        displayID: UUID? = nil,
+        includeLegacyFrames: Bool = false,
+        now: Date = Date()
+    ) -> [StoredFrame] {
+        getFilteredTimelineEntries(
+            hashThreshold: hashThreshold,
+            recentWindow: recentWindow,
+            maximumAge: maximumAge,
+            displayID: displayID,
+            includeLegacyFrames: includeLegacyFrames,
+            now: now
+        ).map(Self.browsingFrame(from:))
     }
 
     /// Displays that have at least one frame in the buffer. Ordered by most
@@ -337,12 +603,51 @@ class FrameBuffer {
     }
 
     func searchIndexStatus() async -> SearchIndexStatus {
-        let indexedFrames = min(await textCache.count, frames.count)
+        let physicalFrameCount = Set(timelineEntries.map(\.frame.id)).count
+        let indexedFrames = min(await textCache.count, physicalFrameCount)
         return SearchIndexStatus(
-            totalFrames: frames.count,
+            totalFrames: physicalFrameCount,
             indexedFrames: indexedFrames,
             queuedFrames: ocrFrameQueue.count
         )
+    }
+
+    /// The overlay holds this lease for its complete visible snapshot. Disk
+    /// repositories return a no-op lease; hybrid repositories pin only the
+    /// volatile payload IDs that are currently present.
+    func acquirePayloadLease(for frames: [StoredFrame]) async -> any FrameRepositoryPayloadLease {
+        await frameRepository.acquirePayloadLease(for: Set(frames.map(\.id)))
+    }
+
+    /// The overlay can switch displays after it appears, so lease the entire
+    /// source timeline rather than only its initially filtered display.
+    func acquireCurrentTimelineSnapshotLease() async -> FrameRepositoryLeasedTimelineSnapshot {
+        await frameRepository.acquireCurrentTimelineSnapshotLease()
+    }
+
+    func payloadResolutionStatistics() async -> FramePayloadResolutionStatistics {
+        await frameRepository.payloadResolutionStatistics()
+    }
+
+    /// Releases a source snapshot and applies any deferred RAM trim before the
+    /// overlay is allowed to resume capture.
+    @discardableResult
+    func releasePayloadLease(
+        _ lease: any FrameRepositoryPayloadLease
+    ) async -> FrameRepositoryMaintenanceResult {
+        let generation = repositoryEffectGeneration
+        return await repositoryReconciliationGate.withPermitIgnoringCancellation {
+            let result = await lease.release()
+            guard generation == self.repositoryEffectGeneration else { return result }
+            await self.applyRepositoryMaintenance(result)
+            return result
+        }
+    }
+
+    func applyRepositoryMaintenance(
+        _ result: FrameRepositoryMaintenanceResult
+    ) async {
+        await applyRepositoryEffects(result.effects)
     }
 
     /// Load full-resolution image from disk
@@ -369,7 +674,7 @@ class FrameBuffer {
             if let image {
                 sourceImage = image
             } else {
-                sourceImage = try await frameStore.loadFullImage(id: frame.id)
+                sourceImage = try await frameRepository.loadFullImage(id: frame.id)
             }
 
             guard !Task.isCancelled else { return nil }
@@ -377,9 +682,7 @@ class FrameBuffer {
                   !layout.isEmpty else {
                 return nil
             }
-            guard shouldContinueOCR(for: frame) else { return nil }
-
-            await textCache.setSearchLayout(layout, for: frame.id, timestamp: frame.timestamp)
+            guard await cacheSearchLayoutIfCurrent(layout, for: frame) else { return nil }
             return layout
         } catch {
             return nil
@@ -388,15 +691,18 @@ class FrameBuffer {
 
     /// Copy the frame's stored JPEG (full original pixel dimensions) to the
     /// user's chosen screenshots location. Returns the destination URL.
-    func saveFrameToScreenshotsLocation(_ frame: StoredFrame) async throws -> URL {
-        try await frameStore.copyFrameToScreenshotsLocation(id: frame.id, timestamp: frame.timestamp)
+    func saveFrameToScreenshotsLocation(
+        _ frame: StoredFrame,
+        timestamp: Date? = nil
+    ) async throws -> URL {
+        try await frameRepository.exportFrame(id: frame.id, timestamp: timestamp ?? frame.timestamp)
     }
 
     /// Encode an in-memory cropped CGImage as JPEG and save it to the user's
     /// chosen screenshots location. Used for screenshot-region drags from
     /// the rewind overlay.
     func saveCroppedImageToScreenshotsLocation(_ image: CGImage, timestamp: Date = Date()) async throws -> URL {
-        try await frameStore.saveCroppedImageToScreenshotsLocation(image: image, timestamp: timestamp)
+        try await frameRepository.exportCroppedImage(image, timestamp: timestamp)
     }
 
     /// Get thumbnail, with caching
@@ -407,17 +713,136 @@ class FrameBuffer {
             return cached
         }
 
-        guard let cgImage = await frameStore.loadThumbnail(id: frame.id) else {
+        let generation = decodedCacheGeneration
+        guard let cgImage = await frameRepository.loadThumbnail(id: frame.id) else {
             return nil
         }
 
-        thumbnailCache.setObject(cgImage, forKey: key, cost: Self.byteCost(of: cgImage))
+        if generation == decodedCacheGeneration, frameLookup[frame.id] != nil {
+            thumbnailCache.setObject(cgImage, forKey: key, cost: Self.byteCost(of: cgImage))
+        }
         return cgImage
     }
 
     // MARK: - Management
 
+    @discardableResult
+    func beginCaptureSession(at startedAt: Date = Date()) async throws -> CaptureSession {
+        try await captureSessionGate.withPermitIgnoringCancellation {
+            try await self.beginCaptureSessionWithLifecyclePermit(at: startedAt)
+        }
+    }
+
+    private func beginCaptureSessionWithLifecyclePermit(
+        at startedAt: Date
+    ) async throws -> CaptureSession {
+        guard !captureSessionIntentActive else {
+            throw FrameBufferCaptureSessionError.alreadyActive(activeCaptureSession?.id)
+        }
+        captureSessionIntentGeneration += 1
+        let generation = captureSessionIntentGeneration
+        let repositoryGeneration = repositoryEffectGeneration
+        captureSessionIntentActive = true
+        do {
+            return try await repositoryReconciliationGate.withPermitIgnoringCancellation {
+                guard repositoryGeneration == self.repositoryEffectGeneration else {
+                    throw CancellationError()
+                }
+                try await self.retryPendingCaptureSessionCloseIfNeeded(
+                    repositoryGeneration: repositoryGeneration
+                )
+                guard repositoryGeneration == self.repositoryEffectGeneration else {
+                    throw CancellationError()
+                }
+                guard self.activeCaptureSession == nil else {
+                    throw FrameBufferCaptureSessionError.alreadyActive(
+                        self.activeCaptureSession?.id
+                    )
+                }
+                let session = try await self.frameRepository.beginCaptureSession(at: startedAt)
+                guard repositoryGeneration == self.repositoryEffectGeneration else {
+                    throw CancellationError()
+                }
+                self.activeCaptureSession = session
+                if self.captureSessionIntentActive,
+                   self.captureSessionIntentGeneration == generation {
+                    self.isCaptureSessionActive = true
+                }
+                return session
+            }
+        } catch {
+            if captureSessionIntentGeneration == generation {
+                captureSessionIntentActive = false
+                isCaptureSessionActive = false
+            }
+            throw error
+        }
+    }
+
+    /// Stops accepting new captures, drains every already accepted ingest, and
+    /// only then closes the durable session at its last committed observation.
+    func endCaptureSession(reason: CaptureSessionEndReason) async throws {
+        // Intent is an immediate coordinator signal. The lifecycle gate only
+        // orders repository bodies; a suspended clear must see this stop and
+        // refrain from reopening a session.
+        captureSessionIntentGeneration += 1
+        captureSessionIntentActive = false
+        isCaptureSessionActive = false
+        try await captureSessionGate.withPermitIgnoringCancellation {
+            try await self.endCaptureSessionWithLifecyclePermit(reason: reason)
+        }
+    }
+
+    private func endCaptureSessionWithLifecyclePermit(
+        reason: CaptureSessionEndReason
+    ) async throws {
+        let repositoryGeneration = repositoryEffectGeneration
+        while let ingestProcessorTask {
+            await ingestProcessorTask.value
+        }
+        try await repositoryReconciliationGate.withPermitIgnoringCancellation {
+            guard repositoryGeneration == self.repositoryEffectGeneration else { return }
+            try await self.retryPendingCaptureSessionCloseIfNeeded(
+                repositoryGeneration: repositoryGeneration
+            )
+            guard repositoryGeneration == self.repositoryEffectGeneration else { return }
+            guard let session = self.activeCaptureSession else { return }
+            do {
+                let effects = try await self.frameRepository.endCaptureSession(
+                    id: session.id,
+                    reason: reason
+                )
+                guard repositoryGeneration == self.repositoryEffectGeneration else { return }
+                await self.applyRepositoryEffects(effects)
+                if self.activeCaptureSession?.id == session.id {
+                    self.activeCaptureSession = nil
+                }
+            } catch let failure as DurablePromotionFailure {
+                self.captureInstrumentation.recordPersistedJPEG(receipt: failure.writeReceipt)
+                self.pendingCaptureSessionClose = PendingCaptureSessionClose(
+                    session: session,
+                    reason: reason
+                )
+                throw failure
+            } catch {
+                self.pendingCaptureSessionClose = PendingCaptureSessionClose(
+                    session: session,
+                    reason: reason
+                )
+                throw error
+            }
+        }
+    }
+
     func clear() async throws {
+        try await captureSessionGate.withPermitIgnoringCancellation {
+            try await self.clearWithLifecyclePermit()
+        }
+    }
+
+    private func clearWithLifecyclePermit() async throws {
+        let clearIntentGeneration = captureSessionIntentGeneration
+        isCaptureSessionActive = false
         activeClearOperationCount += 1
         isBufferClearing = true
         defer {
@@ -442,21 +867,176 @@ class FrameBuffer {
             resume.resume(returning: .retryAfterClear)
         }
         cancelBackgroundOCRIndexing(clearQueue: true)
-        try await frameStore.clear()
+        var repositoryWasCleared = false
+        var clearOperationError: Error?
+        do {
+            // Clear is the epoch boundary and must not queue behind an
+            // uncooperative operation holding the coordinator gate.
+            try await frameRepository.clear()
+            repositoryWasCleared = true
+            repositoryEffectGeneration += 1
+            activeCaptureSession = nil
+            pendingCaptureSessionClose = nil
+            await resetInMemoryAfterRepositoryClear()
+            if captureSessionIntentActive,
+               captureSessionIntentGeneration == clearIntentGeneration {
+                do {
+                    let session = try await frameRepository.beginCaptureSession(at: Date())
+                    activeCaptureSession = session
+                    if captureSessionIntentActive,
+                       captureSessionIntentGeneration == clearIntentGeneration {
+                        isCaptureSessionActive = true
+                    }
+                } catch {
+                    clearOperationError = error
+                }
+            }
+        } catch {
+            clearOperationError = error
+            if !repositoryWasCleared {
+                if activeCaptureSession != nil,
+                   captureSessionIntentActive,
+                   captureSessionIntentGeneration == clearIntentGeneration {
+                    isCaptureSessionActive = true
+                }
+                throw error
+            }
+        }
+        if let clearOperationError {
+            throw FrameBufferClearError.captureResumeFailed(
+                DiagnosticsLogFormat.describe(clearOperationError)
+            )
+        }
+    }
+
+    private func resetInMemoryAfterRepositoryClear() async {
+        captureInstrumentation.reset()
+        lastCaptureInstrumentationDiagnosticAt = Date()
+        timelineEntries.removeAll()
+        timelineOrderBySpanID.removeAll()
+        nextTimelineOrder = 0
+        durablePhysicalFrameIDs.removeAll()
+        lastAcceptedObservation.removeAll()
         frames.removeAll()
         frameLookup.removeAll()
+        decodedCacheGeneration += 1
         thumbnailCache.removeAllObjects()
         fullImageCache.removeAllObjects()
+        for task in inFlightFullImageLoads.values {
+            task.cancel()
+        }
         inFlightFullImageLoads.removeAll()
         await textCache.clear()
     }
 
+    private func recoverCaptureSessionIfNeeded(at startedAt: Date) async throws {
+        let generation = captureSessionIntentGeneration
+        let repositoryGeneration = repositoryEffectGeneration
+        try await repositoryReconciliationGate.withPermitIgnoringCancellation {
+            guard self.captureSessionIntentActive,
+                  self.captureSessionIntentGeneration == generation,
+                  self.repositoryEffectGeneration == repositoryGeneration else {
+                throw CancellationError()
+            }
+            try await self.retryPendingCaptureSessionCloseIfNeeded(
+                repositoryGeneration: repositoryGeneration
+            )
+            guard self.repositoryEffectGeneration == repositoryGeneration else {
+                throw CancellationError()
+            }
+            if self.activeCaptureSession == nil {
+                let session = try await self.frameRepository.beginCaptureSession(at: startedAt)
+                guard self.repositoryEffectGeneration == repositoryGeneration else {
+                    throw CancellationError()
+                }
+                self.activeCaptureSession = session
+            }
+            guard self.captureSessionIntentActive,
+                  self.captureSessionIntentGeneration == generation else {
+                throw CancellationError()
+            }
+            self.isCaptureSessionActive = true
+        }
+    }
+
+    private func retryPendingCaptureSessionCloseIfNeeded(
+        repositoryGeneration: Int? = nil
+    ) async throws {
+        if let repositoryGeneration,
+           repositoryGeneration != self.repositoryEffectGeneration {
+            return
+        }
+        guard let pendingCaptureSessionClose else { return }
+        let effects: FrameRepositoryEffects
+        do {
+            effects = try await frameRepository.endCaptureSession(
+                id: pendingCaptureSessionClose.session.id,
+                reason: pendingCaptureSessionClose.reason
+            )
+        } catch let failure as DurablePromotionFailure {
+            captureInstrumentation.recordPersistedJPEG(receipt: failure.writeReceipt)
+            throw failure
+        }
+        if let repositoryGeneration,
+           repositoryGeneration != self.repositoryEffectGeneration {
+            return
+        }
+        await applyRepositoryEffects(effects)
+        self.pendingCaptureSessionClose = nil
+        if activeCaptureSession?.id == pendingCaptureSessionClose.session.id {
+            activeCaptureSession = nil
+        }
+    }
+
     func totalStorageSize() async -> Int64 {
-        await frameStore.totalStorageSize()
+        await frameRepository.totalStorageSize()
     }
 
     func storageStatistics() async -> FrameStorageStatistics {
-        await frameStore.storageStatistics()
+        await frameRepository.storageStatistics()
+    }
+
+    /// Performs RAM-only pressure maintenance. The critical path also sheds
+    /// decoded and queued in-memory work, but never flushes or prunes disk and
+    /// never clears the persisted OCR text cache.
+    @discardableResult
+    func respondToMemoryPressure(
+        _ level: FrameMemoryPressureLevel
+    ) async -> FrameRepositoryMaintenanceResult {
+        guard !isMemoryPressureMaintenanceActive else { return .noOp }
+        isMemoryPressureMaintenanceActive = true
+        defer { isMemoryPressureMaintenanceActive = false }
+
+        while let ingestProcessorTask {
+            await ingestProcessorTask.value
+        }
+        let repositoryGeneration = repositoryEffectGeneration
+        let result = await repositoryReconciliationGate.withPermitIgnoringCancellation {
+            guard repositoryGeneration == self.repositoryEffectGeneration else {
+                return FrameRepositoryMaintenanceResult.noOp
+            }
+            let result = await self.frameRepository.respondToMemoryPressure(level)
+            guard repositoryGeneration == self.repositoryEffectGeneration else { return result }
+            await self.applyRepositoryMaintenance(result)
+            return result
+        }
+        guard level == .critical else { return result }
+
+        cancelBackgroundOCRIndexing(clearQueue: true)
+        decodedCacheGeneration += 1
+        thumbnailCache.removeAllObjects()
+        fullImageCache.removeAllObjects()
+        for task in inFlightFullImageLoads.values {
+            task.cancel()
+        }
+        inFlightFullImageLoads.removeAll()
+        return result
+    }
+
+    /// Capture/persistence measurements for the staged storage redesign. This
+    /// is intentionally read-only and does not change frame handling.
+    func captureInstrumentationSnapshot() -> CapturePersistenceInstrumentationSnapshot {
+        captureInstrumentation.currentSnapshot()
     }
 
     func updateSaveOptions(_ options: FrameSaveOptions, duplicatePolicy: DuplicateFramePolicy) {
@@ -486,26 +1066,48 @@ class FrameBuffer {
         while let ingestProcessorTask {
             await ingestProcessorTask.value
         }
-        await frameStore.flushManifest()
+        do {
+            let repositoryGeneration = repositoryEffectGeneration
+            try await repositoryReconciliationGate.withPermitIgnoringCancellation {
+                guard repositoryGeneration == self.repositoryEffectGeneration else { return }
+                try await self.retryPendingCaptureSessionCloseIfNeeded(
+                    repositoryGeneration: repositoryGeneration
+                )
+            }
+        } catch {
+            let detail = DiagnosticsLogFormat.describe(error)
+            captureLogger.error("Failed to retry capture history close while flushing: \(detail, privacy: .public)")
+            DiagnosticsLog.shared.log("Capture", "Failed to retry capture history close while flushing: \(detail)")
+        }
+        await frameRepository.flush()
+        maybeLogCaptureInstrumentation(force: true)
     }
 
     // MARK: - Private
 
     private func loadPersistedFrames() async {
-        let metadata = await frameStore.getAllMetadata()
-        let persistedFrames = metadata
-            .sorted { $0.timestamp < $1.timestamp }
-            .map {
-                StoredFrame(
-                    id: $0.id,
-                    timestamp: $0.timestamp,
-                    hash: $0.hash,
-                    displayID: $0.displayID,
-                    displayName: $0.displayName
-                )
+        timelineEntries = await frameRepository.orderedTimeline()
+        timelineOrderBySpanID = Dictionary(
+            uniqueKeysWithValues: timelineEntries.enumerated().map { ($0.element.span.id, $0.offset) }
+        )
+        nextTimelineOrder = timelineEntries.count
+        durablePhysicalFrameIDs = Set(timelineEntries.map(\.frame.id))
+        sortTimelineEntries()
+        rebuildBrowsingProjection()
+        rebuildAcceptedObservationBaselines()
+
+        // OCR is still keyed by the physical payload. Refresh only its recency
+        // metadata from logical spans; no image decode or recognition occurs.
+        var latestObservationByFrameID: [UUID: Date] = [:]
+        for entry in timelineEntries {
+            let timestamp = timelineSpanBounds(for: entry).end
+            if timestamp > (latestObservationByFrameID[entry.frame.id] ?? .distantPast) {
+                latestObservationByFrameID[entry.frame.id] = timestamp
             }
-        frames = persistedFrames
-        frameLookup = Dictionary(uniqueKeysWithValues: persistedFrames.map { ($0.id, $0) })
+        }
+        for (frameID, timestamp) in latestObservationByFrameID {
+            await textCache.updateTimestamp(for: frameID, timestamp: timestamp)
+        }
     }
 
     func enableBlackFrameFilter(for seconds: TimeInterval) {
@@ -550,19 +1152,24 @@ class FrameBuffer {
             return try await inFlight.value
         }
 
-        let store = frameStore
+        let generation = decodedCacheGeneration
+        let repository = frameRepository
         let loadTask = Task(priority: .userInitiated) {
-            try await store.loadFullImage(id: frame.id)
+            try await repository.loadFullImage(id: frame.id)
         }
         inFlightFullImageLoads[frame.id] = loadTask
 
         do {
             let image = try await loadTask.value
-            fullImageCache.setObject(image, forKey: key, cost: Self.byteCost(of: image))
-            inFlightFullImageLoads.removeValue(forKey: frame.id)
+            if generation == decodedCacheGeneration, frameLookup[frame.id] != nil {
+                fullImageCache.setObject(image, forKey: key, cost: Self.byteCost(of: image))
+                inFlightFullImageLoads.removeValue(forKey: frame.id)
+            }
             return image
         } catch {
-            inFlightFullImageLoads.removeValue(forKey: frame.id)
+            if generation == decodedCacheGeneration {
+                inFlightFullImageLoads.removeValue(forKey: frame.id)
+            }
             throw error
         }
     }
@@ -578,6 +1185,10 @@ class FrameBuffer {
             syncContinuation?.resume(returning: .retryAfterClear)
             return
         }
+        if isMemoryPressureMaintenanceActive {
+            syncContinuation?.resume(returning: .completed)
+            return
+        }
 
         let pending = PendingIngest(
             cgImage: cgImage,
@@ -589,20 +1200,38 @@ class FrameBuffer {
         )
 
         if prioritiseSync {
+            let droppedAsyncIngests = ingestQueue.reduce(into: 0) { count, pending in
+                if pending.syncContinuation == nil {
+                    count += 1
+                }
+            }
             ingestQueue.removeAll { $0.syncContinuation == nil }
+            captureInstrumentation.recordDroppedAsyncIngests(
+                droppedAsyncIngests,
+                reason: .syncPriority
+            )
         }
 
         ingestQueue.append(pending)
-        trimIngestQueueIfNeeded()
+        captureInstrumentation.recordPreTrimIngestQueueDepth(ingestQueue.count)
+        let droppedForBacklogLimit = trimIngestQueueIfNeeded()
+        captureInstrumentation.recordDroppedAsyncIngests(
+            droppedForBacklogLimit,
+            reason: .backlogLimit
+        )
+        captureInstrumentation.recordIngestQueueDepth(ingestQueue.count)
         startIngestProcessorIfNeeded()
     }
 
     /// Drops oldest async-only pending captures until at most `maxIngestBacklog` remain.
-    private func trimIngestQueueIfNeeded() {
+    private func trimIngestQueueIfNeeded() -> Int {
+        var droppedCount = 0
         while ingestQueue.count > maxIngestBacklog,
               let dropIndex = ingestQueue.firstIndex(where: { $0.syncContinuation == nil }) {
             ingestQueue.remove(at: dropIndex)
+            droppedCount += 1
         }
+        return droppedCount
     }
 
     private func startIngestProcessorIfNeeded() {
@@ -634,20 +1263,40 @@ class FrameBuffer {
     }
 
     private func processHashedIngest(_ work: PendingIngest, hash: UInt64) async {
-        let result: SyncIngestResult
-        if !matchesIngestGeneration(work.generation) {
-            result = .retryAfterClear
-        } else {
-            result = await persistIngestedFrame(
-                cgImage: work.cgImage,
-                timestamp: work.timestamp,
-                hash: hash,
-                displayID: work.displayID,
-                displayName: work.displayName,
-                ingestGeneration: work.generation
-            )
+        guard matchesIngestGeneration(work.generation) else {
+            work.syncContinuation?.resume(returning: .retryAfterClear)
+            return
         }
+        captureInstrumentation.recordPerceptualObservation(
+            hash: hash,
+            timestamp: work.timestamp,
+            displayID: work.displayID
+        )
+        let result = await persistIngestedFrame(
+            cgImage: work.cgImage,
+            timestamp: work.timestamp,
+            hash: hash,
+            displayID: work.displayID,
+            displayName: work.displayName,
+            ingestGeneration: work.generation
+        )
+        maybeLogCaptureInstrumentation()
         work.syncContinuation?.resume(returning: result)
+    }
+
+    private func maybeLogCaptureInstrumentation(force: Bool = false) {
+        guard let diagnosticsLog else { return }
+
+        let now = Date()
+        guard force || now.timeIntervalSince(lastCaptureInstrumentationDiagnosticAt) >= Self.captureInstrumentationDiagnosticInterval else {
+            return
+        }
+
+        lastCaptureInstrumentationDiagnosticAt = now
+        diagnosticsLog.log(
+            "CaptureMetrics",
+            CapturePersistenceInstrumentationDiagnosticsFormat.line(captureInstrumentation.currentSnapshot())
+        )
     }
 
     private func matchesIngestGeneration(_ generation: Int) -> Bool {
@@ -663,33 +1312,94 @@ class FrameBuffer {
         ingestGeneration generation: Int
     ) async -> SyncIngestResult {
         guard generation == ingestGeneration else { return .retryAfterClear }
-        guard shouldStoreFrame(hash: hash, timestamp: timestamp, displayID: displayID) else { return .completed }
+        let admissionMode = await frameRepository.captureAdmissionMode()
+        guard admissionMode == .hybridEveryCapture
+            || shouldStoreFrame(hash: hash, timestamp: timestamp, displayID: displayID) else {
+            return .completed
+        }
         do {
-            let metadata = try await frameStore.saveFrame(
-                cgImage,
+            let frame = StoredFrame(
+                id: UUID(),
                 timestamp: timestamp,
                 hash: hash,
                 displayID: displayID,
-                displayName: displayName,
-                options: saveOptions
+                displayName: displayName
             )
-            guard generation == ingestGeneration else {
-                try? await frameStore.pruneFrames(ids: [metadata.id])
+            let quality = saveOptions.quality
+            guard let jpegData = await jpegEncoder.encode(cgImage, quality: quality) else {
+                guard !Task.isCancelled, generation == ingestGeneration else {
+                    return .retryAfterClear
+                }
+                throw FrameStoreError.imageEncodingFailed
+            }
+            guard !Task.isCancelled, generation == ingestGeneration else {
                 return .retryAfterClear
             }
-            let frame = StoredFrame(
-                id: metadata.id,
-                timestamp: metadata.timestamp,
-                hash: metadata.hash,
-                displayID: metadata.displayID,
-                displayName: metadata.displayName
-            )
-            recordStoredFrame(frame)
-            enqueueFrameForBackgroundOCR(frame)
+            captureInstrumentation.recordEncodedJPEG(jpegData, displayID: displayID)
+            let repositoryGeneration = repositoryEffectGeneration
+            let reconciliationResult = try await repositoryReconciliationGate.withPermitIgnoringCancellation {
+                guard generation == self.ingestGeneration,
+                      repositoryGeneration == self.repositoryEffectGeneration else {
+                    return SyncIngestResult.retryAfterClear
+                }
+                let saveResult = try await self.frameRepository.recordEncodedCapture(
+                    frame,
+                    jpegData: jpegData
+                )
+                guard repositoryGeneration == self.repositoryEffectGeneration else {
+                    return SyncIngestResult.retryAfterClear
+                }
+                if saveResult.effects.persistenceEvents.isEmpty {
+                    // Compatibility for injected repositories which still return
+                    // the pre-effects shape. Production repositories emit an
+                    // explicit event for every accepted operation.
+                    self.captureInstrumentation.recordRepositorySaveOutcome(
+                        saveResult.outcome,
+                        jpegData: jpegData,
+                        displayID: displayID
+                    )
+                    await self.applyRepositoryInvalidation(saveResult.invalidation)
+                    switch saveResult.mutation {
+                    case .none:
+                        break
+                    case .inserted(let entry):
+                        self.recordTimelineEntry(entry)
+                        if saveResult.outcome.disposition == .durableFrame,
+                           self.durablePhysicalFrameIDs.insert(entry.frame.id).inserted {
+                            self.enqueueFrameForBackgroundOCR(entry.frame)
+                        }
+                    case .extended(let span):
+                        self.recordExtendedSpan(span)
+                        if self.durablePhysicalFrameIDs.contains(span.frameID) {
+                            await self.textCache.updateTimestamp(
+                                for: span.frameID,
+                                timestamp: max(span.startedAt, span.observedThroughAt)
+                            )
+                        }
+                    }
+                } else {
+                    await self.applyRepositoryEffects(saveResult.effects)
+                }
+                self.recordAcceptedObservation(
+                    hash: frame.hash,
+                    timestamp: frame.timestamp,
+                    displayID: frame.displayID
+                )
+                return SyncIngestResult.completed
+            }
+            if case .retryAfterClear = reconciliationResult {
+                return reconciliationResult
+            }
             await pruneIfNeeded()
             return .completed
         } catch is CancellationError {
             return .retryAfterClear
+        } catch let failure as DurablePromotionFailure {
+            captureInstrumentation.recordPersistedJPEG(receipt: failure.writeReceipt)
+            captureLogger.error(
+                "Durable promotion will retry: \(failure.underlyingDescription, privacy: .public)"
+            )
+            return .completed
         } catch {
             captureLogger.error("Failed to save frame: \(error.localizedDescription, privacy: .public)")
             return .completed
@@ -709,65 +1419,248 @@ class FrameBuffer {
         }
         lastPruneCheck = now
 
-        let toPrune = retentionManager.framesToPrune(frames: frames, currentTime: now)
-        guard !toPrune.isEmpty else { return }
+        let retentionFrames = timelineEntries.map { entry in
+            StoredFrame(
+                id: entry.span.id,
+                timestamp: timelineSpanBounds(for: entry).end,
+                hash: entry.frame.hash,
+                displayID: entry.span.displayID,
+                displayName: entry.span.displayName
+            )
+        }.sorted { $0.timestamp < $1.timestamp }
+        let spanIDsToPrune = retentionManager.framesToPrune(
+            frames: retentionFrames,
+            currentTime: now
+        )
+        guard !spanIDsToPrune.isEmpty else { return }
 
-        ocrPruningFrameIDs.formUnion(toPrune)
+        let candidateFrameIDs = Set(
+            timelineEntries.lazy
+                .filter { spanIDsToPrune.contains($0.span.id) }
+                .map(\.frame.id)
+        )
+        ocrPruningFrameIDs.formUnion(candidateFrameIDs)
         defer {
-            ocrPruningFrameIDs.subtract(toPrune)
+            // Physical assets retained by another span may resume OCR. IDs
+            // removed from history are harmless to unblock because the
+            // membership check remains authoritative.
+            ocrPruningFrameIDs.subtract(candidateFrameIDs)
         }
 
         do {
-            try await frameStore.pruneFrames(ids: toPrune)
-            frames.removeAll { toPrune.contains($0.id) }
-            for id in toPrune {
-                frameLookup.removeValue(forKey: id)
+            let repositoryGeneration = repositoryEffectGeneration
+            try await repositoryReconciliationGate.withPermitIgnoringCancellation {
+                guard repositoryGeneration == self.repositoryEffectGeneration else { return }
+                let invalidation = try await self.frameRepository.pruneSpans(ids: spanIDsToPrune)
+                guard repositoryGeneration == self.repositoryEffectGeneration else { return }
+                await self.applyRepositoryInvalidation(invalidation)
+                let validIDs = Set(self.timelineEntries.map(\.frame.id))
+                await self.textCache.prune(keepingFrameIDs: validIDs)
             }
-            removeQueuedOCRFrames(ids: toPrune)
-            let validIDs = Set(frames.map { $0.id })
-            await textCache.prune(keepingFrameIDs: validIDs)
-            captureLogger.info("Pruned \(toPrune.count, privacy: .public) frames, \(self.frames.count, privacy: .public) remaining")
+            captureLogger.info("Pruned \(spanIDsToPrune.count, privacy: .public) spans, \(self.frames.count, privacy: .public) remaining")
         } catch {
             captureLogger.error("Failed to prune frames: \(error.localizedDescription, privacy: .public)")
         }
     }
 
     private func shouldStoreFrame(hash: UInt64, timestamp: Date, displayID: UUID?) -> Bool {
-        let insertionIndex = frameInsertionIndex(for: timestamp)
-        var index = insertionIndex - 1
-        while index >= 0 {
-            let candidate = frames[index]
-            if candidate.displayID == displayID {
-                guard candidate.hash != 0 else { return true }
-                let timeSinceLast = timestamp.timeIntervalSince(candidate.timestamp)
-                guard timeSinceLast < duplicatePolicy.minimumSpacing else { return true }
-                let distance = PerceptualHash.hammingDistance(hash, candidate.hash)
-                return distance > duplicatePolicy.hashThreshold
-            }
-            index -= 1
+        guard let candidate = lastAcceptedObservation[CaptureDisplayKey(displayID)] else {
+            return true
         }
-        return true
+        guard candidate.hash != 0 else { return true }
+        let timeSinceLast = timestamp.timeIntervalSince(candidate.timestamp)
+        guard timeSinceLast < duplicatePolicy.minimumSpacing else { return true }
+        let distance = PerceptualHash.hammingDistance(hash, candidate.hash)
+        return distance > duplicatePolicy.hashThreshold
     }
 
-    private func frameInsertionIndex(for timestamp: Date) -> Int {
-        var low = 0
-        var high = frames.count
+    private func recordTimelineEntry(_ entry: TimelineEntry) {
+        if timelineOrderBySpanID[entry.span.id] == nil {
+            timelineOrderBySpanID[entry.span.id] = nextTimelineOrder
+            nextTimelineOrder += 1
+        }
+        timelineEntries.append(entry)
+        sortTimelineEntries()
+        rebuildBrowsingProjection()
+    }
 
-        while low < high {
-            let mid = (low + high) / 2
-            if frames[mid].timestamp <= timestamp {
-                low = mid + 1
+    private func recordExtendedSpan(_ span: TimelineSpan) {
+        guard let index = timelineEntries.firstIndex(where: { $0.span.id == span.id }) else {
+            return
+        }
+        timelineEntries[index] = TimelineEntry(span: span, frame: timelineEntries[index].frame)
+        rebuildBrowsingProjection()
+    }
+
+    /// Applies absolute, source-neutral repository effects. A compound save
+    /// can upsert more than one span; durable transitions are fenced by a set
+    /// so OCR is enqueued once even if an idempotent retry returns the same
+    /// canonical entry.
+    private func applyRepositoryEffects(_ effects: FrameRepositoryEffects) async {
+        captureInstrumentation.recordRepositoryEffects(effects)
+        await applyRepositoryInvalidation(effects.invalidation)
+
+        var timelineChanged = false
+        for entry in effects.timelineUpserts {
+            if let index = timelineEntries.firstIndex(where: { $0.span.id == entry.span.id }) {
+                timelineEntries[index] = entry
             } else {
-                high = mid
+                timelineOrderBySpanID[entry.span.id] = nextTimelineOrder
+                nextTimelineOrder += 1
+                timelineEntries.append(entry)
+            }
+            timelineChanged = true
+        }
+        if timelineChanged {
+            sortTimelineEntries()
+            rebuildBrowsingProjection()
+            rebuildAcceptedObservationBaselines()
+        }
+
+        var newlyDurableToEnqueue: [StoredFrame] = []
+        for entry in effects.newlyDurableEntries {
+            if durablePhysicalFrameIDs.insert(entry.frame.id).inserted {
+                newlyDurableToEnqueue.append(entry.frame)
             }
         }
 
-        return low
+        var cacheTimestamps: [UUID: Date] = [:]
+        for event in effects.persistenceEvents {
+            let frameID: UUID?
+            switch event {
+            case .durableAnchor(
+                reason: _,
+                wroteDurableJPEG: _,
+                jpegData: _,
+                frameID: let id,
+                displayID: _,
+                metadataByteCount: _
+            ), .spanCheckpoint(frameID: let id, metadataByteCount: _):
+                frameID = id
+            case .volatileAdmission, .exactDuplicate, .pressureDrop:
+                frameID = nil
+            }
+            // These events are repository authority that the payload is now
+            // durable. Do not depend on the local durability set already
+            // having observed the same compound transition.
+            guard let frameID,
+                  await textCache.hasCachedRecord(for: frameID) else { continue }
+            let timestamp = timelineEntries.lazy
+                .filter { $0.frame.id == frameID }
+                .map { timelineSpanBounds(for: $0).end }
+                .max()
+            if let timestamp {
+                cacheTimestamps[frameID] = max(cacheTimestamps[frameID] ?? .distantPast, timestamp)
+            }
+        }
+        for (frameID, timestamp) in cacheTimestamps {
+            await textCache.updateTimestamp(for: frameID, timestamp: timestamp)
+        }
+        // The existence reads above must happen before OCR enqueue. Otherwise
+        // the worker can win the race, create a row, and make a new anchor
+        // perform a redundant timestamp-only transaction.
+        for frame in newlyDurableToEnqueue {
+            enqueueFrameForBackgroundOCR(frame)
+        }
     }
 
-    private func recordStoredFrame(_ frame: StoredFrame) {
-        frames.insert(frame, at: frameInsertionIndex(for: frame.timestamp))
-        frameLookup[frame.id] = frame
+    /// Reconcile a repository-side eviction or prune before exposing its save
+    /// mutation to the UI. Logical spans disappear immediately; physical
+    /// cache/OCR cleanup waits until the repository proves the final reference
+    /// has gone.
+    private func applyRepositoryInvalidation(_ invalidation: FrameRepositoryInvalidation) async {
+        guard invalidation != .none else { return }
+
+        if !invalidation.spanIDs.isEmpty {
+            timelineEntries.removeAll { invalidation.spanIDs.contains($0.span.id) }
+            for spanID in invalidation.spanIDs {
+                timelineOrderBySpanID.removeValue(forKey: spanID)
+            }
+            rebuildBrowsingProjection()
+            rebuildAcceptedObservationBaselines()
+        }
+
+        let finalPhysicalFrameIDs = invalidation.finalPhysicalFrameIDs
+        guard !finalPhysicalFrameIDs.isEmpty else { return }
+        decodedCacheGeneration += 1
+        for task in inFlightFullImageLoads.values {
+            task.cancel()
+        }
+        inFlightFullImageLoads.removeAll()
+        // Volatile payloads are never background-indexed. Restrict OCR queue
+        // and SQLite cleanup to IDs known durable before this invalidation;
+        // timeline membership already fences any launch-scoped direct-search
+        // cache row, without turning each RAM eviction into a disk write.
+        let durableFinalFrameIDs = finalPhysicalFrameIDs.intersection(durablePhysicalFrameIDs)
+        durablePhysicalFrameIDs.subtract(finalPhysicalFrameIDs)
+        removeQueuedOCRFrames(ids: durableFinalFrameIDs)
+        for id in finalPhysicalFrameIDs {
+            thumbnailCache.removeObject(forKey: id as NSUUID)
+            fullImageCache.removeObject(forKey: id as NSUUID)
+        }
+        await textCache.removeText(forFrameIDs: durableFinalFrameIDs)
+    }
+
+    private func rebuildBrowsingProjection() {
+        frames = timelineEntries
+            .sorted {
+                let lhsEnd = timelineSpanBounds(for: $0).end
+                let rhsEnd = timelineSpanBounds(for: $1).end
+                if lhsEnd != rhsEnd {
+                    return lhsEnd < rhsEnd
+                }
+                return persistedOrderPrecedes($0, $1)
+            }
+            .map(Self.browsingFrame(from:))
+        frameLookup.removeAll(keepingCapacity: true)
+        for frame in frames {
+            frameLookup[frame.id] = frame
+        }
+    }
+
+    private func sortTimelineEntries() {
+        timelineEntries.sort(by: timelineEntryPrecedes)
+    }
+
+    private func timelineEntryPrecedes(_ lhs: TimelineEntry, _ rhs: TimelineEntry) -> Bool {
+        let lhsStart = timelineSpanBounds(for: lhs).start
+        let rhsStart = timelineSpanBounds(for: rhs).start
+        if lhsStart != rhsStart {
+            return lhsStart < rhsStart
+        }
+        return persistedOrderPrecedes(lhs, rhs)
+    }
+
+    private func persistedOrderPrecedes(_ lhs: TimelineEntry, _ rhs: TimelineEntry) -> Bool {
+        return (timelineOrderBySpanID[lhs.span.id] ?? .max)
+            < (timelineOrderBySpanID[rhs.span.id] ?? .max)
+    }
+
+    private func rebuildAcceptedObservationBaselines() {
+        lastAcceptedObservation.removeAll(keepingCapacity: true)
+        for entry in timelineEntries {
+            recordAcceptedObservation(
+                hash: entry.frame.hash,
+                timestamp: timelineSpanBounds(for: entry).end,
+                displayID: entry.span.displayID
+            )
+        }
+    }
+
+    private func recordAcceptedObservation(hash: UInt64, timestamp: Date, displayID: UUID?) {
+        let key = CaptureDisplayKey(displayID)
+        guard timestamp >= (lastAcceptedObservation[key]?.timestamp ?? .distantPast) else { return }
+        lastAcceptedObservation[key] = AcceptedCaptureObservation(hash: hash, timestamp: timestamp)
+    }
+
+    private static func browsingFrame(from entry: TimelineEntry) -> StoredFrame {
+        StoredFrame(
+            id: entry.frame.id,
+            timestamp: timelineSpanBounds(for: entry).end,
+            hash: entry.frame.hash,
+            displayID: entry.span.displayID,
+            displayName: entry.span.displayName ?? entry.frame.displayName
+        )
     }
 
     private func enqueueFrameForBackgroundOCR(_ frame: StoredFrame) {
@@ -787,14 +1680,23 @@ class FrameBuffer {
     private func enqueueStoredFramesForBackgroundOCR() {
         let policy = ocrIndexingPolicy
         let minimumTimestamp = minimumQueuedOCRFrameTimestamp(for: policy)
+        var newestPhysicalFrames: [UUID: StoredFrame] = [:]
+        for entry in timelineEntries {
+            let projected = Self.browsingFrame(from: entry)
+            if projected.timestamp >= (newestPhysicalFrames[projected.id]?.timestamp ?? .distantPast) {
+                newestPhysicalFrames[projected.id] = projected
+            }
+        }
         let eligibleFrames: [StoredFrame]
         if let minimumTimestamp {
-            eligibleFrames = frames.filter { $0.timestamp >= minimumTimestamp }
+            eligibleFrames = newestPhysicalFrames.values.filter {
+                durablePhysicalFrameIDs.contains($0.id) && $0.timestamp >= minimumTimestamp
+            }
         } else {
-            eligibleFrames = frames
+            eligibleFrames = newestPhysicalFrames.values.filter { durablePhysicalFrameIDs.contains($0.id) }
         }
 
-        ocrFrameQueue.enqueue(contentsOf: eligibleFrames)
+        ocrFrameQueue.enqueue(contentsOf: eligibleFrames.sorted { $0.timestamp < $1.timestamp })
         applyOCRQueuePolicy(policy)
         recordQueueDepthTelemetry()
     }
@@ -830,6 +1732,14 @@ class FrameBuffer {
         guard !isBufferClearing else { return false }
         guard !ocrPruningFrameIDs.contains(frame.id) else { return false }
         return containsFrame(id: frame.id)
+    }
+
+    /// Resolve recency on the main-actor timeline immediately before a cache
+    /// write. A later span extension still advances an existing row through
+    /// `TextCache.updateTimestamp`, whose update is monotonic.
+    private func currentOCRCacheTimestamp(for frame: StoredFrame) -> Date? {
+        guard shouldContinueOCR(for: frame) else { return nil }
+        return frameLookup[frame.id]?.timestamp
     }
 
     private func runBackgroundOCRIndexingLoop() async {

@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import XCTest
 @testable import JustNow
@@ -332,6 +333,243 @@ final class CaptureRequestBrokerTests: XCTestCase {
                 isCircuitClosed: false
             )
         )
+    }
+
+    func testCoordinatorEndsSessionWhenUnexpectedStopLeavesNoLiveDisplay() {
+        XCTAssertTrue(
+            CaptureCoordinator.shouldEndSessionAfterManagedManagerStops(
+                remainingManagerCaptureStates: []
+            )
+        )
+        XCTAssertTrue(
+            CaptureCoordinator.shouldEndSessionAfterManagedManagerStops(
+                remainingManagerCaptureStates: [false, false]
+            )
+        )
+    }
+
+    func testCoordinatorKeepsSessionWhenAnotherDisplayRemainsLive() {
+        XCTAssertFalse(
+            CaptureCoordinator.shouldEndSessionAfterManagedManagerStops(
+                remainingManagerCaptureStates: [false, true]
+            )
+        )
+    }
+
+    func testCoordinatorLogicalSessionTransitionDependsOnAggregateCaptureState() {
+        XCTAssertEqual(
+            CaptureCoordinator.logicalSessionTransition(
+                hasActiveLogicalSession: false,
+                hasCapturingManager: true
+            ),
+            .begin
+        )
+        XCTAssertEqual(
+            CaptureCoordinator.logicalSessionTransition(
+                hasActiveLogicalSession: true,
+                hasCapturingManager: false
+            ),
+            .end
+        )
+        XCTAssertEqual(
+            CaptureCoordinator.logicalSessionTransition(
+                hasActiveLogicalSession: true,
+                hasCapturingManager: true
+            ),
+            .none,
+            "Same-pass manager replacement must keep one continuous logical session"
+        )
+        XCTAssertEqual(
+            CaptureCoordinator.logicalSessionTransition(
+                hasActiveLogicalSession: false,
+                hasCapturingManager: false
+            ),
+            .none
+        )
+    }
+
+    func testBackgroundReconcileRecoveryDecisionCoversGenericAndEmptyPasses() {
+        XCTAssertEqual(
+            CaptureCoordinator.backgroundReconcileRecoveryAction(
+                isRunning: true,
+                isCapturing: false,
+                errorIsCancellation: false,
+                errorIsPermissionDenied: false,
+                hasOpenCircuit: false
+            ),
+            .retryFallback
+        )
+        XCTAssertEqual(
+            CaptureCoordinator.backgroundReconcileRecoveryAction(
+                isRunning: true,
+                isCapturing: false,
+                errorIsCancellation: false,
+                errorIsPermissionDenied: true,
+                hasOpenCircuit: false
+            ),
+            .notifyPermissionFlow
+        )
+        XCTAssertEqual(
+            CaptureCoordinator.backgroundReconcileRecoveryAction(
+                isRunning: true,
+                isCapturing: false,
+                errorIsCancellation: true,
+                errorIsPermissionDenied: false,
+                hasOpenCircuit: false
+            ),
+            .none
+        )
+    }
+
+    func testBackgroundReconcileSchedulesRetryForLaterDisplayGenericStartFailure() async throws {
+        let discovery = CoordinatorDisplayDiscoveryProbe(displays: [coordinatorDisplayA])
+        let factory = CoordinatorCaptureManagerFactoryProbe()
+        let sleepGate = BrokerTestGate()
+        let scheduler = CaptureCooldownRestartScheduler { _ in
+            await sleepGate.wait()
+            try Task.checkCancellation()
+        }
+        let coordinator = makeCoordinator(
+            discovery: discovery,
+            factory: factory,
+            scheduler: scheduler
+        )
+        let delegate = CoordinatorDelegateProbe()
+        coordinator.delegate = delegate
+        try await coordinator.startCapture()
+
+        factory.outcomes[2] = .genericFailure
+        discovery.displays = [coordinatorDisplayA, coordinatorDisplayB]
+        coordinator.scheduleReconcile()
+        await waitUntil {
+            factory.managers[2]?.startCount == 1 && scheduler.scheduledDeadline != nil
+        }
+
+        XCTAssertTrue(coordinator.isCapturing, "The first display stays live while the missing display is retried")
+        XCTAssertEqual(delegate.beginCount, 1)
+        await coordinator.stopCapture()
+    }
+
+    func testBackgroundReconcileSchedulesRetryAfterSuccessfulPassWithNoCapture() async throws {
+        let discovery = CoordinatorDisplayDiscoveryProbe(displays: [coordinatorDisplayA])
+        let factory = CoordinatorCaptureManagerFactoryProbe()
+        let sleepGate = BrokerTestGate()
+        let scheduler = CaptureCooldownRestartScheduler { _ in
+            await sleepGate.wait()
+            try Task.checkCancellation()
+        }
+        let coordinator = makeCoordinator(
+            discovery: discovery,
+            factory: factory,
+            scheduler: scheduler
+        )
+        let delegate = CoordinatorDelegateProbe()
+        coordinator.delegate = delegate
+        try await coordinator.startCapture()
+
+        discovery.displays = []
+        coordinator.scheduleReconcile()
+        await waitUntil {
+            !coordinator.isCapturing && scheduler.scheduledDeadline != nil
+        }
+
+        XCTAssertEqual(delegate.endReasons, [.unexpectedStop])
+        await coordinator.stopCapture()
+    }
+
+    func testFatalSecondDisplayStartRollsBackEveryManagerStartedThisPass() async {
+        let discovery = CoordinatorDisplayDiscoveryProbe(
+            displays: [coordinatorDisplayA, coordinatorDisplayB]
+        )
+        let factory = CoordinatorCaptureManagerFactoryProbe()
+        factory.outcomes[2] = .permissionDenied
+        let scheduler = CaptureCooldownRestartScheduler()
+        let coordinator = makeCoordinator(
+            discovery: discovery,
+            factory: factory,
+            scheduler: scheduler
+        )
+        let delegate = CoordinatorDelegateProbe()
+        coordinator.delegate = delegate
+
+        do {
+            try await coordinator.startCapture()
+            XCTFail("Expected the second display to fail fatally")
+        } catch CaptureError.permissionDenied {
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        XCTAssertEqual(factory.managers[1]?.stopCount, 1)
+        XCTAssertTrue(coordinator.activeDisplays.isEmpty)
+        XCTAssertFalse(coordinator.isCapturing)
+        XCTAssertEqual(delegate.beginCount, 0, "Failure occurred before durable logical begin")
+        await coordinator.stopCapture()
+    }
+
+    func testUnexpectedStopQueuedDuringDurableBeginClosesPublishedSessionUnderGate() async {
+        let beginGate = BrokerTestGate()
+        let discovery = CoordinatorDisplayDiscoveryProbe(displays: [coordinatorDisplayA])
+        let factory = CoordinatorCaptureManagerFactoryProbe()
+        let scheduler = CaptureCooldownRestartScheduler()
+        let coordinator = makeCoordinator(
+            discovery: discovery,
+            factory: factory,
+            scheduler: scheduler
+        )
+        let delegate = CoordinatorDelegateProbe(beginGate: beginGate)
+        coordinator.delegate = delegate
+
+        let start = Task { @MainActor () -> Error? in
+            do {
+                try await coordinator.startCapture()
+                return nil
+            } catch {
+                return error
+            }
+        }
+        await waitUntil { delegate.beginCount == 1 && beginGate.waiterCount == 1 }
+        let manager = try! XCTUnwrap(factory.managers[1])
+
+        manager.reportUnexpectedStop()
+        await settleTasks()
+        XCTAssertTrue(delegate.endReasons.isEmpty, "Stop callback must wait for durable begin")
+
+        beginGate.resumeNext()
+        _ = await start.value
+        await waitUntil { delegate.endReasons == [.unexpectedStop] }
+
+        XCTAssertEqual(delegate.unexpectedStopCount, 1)
+        XCTAssertFalse(coordinator.isCapturing)
+        await coordinator.stopCapture()
+    }
+
+    func testStaleRemovedManagerCallbackCannotCloseReplacementSession() async throws {
+        let discovery = CoordinatorDisplayDiscoveryProbe(displays: [coordinatorDisplayA])
+        let factory = CoordinatorCaptureManagerFactoryProbe()
+        let coordinator = makeCoordinator(
+            discovery: discovery,
+            factory: factory,
+            scheduler: CaptureCooldownRestartScheduler()
+        )
+        let delegate = CoordinatorDelegateProbe()
+        coordinator.delegate = delegate
+        try await coordinator.startCapture()
+        let oldManager = try XCTUnwrap(factory.managers[1])
+
+        discovery.displays = [coordinatorDisplayB]
+        coordinator.scheduleReconcile()
+        await waitUntil {
+            factory.managers[2]?.startCount == 1 && coordinator.activeDisplays == [self.coordinatorDisplayB]
+        }
+
+        oldManager.reportUnexpectedStop()
+        await settleTasks()
+
+        XCTAssertTrue(delegate.endReasons.isEmpty)
+        XCTAssertTrue(coordinator.isCapturing)
+        XCTAssertEqual(delegate.beginCount, 1)
+        await coordinator.stopCapture()
     }
 
     func testCooldownRestartSchedulerCancellationSuppressesRetry() async {
@@ -935,6 +1173,43 @@ final class CaptureRequestBrokerTests: XCTestCase {
         )
     }
 
+    private var coordinatorDisplayA: DisplayInfo {
+        DisplayInfo(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            displayID: 1,
+            name: "Display A"
+        )
+    }
+
+    private var coordinatorDisplayB: DisplayInfo {
+        DisplayInfo(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            displayID: 2,
+            name: "Display B"
+        )
+    }
+
+    private func makeCoordinator(
+        discovery: CoordinatorDisplayDiscoveryProbe,
+        factory: CoordinatorCaptureManagerFactoryProbe,
+        scheduler: CaptureCooldownRestartScheduler
+    ) -> CaptureCoordinator {
+        let broker = CaptureRequestBroker(
+            hasScreenRecordingPermission: { true },
+            log: { _ in }
+        )
+        return CaptureCoordinator(
+            captureRequestBroker: broker,
+            cooldownRestartScheduler: scheduler,
+            hasScreenRecordingPermission: { true },
+            discoverDisplays: { try discovery.discover() },
+            makeCaptureManager: { displayID, broker in
+                factory.make(displayID: displayID, broker: broker)
+            },
+            observeScreenChanges: false
+        )
+    }
+
     private func captureError(
         from broker: CaptureRequestBroker,
         owner: UUID,
@@ -1004,5 +1279,126 @@ private final class BrokerTestGate {
     func resumeNext() {
         guard !continuations.isEmpty else { return }
         continuations.removeFirst().resume()
+    }
+}
+
+@MainActor
+private final class CoordinatorDisplayDiscoveryProbe {
+    var displays: [DisplayInfo]
+    var error: Error?
+
+    init(displays: [DisplayInfo]) {
+        self.displays = displays
+    }
+
+    func discover() throws -> [DisplayInfo] {
+        if let error { throw error }
+        return displays
+    }
+}
+
+private enum CoordinatorManagerStartOutcome {
+    case success
+    case genericFailure
+    case permissionDenied
+}
+
+private enum CoordinatorManagerProbeError: Error {
+    case startFailed
+}
+
+@MainActor
+private final class CoordinatorCaptureManagerFactoryProbe {
+    var outcomes: [CGDirectDisplayID: CoordinatorManagerStartOutcome] = [:]
+    private(set) var managers: [CGDirectDisplayID: CoordinatorCaptureManagerProbe] = [:]
+
+    func make(
+        displayID: CGDirectDisplayID,
+        broker: CaptureRequestBroker
+    ) -> ScreenCaptureManager {
+        let manager = CoordinatorCaptureManagerProbe(
+            targetDisplayID: displayID,
+            captureRequestBroker: broker,
+            startOutcome: outcomes[displayID] ?? .success
+        )
+        managers[displayID] = manager
+        return manager
+    }
+}
+
+@MainActor
+private final class CoordinatorCaptureManagerProbe: ScreenCaptureManager {
+    private let startOutcome: CoordinatorManagerStartOutcome
+    private var captureState = false
+    private(set) var startCount = 0
+    private(set) var stopCount = 0
+
+    init(
+        targetDisplayID: CGDirectDisplayID,
+        captureRequestBroker: CaptureRequestBroker,
+        startOutcome: CoordinatorManagerStartOutcome
+    ) {
+        self.startOutcome = startOutcome
+        super.init(targetDisplayID: targetDisplayID, captureRequestBroker: captureRequestBroker)
+    }
+
+    override var isCapturing: Bool { captureState }
+
+    override func startCapture() async throws {
+        startCount += 1
+        switch startOutcome {
+        case .success:
+            captureState = true
+        case .genericFailure:
+            throw CoordinatorManagerProbeError.startFailed
+        case .permissionDenied:
+            throw CaptureError.permissionDenied
+        }
+    }
+
+    override func beginStoppingCapture() -> Task<Void, Never>? {
+        stopCount += 1
+        captureState = false
+        return nil
+    }
+
+    func reportUnexpectedStop() {
+        captureState = false
+        delegate?.captureManagerDidStop(self)
+    }
+}
+
+@MainActor
+private final class CoordinatorDelegateProbe: CaptureCoordinatorDelegate {
+    private let beginGate: BrokerTestGate?
+    private(set) var beginCount = 0
+    private(set) var endReasons: [CaptureSessionEndReason] = []
+    private(set) var unexpectedStopCount = 0
+
+    init(beginGate: BrokerTestGate? = nil) {
+        self.beginGate = beginGate
+    }
+
+    func captureCoordinator(
+        _ coordinator: CaptureCoordinator,
+        didCaptureFrame image: CGImage,
+        at timestamp: Date,
+        from display: DisplayInfo
+    ) {}
+
+    func captureCoordinatorDidStopUnexpectedly(_ coordinator: CaptureCoordinator) {
+        unexpectedStopCount += 1
+    }
+
+    func captureCoordinatorDidBeginCaptureSession(_ coordinator: CaptureCoordinator) async throws {
+        beginCount += 1
+        await beginGate?.wait()
+    }
+
+    func captureCoordinator(
+        _ coordinator: CaptureCoordinator,
+        didEndCaptureSession reason: CaptureSessionEndReason
+    ) async throws {
+        endReasons.append(reason)
     }
 }

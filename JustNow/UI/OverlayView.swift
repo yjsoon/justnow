@@ -225,7 +225,7 @@ struct EmptyStateView: View {
 struct ContentAreaView: View {
     var viewModel: OverlayViewModel
 
-    private var displayedFrames: [StoredFrame] { viewModel.displayedFrames }
+    private var displayedEntries: [TimelineEntry] { viewModel.displayedEntries }
     @State private var textGrabBannerState: TextGrabBannerState = .hint
 
     var body: some View {
@@ -254,10 +254,10 @@ struct ContentAreaView: View {
         .task(id: viewModel.selectedFramePrefetchKey) {
             viewModel.prefetchImagesNearSelection()
         }
-        .onChange(of: viewModel.selectedIndex) { _, _ in
+        .onChange(of: viewModel.selectedSpanID) { _, _ in
             textGrabBannerState = .hint
         }
-        .onChange(of: displayedFrames.count) { _, frameCount in
+        .onChange(of: displayedEntries.count) { _, frameCount in
             if frameCount == 0 {
                 textGrabBannerState = .hint
                 viewModel.setPresentedFrame(nil)
@@ -267,7 +267,7 @@ struct ContentAreaView: View {
 
     @ViewBuilder
     private var centerContent: some View {
-        if let frame = displayedFrames[safe: viewModel.selectedIndex] {
+        if let frame = viewModel.currentFrame {
             GeometryReader { row in
                 let chevronWidth: CGFloat = 40
                 let interitem: CGFloat = 20
@@ -302,7 +302,7 @@ struct ContentAreaView: View {
                 .frame(width: row.size.width, height: row.size.height)
             }
             .padding(.horizontal, 60)
-        } else if !viewModel.isSearching && viewModel.timelineFrames.isEmpty {
+        } else if !viewModel.isSearching && viewModel.timelineEntries.isEmpty {
             VStack(spacing: 12) {
                 Image(systemName: "clock.badge.exclamationmark")
                     .font(.system(size: 40))

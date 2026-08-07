@@ -78,6 +78,12 @@ func resolveOverlayKeyboardAction(
         }
         return .moveLeft
 
+    case UInt16(kVK_PageUp):
+        return .jumpLeft
+
+    case UInt16(kVK_Home):
+        return .goToStart
+
     case UInt16(kVK_RightArrow):
         if pressedModifiers.contains(.command) {
             return .goToEnd
@@ -86,6 +92,12 @@ func resolveOverlayKeyboardAction(
             return .jumpRight
         }
         return .moveRight
+
+    case UInt16(kVK_PageDown):
+        return .jumpRight
+
+    case UInt16(kVK_End):
+        return .goToEnd
 
     case UInt16(kVK_Tab):
         if state.isSearchAvailable && state.isSearching {

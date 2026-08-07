@@ -16,7 +16,7 @@ enum CaptureRequestBrokerError: Error, Equatable {
     case cooldown(untilMonotonicTime: TimeInterval)
 }
 
-enum CaptureRequestBrokerRecoveryState: Equatable {
+nonisolated enum CaptureRequestBrokerRecoveryState: Equatable {
     case normal
     case coolingDown
     /// Repeated false denials have reached the maximum retry interval. Capture
