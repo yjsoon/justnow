@@ -183,7 +183,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        memoryPressureMonitor?.cancel()
+        memoryPressureMonitor?.cancelWithoutWaiting()
         appNapPreventer.stopActivity()
         capturePolicyTimer?.invalidate()
         idleTransitionTimer?.invalidate()
@@ -203,7 +203,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
 
         // A session that ends without this line means the OS killed the app.
         DiagnosticsLog.shared.log("App", "Termination requested; flushing capture and caches")
-        memoryPressureMonitor?.cancel()
+        memoryPressureMonitor?.cancelWithoutWaiting()
         isTerminationFlushInProgress = true
         overlayPresentationTask?.cancel()
         setupCaptureTask?.cancel()
@@ -220,6 +220,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 sender.reply(toApplicationShouldTerminate: true)
             }
 
+            await self.memoryPressureMonitor?.cancel()
             await self.setupCaptureTask?.value
             await self.captureCoordinator?.stopCapture(reason: .termination)
             await self.frameBuffer?.flushCaches()

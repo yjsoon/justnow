@@ -165,6 +165,59 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertTrue(visibilityTransitions.isEmpty)
     }
 
+    func testCancelledReopenRetainsPriorCaptureResumeObligation() async throws {
+        let now = Date()
+        let entry = makeEntry(start: now, end: now)
+        let firstLease = BlockingPayloadLease()
+        let repository = OverlayTimelineRepositoryProbe(
+            entries: [entry],
+            image: try XCTUnwrap(TestImageFactory.makeSolidImage(width: 8, height: 8, level: 84)),
+            currentTimelineLease: firstLease,
+            subsequentTimelineLeases: [NoopFrameRepositoryPayloadLease()]
+        )
+        let buffer = try await makeBuffer(repository: repository)
+        var visibilityTransitions: [Bool] = []
+        let controller = OverlayWindowController(
+            frameBuffer: buffer,
+            dismissShortcutKeyCode: 0,
+            dismissShortcutModifiers: 0,
+            onVisibilityChanged: { visibilityTransitions.append($0) },
+            onOpenSettings: {}
+        )
+
+        await controller.showOverlay(
+            recentTimelineWindow: 300,
+            rewindHistoryOption: .twentyFourHours,
+            activeDisplay: nil,
+            availableDisplays: []
+        )
+        XCTAssertEqual(visibilityTransitions, [true])
+
+        controller.hideOverlay()
+        await firstLease.waitUntilReleaseRequested()
+        await repository.suspendNextCurrentTimelineSnapshot()
+        let reopenTask = Task { @MainActor in
+            await controller.showOverlay(
+                recentTimelineWindow: 300,
+                rewindHistoryOption: .twentyFourHours,
+                activeDisplay: nil,
+                availableDisplays: []
+            )
+        }
+        await repository.waitUntilCurrentTimelineSnapshotRequested()
+        controller.hideOverlay()
+        await repository.resumeCurrentTimelineSnapshot()
+
+        XCTAssertEqual(visibilityTransitions, [true])
+        await firstLease.permitRelease()
+        await reopenTask.value
+        try await waitUntil { visibilityTransitions == [true, false] }
+
+        XCTAssertEqual(visibilityTransitions, [true, false])
+        XCTAssertFalse(buffer.isPruningPaused)
+        XCTAssertFalse(controller.isVisible)
+    }
+
     func testCriticalDismissalWaitsForVisibleLeaseAndMaintenanceBeforeCaptureResumes() async throws {
         let now = Date()
         let entry = makeEntry(start: now, end: now)
@@ -218,6 +271,82 @@ final class OverlayTimelineTests: XCTestCase {
         await repository.resumePressure()
         await handling.value
         XCTAssertFalse(buffer.isPruningPaused)
+        XCTAssertEqual(visibilityTransitions, [true, false])
+    }
+
+    func testCriticalDismissalKeepsLeaseUntilSuspendedScreenshotExportFinishes() async throws {
+        let now = Date()
+        let entry = makeEntry(start: now, end: now)
+        let lease = BlockingPayloadLease()
+        let repository = OverlayTimelineRepositoryProbe(
+            entries: [entry],
+            image: try XCTUnwrap(TestImageFactory.makeSolidImage(width: 8, height: 8, level: 85)),
+            currentTimelineLease: lease
+        )
+        await repository.suspendNextExport()
+        let buffer = try await makeBuffer(repository: repository)
+        var visibilityTransitions: [Bool] = []
+        let controller = OverlayWindowController(
+            frameBuffer: buffer,
+            dismissShortcutKeyCode: 0,
+            dismissShortcutModifiers: 0,
+            onVisibilityChanged: { visibilityTransitions.append($0) },
+            onOpenSettings: {}
+        )
+        let defaults = UserDefaults.standard
+        let keys = [
+            AppStorageKey.screenshotSaveToFolder,
+            AppStorageKey.screenshotSaveToClipboard,
+            AppStorageKey.saveScreenshotSoundEnabled,
+            AppStorageKey.hasSeenSaveQualityInfo
+        ]
+        let priorValues = Dictionary(uniqueKeysWithValues: keys.compactMap { key in
+            defaults.object(forKey: key).map { (key, $0) }
+        })
+        defer {
+            for key in keys {
+                if let priorValue = priorValues[key] {
+                    defaults.set(priorValue, forKey: key)
+                } else {
+                    defaults.removeObject(forKey: key)
+                }
+            }
+        }
+        defaults.set(true, forKey: AppStorageKey.screenshotSaveToFolder)
+        defaults.set(false, forKey: AppStorageKey.screenshotSaveToClipboard)
+        defaults.set(false, forKey: AppStorageKey.saveScreenshotSoundEnabled)
+        defaults.set(true, forKey: AppStorageKey.hasSeenSaveQualityInfo)
+
+        await controller.showOverlay(
+            recentTimelineWindow: 300,
+            rewindHistoryOption: .twentyFourHours,
+            activeDisplay: nil,
+            availableDisplays: []
+        )
+        try XCTUnwrap(controller.viewModel).saveCurrentFrameToScreenshotsLocation()
+        await repository.waitUntilExportRequested()
+
+        let handling = Task { @MainActor in
+            _ = await controller.dismissForMemoryPressure()
+            _ = await buffer.respondToMemoryPressure(.critical)
+            controller.completeMemoryPressureDismissal()
+        }
+        try await waitUntil { !controller.isVisible }
+
+        let releasedWhileExportSuspended = await lease.hasReleaseBeenRequested()
+        let eventsWhileExportSuspended = await repository.operationEvents()
+        XCTAssertFalse(releasedWhileExportSuspended)
+        XCTAssertEqual(eventsWhileExportSuspended, [.exportStarted])
+
+        await repository.resumeExport()
+        await lease.waitUntilReleaseRequested()
+        let eventsBeforeLeaseRelease = await repository.operationEvents()
+        XCTAssertEqual(eventsBeforeLeaseRelease, [.exportStarted, .exportFinished])
+        await lease.permitRelease()
+        await handling.value
+
+        let finalEvents = await repository.operationEvents()
+        XCTAssertEqual(finalEvents, [.exportStarted, .exportFinished, .memoryPressure])
         XCTAssertEqual(visibilityTransitions, [true, false])
     }
 
@@ -686,8 +815,15 @@ final class OverlayTimelineTests: XCTestCase {
         viewModel.switchDisplay(to: displayB)
 
         XCTAssertEqual(viewModel.semanticReferenceDate, semanticNow)
+        XCTAssertEqual(viewModel.timelineReferenceDate, semanticNow)
         XCTAssertEqual(viewModel.timelineEntries.map(\.span.id), [retainedB.span.id])
         XCTAssertEqual(viewModel.selectedSpanID, retainedB.span.id)
+
+        viewModel.switchDisplay(to: displayA)
+
+        XCTAssertEqual(viewModel.timelineReferenceDate, timelineSpanBounds(for: futureA).end)
+        XCTAssertEqual(viewModel.timelineEntries.map(\.span.id), [futureA.span.id])
+        XCTAssertEqual(viewModel.selectedSpanID, futureA.span.id)
     }
 
     func testCroppedExportSnapshotsSelectedLogicalTimestamp() async throws {
@@ -863,6 +999,10 @@ private actor BlockingPayloadLease: FrameRepositoryPayloadLease {
         }
     }
 
+    func hasReleaseBeenRequested() -> Bool {
+        releaseContinuation != nil
+    }
+
     func permitRelease() {
         releaseContinuation?.resume()
         releaseContinuation = nil
@@ -870,9 +1010,15 @@ private actor BlockingPayloadLease: FrameRepositoryPayloadLease {
 }
 
 private actor OverlayTimelineRepositoryProbe: FrameRepository {
+    enum OperationEvent: Equatable {
+        case exportStarted
+        case exportFinished
+        case memoryPressure
+    }
+
     private var entries: [TimelineEntry]
     private let image: CGImage
-    private let currentTimelineLease: any FrameRepositoryPayloadLease
+    private var currentTimelineLeases: [any FrameRepositoryPayloadLease]
     private var croppedTimestampValues: [Date] = []
     private var shouldSuspendNextCurrentTimelineSnapshot = false
     private var currentTimelineSnapshotContinuation: CheckedContinuation<Void, Never>?
@@ -880,15 +1026,20 @@ private actor OverlayTimelineRepositoryProbe: FrameRepository {
     private var shouldSuspendNextPressure = false
     private var pressureContinuation: CheckedContinuation<Void, Never>?
     private var pressureWaiters: [CheckedContinuation<Void, Never>] = []
+    private var shouldSuspendNextExport = false
+    private var exportContinuation: CheckedContinuation<Void, Never>?
+    private var exportWaiters: [CheckedContinuation<Void, Never>] = []
+    private var operationEventValues: [OperationEvent] = []
 
     init(
         entries: [TimelineEntry],
         image: CGImage,
-        currentTimelineLease: any FrameRepositoryPayloadLease = NoopFrameRepositoryPayloadLease()
+        currentTimelineLease: any FrameRepositoryPayloadLease = NoopFrameRepositoryPayloadLease(),
+        subsequentTimelineLeases: [any FrameRepositoryPayloadLease] = []
     ) {
         self.entries = entries
         self.image = image
-        self.currentTimelineLease = currentTimelineLease
+        self.currentTimelineLeases = [currentTimelineLease] + subsequentTimelineLeases
     }
 
     func cleanupOrphans() {}
@@ -914,9 +1065,15 @@ private actor OverlayTimelineRepositoryProbe: FrameRepository {
                 currentTimelineSnapshotContinuation = continuation
             }
         }
+        let lease: any FrameRepositoryPayloadLease
+        if currentTimelineLeases.count > 1 {
+            lease = currentTimelineLeases.removeFirst()
+        } else {
+            lease = currentTimelineLeases[0]
+        }
         return FrameRepositoryLeasedTimelineSnapshot(
             entries: entries,
-            lease: currentTimelineLease
+            lease: lease
         )
     }
 
@@ -962,8 +1119,19 @@ private actor OverlayTimelineRepositoryProbe: FrameRepository {
         image
     }
 
-    func exportFrame(id: UUID, timestamp: Date) -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("overlay-timeline-export.png")
+    func exportFrame(id: UUID, timestamp: Date) async -> URL {
+        operationEventValues.append(.exportStarted)
+        if shouldSuspendNextExport {
+            shouldSuspendNextExport = false
+            let waiters = exportWaiters
+            exportWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+            await withCheckedContinuation { continuation in
+                exportContinuation = continuation
+            }
+        }
+        operationEventValues.append(.exportFinished)
+        return FileManager.default.temporaryDirectory.appendingPathComponent("overlay-timeline-export.png")
     }
 
     func exportCroppedImage(_ image: CGImage, timestamp: Date) -> URL {
@@ -983,6 +1151,7 @@ private actor OverlayTimelineRepositoryProbe: FrameRepository {
     func respondToMemoryPressure(
         _ level: FrameMemoryPressureLevel
     ) async -> FrameRepositoryMaintenanceResult {
+        operationEventValues.append(.memoryPressure)
         if shouldSuspendNextPressure {
             shouldSuspendNextPressure = false
             let waiters = pressureWaiters
@@ -999,7 +1168,7 @@ private actor OverlayTimelineRepositoryProbe: FrameRepository {
         entries.removeAll()
     }
 
-    func totalStorageSize() -> Int64 { 0 }
+    func durableJPEGPayloadBytes() -> Int64 { 0 }
 
     func storageStatistics() -> FrameStorageStatistics { .empty }
 
@@ -1039,5 +1208,25 @@ private actor OverlayTimelineRepositoryProbe: FrameRepository {
     func resumePressure() {
         pressureContinuation?.resume()
         pressureContinuation = nil
+    }
+
+    func suspendNextExport() {
+        shouldSuspendNextExport = true
+    }
+
+    func waitUntilExportRequested() async {
+        guard exportContinuation == nil else { return }
+        await withCheckedContinuation { continuation in
+            exportWaiters.append(continuation)
+        }
+    }
+
+    func resumeExport() {
+        exportContinuation?.resume()
+        exportContinuation = nil
+    }
+
+    func operationEvents() -> [OperationEvent] {
+        operationEventValues
     }
 }

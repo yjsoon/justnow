@@ -255,6 +255,8 @@ class OverlayViewModel {
 
     var saveToast: OverlayToast?
     private var saveToastTask: Task<Void, Never>?
+    private var screenshotSaveTasks: [UUID: Task<Void, Never>] = [:]
+    private var acceptsScreenshotSaves = true
 
     /// Tracks whether ⌘ is currently held inside the overlay window. The
     /// modifier-flag monitor in OverlayWindowController writes here so the
@@ -562,7 +564,7 @@ class OverlayViewModel {
             activeDisplay = display
             timelineEntries = newEntries
             timelineReferenceDate = clampedTimelineReferenceDate(
-                requested: timelineReferenceDate,
+                requested: semanticReferenceDate,
                 entries: newEntries
             )
             selectLatest(in: newEntries)
@@ -646,8 +648,12 @@ class OverlayViewModel {
         operationName: String,
         operation: @escaping (_ destinations: SaveDestinations) async throws -> URL?
     ) {
+        guard acceptsScreenshotSaves else { return }
         let destinations = currentSaveDestinations()
-        Task { @MainActor in
+        let operationID = UUID()
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { screenshotSaveTasks[operationID] = nil }
             do {
                 let savedURL = try await operation(destinations)
                 playSavedSoundIfNeeded()
@@ -659,6 +665,23 @@ class OverlayViewModel {
                 )
                 showSaveToast(makeErrorToast(error))
             }
+        }
+        screenshotSaveTasks[operationID] = task
+    }
+
+    /// Prevents new save work from starting once overlay teardown begins.
+    /// The controller keeps the overlay payload lease alive until
+    /// `waitForPendingScreenshotSaves()` returns, so a suspended export cannot
+    /// lose its volatile JPEG to dismissal or memory-pressure trimming.
+    func prepareForDismissal() {
+        acceptsScreenshotSaves = false
+        clearSearch()
+    }
+
+    func waitForPendingScreenshotSaves() async {
+        let tasks = Array(screenshotSaveTasks.values)
+        for task in tasks {
+            await task.value
         }
     }
 

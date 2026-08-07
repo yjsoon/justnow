@@ -36,7 +36,7 @@ final class MemoryPressureMonitorTests: XCTestCase {
 
         XCTAssertEqual(received, [.warning, .critical])
         XCTAssertEqual(maximumActiveHandlers, 1)
-        monitor.cancel()
+        await monitor.cancel()
     }
 
     func testMonitorDeliversRepeatedCompletedWarningsAndCancelStopsCallbacks() async {
@@ -62,12 +62,55 @@ final class MemoryPressureMonitorTests: XCTestCase {
         await fulfillment(of: [firstDelivered], timeout: 1)
         source.emit(.warning)
         await fulfillment(of: [secondDelivered], timeout: 1)
-        monitor.cancel()
+        await monitor.cancel()
         source.emit(.critical)
         await fulfillment(of: [afterCancel], timeout: 0.1)
 
         XCTAssertEqual(count, 2)
         XCTAssertTrue(source.didCancel)
+    }
+
+    func testCancelWaitsForSuspendedHandlerAndFencesQueuedCallbacks() async {
+        final class CompletionState {
+            var mayFinish = false
+        }
+
+        let source = MemoryPressureEventSourceProbe()
+        let handlerStarted = expectation(description: "handler started")
+        let cancellationReturnedEarly = expectation(description: "cancel must await handler")
+        cancellationReturnedEarly.isInverted = true
+        let cancellationFinished = expectation(description: "cancel finished")
+        let gate = MemoryPressureTestGate()
+        let completionState = CompletionState()
+        var received: [FrameMemoryPressureLevel] = []
+        let monitor = MemoryPressureMonitor(eventSource: source) { level in
+            received.append(level)
+            handlerStarted.fulfill()
+            await gate.wait()
+        }
+        monitor.start()
+
+        source.emit(.warning)
+        await fulfillment(of: [handlerStarted], timeout: 1)
+        source.emit(.critical)
+
+        let cancellationTask = Task { @MainActor in
+            await monitor.cancel()
+            if !completionState.mayFinish {
+                cancellationReturnedEarly.fulfill()
+            }
+            cancellationFinished.fulfill()
+        }
+        await fulfillment(of: [cancellationReturnedEarly], timeout: 0.05)
+        XCTAssertTrue(source.didCancel)
+
+        source.emit(.warning)
+        completionState.mayFinish = true
+        await gate.open()
+        await fulfillment(of: [cancellationFinished], timeout: 1)
+        await cancellationTask.value
+
+        XCTAssertEqual(received, [.warning])
     }
 }
 

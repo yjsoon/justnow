@@ -51,7 +51,7 @@ class OverlayWindowController: NSObject {
     private var keyEventMonitor: Any?
     private var scrollEventMonitor: Any?
     private var flagsChangedMonitor: Any?
-    private var viewModel: OverlayViewModel?
+    private(set) var viewModel: OverlayViewModel?
     private var payloadLease: (any FrameRepositoryPayloadLease)?
     private let payloadLeaseReleaseGate = OverlayPayloadLeaseReleaseGate()
     private var visibleGeneration: Int?
@@ -60,6 +60,12 @@ class OverlayWindowController: NSObject {
     private var payloadLeaseReleaseTask: Task<Void, Never>?
     private var defersCaptureResumeForMemoryPressure = false
     private var memoryPressureDismissedVisibleOverlay = false
+    /// Once the overlay has actually paused capture, that obligation survives
+    /// across newer presentation generations until the newest generation
+    /// either becomes visible or aborts. This prevents an older hide callback
+    /// from being invalidated while the newer abort incorrectly concludes
+    /// there is nothing to resume.
+    private var captureResumeRequired = false
 
     init(
         frameBuffer: FrameBuffer,
@@ -112,6 +118,7 @@ class OverlayWindowController: NSObject {
         // installed. This generation owns the pause until it either becomes
         // visible or releases an aborted snapshot.
         let presentationGeneration = payloadLeaseReleaseGate.becameVisible()
+        let precedingReleaseTask = payloadLeaseReleaseTask
         pendingPresentationGeneration = presentationGeneration
         frameBuffer.isPruningPaused = true
 
@@ -128,6 +135,10 @@ class OverlayWindowController: NSObject {
             if pendingPresentationGeneration == presentationGeneration {
                 pendingPresentationGeneration = nil
             }
+            // If this was a reopen while the prior overlay was still
+            // releasing, inherit that release barrier before satisfying the
+            // transferred capture-resume obligation.
+            await precedingReleaseTask?.value
             _ = await frameBuffer.releasePayloadLease(lease)
             finishReleasedOverlay(
                 generation: presentationGeneration,
@@ -293,6 +304,7 @@ class OverlayWindowController: NSObject {
         }
 
         NSApp.activate(ignoringOtherApps: true)
+        captureResumeRequired = true
         onVisibilityChanged?(true)
     }
 
@@ -310,11 +322,8 @@ class OverlayWindowController: NSObject {
             return
         }
         guard window != nil || viewModel != nil || payloadLease != nil else { return }
-        viewModel?.clearSearch()
-
-        // Capture pending educational alert before tearing down the
-        // viewModel, so it can fire once the overlay window is gone.
-        let shouldShowQualityInfo = viewModel?.shouldShowQualityInfoOnDismiss ?? false
+        let dismissingViewModel = viewModel
+        dismissingViewModel?.prepareForDismissal()
 
         if let monitor = keyEventMonitor {
             NSEvent.removeMonitor(monitor)
@@ -339,6 +348,7 @@ class OverlayWindowController: NSObject {
             nil,
             generation: generation,
             beforeResume: { [weak self] _ in
+                await dismissingViewModel?.waitForPendingScreenshotSaves()
                 guard let self, let lease else { return }
                 _ = await self.frameBuffer.releasePayloadLease(lease)
             }
@@ -347,14 +357,13 @@ class OverlayWindowController: NSObject {
                 generation: generation,
                 shouldResumeCapture: true
             )
-        }
-
-        if shouldShowQualityInfo {
-            // Run-loop tick so the overlay is fully torn down before the
-            // alert grabs key. Without this the alert briefly appears
-            // behind the dismissing window on slower machines.
-            DispatchQueue.main.async { [weak self] in
-                self?.presentSaveQualityInfoAlert()
+            if dismissingViewModel?.shouldShowQualityInfoOnDismiss == true {
+                // Run-loop tick so the overlay is fully torn down before the
+                // alert grabs key. Without this the alert briefly appears
+                // behind the dismissing window on slower machines.
+                DispatchQueue.main.async { [weak self] in
+                    self?.presentSaveQualityInfoAlert()
+                }
             }
         }
     }
@@ -382,7 +391,8 @@ class OverlayWindowController: NSObject {
         let wasVisible = window != nil || viewModel != nil || payloadLease != nil
         guard wasVisible else { return memoryPressureDismissedVisibleOverlay }
 
-        viewModel?.clearSearch()
+        let dismissingViewModel = viewModel
+        dismissingViewModel?.prepareForDismissal()
         if let monitor = keyEventMonitor {
             NSEvent.removeMonitor(monitor)
             keyEventMonitor = nil
@@ -403,11 +413,13 @@ class OverlayWindowController: NSObject {
         payloadLease = nil
         let generation = visibleGeneration
         visibleGeneration = nil
+        await dismissingViewModel?.waitForPendingScreenshotSaves()
         if let lease {
             _ = await frameBuffer.releasePayloadLease(lease)
         }
         if generation.map(payloadLeaseReleaseGate.isCurrent) ?? true {
-            memoryPressureDismissedVisibleOverlay = true
+            memoryPressureDismissedVisibleOverlay =
+                memoryPressureDismissedVisibleOverlay || captureResumeRequired
         }
         return memoryPressureDismissedVisibleOverlay
     }
@@ -418,6 +430,7 @@ class OverlayWindowController: NSObject {
         defersCaptureResumeForMemoryPressure = false
         frameBuffer.isPruningPaused = false
         if shouldResumeCapture {
+            captureResumeRequired = false
             onVisibilityChanged?(false)
         }
     }
@@ -432,11 +445,14 @@ class OverlayWindowController: NSObject {
         }
         if defersCaptureResumeForMemoryPressure {
             memoryPressureDismissedVisibleOverlay =
-                memoryPressureDismissedVisibleOverlay || shouldResumeCapture
+                memoryPressureDismissedVisibleOverlay
+                    || shouldResumeCapture
+                    || captureResumeRequired
             return
         }
         frameBuffer.isPruningPaused = false
-        if shouldResumeCapture {
+        if shouldResumeCapture || captureResumeRequired {
+            captureResumeRequired = false
             onVisibilityChanged?(false)
         }
     }
