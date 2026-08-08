@@ -534,7 +534,7 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertTrue(timelineColourSegments(entries: [], borderPosition: 0.5).isEmpty)
     }
 
-    func testViewModelNavigationUsesSpanEndpointsAndElapsedSeconds() async throws {
+    func testViewModelNavigationUsesSpanEndpointsAndElapsedJumps() async throws {
         let base = Date(timeIntervalSinceReferenceDate: 10_000)
         let entries = [
             makeEntry(start: base, end: base.addingTimeInterval(5)),
@@ -560,7 +560,8 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedTimestamp, base.addingTimeInterval(20))
 
         viewModel.scrollBy(-4)
-        XCTAssertEqual(viewModel.selectedTimestamp, base.addingTimeInterval(21))
+        XCTAssertEqual(viewModel.selectedSpanID, entries[2].span.id)
+        XCTAssertEqual(viewModel.selectedTimestamp, base.addingTimeInterval(70))
 
         viewModel.goToEnd()
         XCTAssertEqual(viewModel.selectedSpanID, entries[2].span.id)
@@ -613,7 +614,7 @@ final class OverlayTimelineTests: XCTestCase {
             referenceDate: base.addingTimeInterval(100)
         )
 
-        viewModel.setSelectedTimestamp(base.addingTimeInterval(70))
+        viewModel.setSelectedTimestamp(base.addingTimeInterval(80))
         viewModel.scrollBy(1)
         XCTAssertEqual(viewModel.selectedSpanID, older.span.id)
         XCTAssertEqual(viewModel.selectedTimestamp, base.addingTimeInterval(10))
