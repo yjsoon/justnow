@@ -534,7 +534,7 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertTrue(timelineColourSegments(entries: [], borderPosition: 0.5).isEmpty)
     }
 
-    func testViewModelNavigationUsesSpanEndpointsAndElapsedSeconds() async throws {
+    func testViewModelNavigationUsesSpanEndpointsAndElapsedJumps() async throws {
         let base = Date(timeIntervalSinceReferenceDate: 10_000)
         let entries = [
             makeEntry(start: base, end: base.addingTimeInterval(5)),
@@ -560,7 +560,8 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedTimestamp, base.addingTimeInterval(20))
 
         viewModel.scrollBy(-4)
-        XCTAssertEqual(viewModel.selectedTimestamp, base.addingTimeInterval(21))
+        XCTAssertEqual(viewModel.selectedSpanID, entries[2].span.id)
+        XCTAssertEqual(viewModel.selectedTimestamp, base.addingTimeInterval(70))
 
         viewModel.goToEnd()
         XCTAssertEqual(viewModel.selectedSpanID, entries[2].span.id)
@@ -596,6 +597,81 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedIndex, 0)
         XCTAssertTrue(viewModel.accessibilityTimelineValue.contains("Span 1 of 1"))
         XCTAssertFalse(viewModel.accessibilityTimelineValue.contains("Frame"))
+    }
+
+    func testScrollCrossesSparseHistoryGapsInBothDirections() async throws {
+        let base = Date(timeIntervalSinceReferenceDate: 10_000)
+        let older = makeEntry(
+            start: base,
+            end: base.addingTimeInterval(10)
+        )
+        let newer = makeEntry(
+            start: base.addingTimeInterval(70),
+            end: base.addingTimeInterval(90)
+        )
+        let viewModel = try await makeViewModel(
+            entries: [older, newer],
+            referenceDate: base.addingTimeInterval(100)
+        )
+
+        viewModel.setSelectedTimestamp(base.addingTimeInterval(80))
+        viewModel.scrollBy(1)
+        XCTAssertEqual(viewModel.selectedSpanID, older.span.id)
+        XCTAssertEqual(viewModel.selectedTimestamp, base.addingTimeInterval(10))
+
+        viewModel.scrollBy(-1)
+        XCTAssertEqual(viewModel.selectedSpanID, newer.span.id)
+        XCTAssertEqual(viewModel.selectedTimestamp, base.addingTimeInterval(70))
+    }
+
+    func testScrollNeverMovesAgainstRequestedDirectionAcrossOverlappingSpans() async throws {
+        let base = Date(timeIntervalSinceReferenceDate: 10_000)
+        let first = makeEntry(
+            start: base,
+            end: base.addingTimeInterval(20)
+        )
+        let second = makeEntry(
+            start: base.addingTimeInterval(10),
+            end: base.addingTimeInterval(30)
+        )
+        let viewModel = try await makeViewModel(
+            entries: [first, second],
+            referenceDate: base.addingTimeInterval(40)
+        )
+
+        viewModel.setSelectedTimestamp(base.addingTimeInterval(10))
+        XCTAssertEqual(viewModel.selectedSpanID, second.span.id)
+        viewModel.scrollBy(1)
+        XCTAssertEqual(viewModel.selectedSpanID, first.span.id)
+        XCTAssertEqual(viewModel.selectedTimestamp, base)
+
+        let forward = try XCTUnwrap(adjacentTimelineSelection(
+            in: [first, second],
+            excludingSpanID: first.span.id,
+            from: base.addingTimeInterval(20),
+            rewinding: false
+        ))
+        XCTAssertEqual(forward.spanID, second.span.id)
+        XCTAssertEqual(forward.timestamp, base.addingTimeInterval(30))
+    }
+
+    func testScrollIgnoresNonFiniteDelta() async throws {
+        let base = Date(timeIntervalSinceReferenceDate: 10_000)
+        let entries = [
+            makeEntry(start: base, end: base.addingTimeInterval(10)),
+            makeEntry(start: base.addingTimeInterval(20), end: base.addingTimeInterval(30))
+        ]
+        let viewModel = try await makeViewModel(
+            entries: entries,
+            referenceDate: base.addingTimeInterval(40)
+        )
+        let originalSpanID = viewModel.selectedSpanID
+        let originalTimestamp = viewModel.selectedTimestamp
+
+        viewModel.scrollBy(.nan)
+
+        XCTAssertEqual(viewModel.selectedSpanID, originalSpanID)
+        XCTAssertEqual(viewModel.selectedTimestamp, originalTimestamp)
     }
 
     func testSearchSelectionPreservesLogicalSpanIDAndTimestamp() throws {

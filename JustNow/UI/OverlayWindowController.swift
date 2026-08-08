@@ -50,6 +50,7 @@ class OverlayWindowController: NSObject {
     private var dismissShortcutModifiers: Int
     private var keyEventMonitor: Any?
     private var scrollEventMonitor: Any?
+    private var timelineScrollAccumulator = TimelineScrollAccumulator()
     private var flagsChangedMonitor: Any?
     private(set) var viewModel: OverlayViewModel?
     private var payloadLease: (any FrameRepositoryPayloadLease)?
@@ -90,6 +91,7 @@ class OverlayWindowController: NSObject {
     func showOverlay(
         recentTimelineWindow: TimeInterval,
         rewindHistoryOption: RewindHistoryOption,
+        timelineScrollDirection: TimelineScrollDirection = .upToRewind,
         activeDisplay: DisplayInfo?,
         availableDisplays: [DisplayInfo]
     ) async {
@@ -291,14 +293,23 @@ class OverlayWindowController: NSObject {
         }
 
         // Monitor scroll events
+        timelineScrollAccumulator.reset()
         scrollEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             guard let self = self, let vm = self.viewModel else { return event }
+            guard timelineScrollDirection != .off else { return event }
 
-            // Use horizontal scroll or vertical scroll
-            let delta = event.scrollingDeltaX != 0 ? event.scrollingDeltaX : -event.scrollingDeltaY
-
-            if abs(delta) > 1 {
-                vm.scrollBy(delta)
+            let delta = timelineScrollDirection.navigationDelta(
+                horizontalDelta: event.scrollingDeltaX,
+                verticalDelta: event.scrollingDeltaY
+            )
+            if let step = self.timelineScrollAccumulator.navigationStep(
+                for: delta,
+                hasPreciseScrollingDeltas: event.hasPreciseScrollingDeltas,
+                isMomentum: !event.momentumPhase.isEmpty,
+                beginsGesture: event.phase.contains(.began),
+                endsGesture: event.phase.contains(.ended) || event.phase.contains(.cancelled)
+            ) {
+                vm.scrollBy(step)
             }
             return nil // Consume the event
         }

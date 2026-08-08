@@ -15,6 +15,7 @@ enum AppStorageKey {
     nonisolated static let saveScreenshotSoundEnabled = "saveScreenshotSoundEnabled"
     nonisolated static let textGrabDebugPreviewEnabled = "textGrabDebugPreviewEnabled"
     nonisolated static let rewindDragAction = "rewindDragAction"
+    nonisolated static let timelineScrollDirection = "timelineScrollDirection"
     nonisolated static let showMenuBarIcon = "showMenuBarIcon"
     nonisolated static let hasSeenMenuBarHideInfo = "hasSeenMenuBarHideInfo"
     nonisolated static let screenshotSaveLocationOverride = "screenshotSaveLocationOverride"
@@ -61,6 +62,106 @@ enum RewindDragAction: String, CaseIterable, Identifiable {
     }
 }
 
+enum TimelineScrollDirection: String, CaseIterable, Identifiable {
+    case off
+    case upToRewind
+    case downToRewind
+
+    nonisolated var id: String { rawValue }
+
+    nonisolated var settingsLabel: String {
+        switch self {
+        case .off:
+            "Off"
+        case .upToRewind:
+            "Scroll up to rewind"
+        case .downToRewind:
+            "Scroll down to rewind"
+        }
+    }
+
+    /// Returns the signed delta expected by `OverlayViewModel.scrollBy`.
+    /// Positive values rewind; negative values move forwards.
+    nonisolated func navigationDelta(
+        horizontalDelta: CGFloat,
+        verticalDelta: CGFloat
+    ) -> CGFloat? {
+        guard self != .off else { return nil }
+        guard horizontalDelta.isFinite, verticalDelta.isFinite else { return nil }
+
+        let dominantDelta = abs(horizontalDelta) > abs(verticalDelta)
+            ? horizontalDelta
+            : verticalDelta
+        guard dominantDelta != 0 else { return nil }
+
+        return self == .upToRewind ? dominantDelta : -dominantDelta
+    }
+
+    nonisolated static func storedValue(_ rawValue: String) -> TimelineScrollDirection {
+        TimelineScrollDirection(rawValue: rawValue) ?? .upToRewind
+    }
+}
+
+nonisolated struct TimelineScrollAccumulator {
+    /// Precise devices report points and emit many events per gesture. Four
+    /// points keeps a gentle gesture responsive without turning every tiny
+    /// update into a full timeline-entry jump.
+    static let preciseStepThreshold: CGFloat = 4
+
+    private(set) var accumulatedDelta: CGFloat = 0
+
+    mutating func navigationStep(
+        for delta: CGFloat?,
+        hasPreciseScrollingDeltas: Bool,
+        isMomentum: Bool = false,
+        beginsGesture: Bool = false,
+        endsGesture: Bool = false
+    ) -> CGFloat? {
+        if beginsGesture {
+            reset()
+        }
+        defer {
+            if endsGesture {
+                reset()
+            }
+        }
+
+        // Momentum can continue long after the user's fingers leave the
+        // device. Timeline navigation should stop with the direct gesture.
+        guard !isMomentum else {
+            reset()
+            return nil
+        }
+
+        guard let delta, delta.isFinite, delta != 0 else { return nil }
+
+        // A traditional mouse-wheel tick is already a discrete action, even
+        // when a driver reports a fractional value.
+        guard hasPreciseScrollingDeltas else {
+            reset()
+            return delta > 0 ? 1 : -1
+        }
+
+        if accumulatedDelta != 0,
+           (accumulatedDelta > 0) != (delta > 0) {
+            accumulatedDelta = 0
+        }
+        accumulatedDelta += delta
+
+        guard abs(accumulatedDelta) >= Self.preciseStepThreshold else {
+            return nil
+        }
+
+        let step: CGFloat = accumulatedDelta > 0 ? 1 : -1
+        accumulatedDelta -= step * Self.preciseStepThreshold
+        return step
+    }
+
+    mutating func reset() {
+        accumulatedDelta = 0
+    }
+}
+
 enum AppStorageDefault {
     nonisolated static let captureInterval = 0.25
     nonisolated static let rewindHistorySeconds = RewindHistoryOption.defaultValue.rawValue
@@ -76,6 +177,7 @@ enum AppStorageDefault {
     nonisolated static let saveScreenshotSoundEnabled = true
     nonisolated static let textGrabDebugPreviewEnabled = false
     nonisolated static let rewindDragAction = RewindDragAction.saveText.rawValue
+    nonisolated static let timelineScrollDirection = TimelineScrollDirection.upToRewind.rawValue
     nonisolated static let showMenuBarIcon = true
     nonisolated static let hasSeenMenuBarHideInfo = false
     nonisolated static let screenshotSaveLocationOverride = ""
