@@ -634,6 +634,7 @@ class OverlayViewModel {
     }
 
     func scrollBy(_ delta: CGFloat) {
+        guard delta.isFinite, delta != 0 else { return }
         guard ensureDisplayedSelection() else { return }
 
         // Scrolling navigates logical timeline entries rather than elapsed
@@ -641,8 +642,7 @@ class OverlayViewModel {
         // second at a time can repeatedly resolve to the same real endpoint
         // and appear to stop. Entry navigation always makes visible progress
         // when an older or newer item exists.
-        guard delta != 0,
-              let selection = adjacentTimelineSelection(
+        guard let selection = adjacentTimelineSelection(
                   in: displayedEntries,
                   excludingSpanID: selectedSpanID,
                   from: selectedTimestamp,

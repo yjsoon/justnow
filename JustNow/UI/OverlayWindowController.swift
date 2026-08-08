@@ -296,24 +296,20 @@ class OverlayWindowController: NSObject {
         timelineScrollAccumulator.reset()
         scrollEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             guard let self = self, let vm = self.viewModel else { return event }
+            guard timelineScrollDirection != .off else { return event }
 
-            guard let delta = timelineScrollDirection.navigationDelta(
+            let delta = timelineScrollDirection.navigationDelta(
                 horizontalDelta: event.scrollingDeltaX,
                 verticalDelta: event.scrollingDeltaY
-            ) else { return event }
-
-            if event.phase.contains(.began) {
-                self.timelineScrollAccumulator.reset()
-            }
+            )
             if let step = self.timelineScrollAccumulator.navigationStep(
                 for: delta,
                 hasPreciseScrollingDeltas: event.hasPreciseScrollingDeltas,
-                isMomentum: !event.momentumPhase.isEmpty
+                isMomentum: !event.momentumPhase.isEmpty,
+                beginsGesture: event.phase.contains(.began),
+                endsGesture: event.phase.contains(.ended) || event.phase.contains(.cancelled)
             ) {
                 vm.scrollBy(step)
-            }
-            if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
-                self.timelineScrollAccumulator.reset()
             }
             return nil // Consume the event
         }

@@ -655,6 +655,25 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertEqual(forward.timestamp, base.addingTimeInterval(30))
     }
 
+    func testScrollIgnoresNonFiniteDelta() async throws {
+        let base = Date(timeIntervalSinceReferenceDate: 10_000)
+        let entries = [
+            makeEntry(start: base, end: base.addingTimeInterval(10)),
+            makeEntry(start: base.addingTimeInterval(20), end: base.addingTimeInterval(30))
+        ]
+        let viewModel = try await makeViewModel(
+            entries: entries,
+            referenceDate: base.addingTimeInterval(40)
+        )
+        let originalSpanID = viewModel.selectedSpanID
+        let originalTimestamp = viewModel.selectedTimestamp
+
+        viewModel.scrollBy(.nan)
+
+        XCTAssertEqual(viewModel.selectedSpanID, originalSpanID)
+        XCTAssertEqual(viewModel.selectedTimestamp, originalTimestamp)
+    }
+
     func testSearchSelectionPreservesLogicalSpanIDAndTimestamp() throws {
         let base = Date(timeIntervalSinceReferenceDate: 10_000)
         let sharedFrameID = UUID()

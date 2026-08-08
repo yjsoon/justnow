@@ -87,6 +87,7 @@ enum TimelineScrollDirection: String, CaseIterable, Identifiable {
         verticalDelta: CGFloat
     ) -> CGFloat? {
         guard self != .off else { return nil }
+        guard horizontalDelta.isFinite, verticalDelta.isFinite else { return nil }
 
         let dominantDelta = abs(horizontalDelta) > abs(verticalDelta)
             ? horizontalDelta
@@ -110,11 +111,20 @@ nonisolated struct TimelineScrollAccumulator {
     private(set) var accumulatedDelta: CGFloat = 0
 
     mutating func navigationStep(
-        for delta: CGFloat,
+        for delta: CGFloat?,
         hasPreciseScrollingDeltas: Bool,
-        isMomentum: Bool = false
+        isMomentum: Bool = false,
+        beginsGesture: Bool = false,
+        endsGesture: Bool = false
     ) -> CGFloat? {
-        guard delta.isFinite, delta != 0 else { return nil }
+        if beginsGesture {
+            reset()
+        }
+        defer {
+            if endsGesture {
+                reset()
+            }
+        }
 
         // Momentum can continue long after the user's fingers leave the
         // device. Timeline navigation should stop with the direct gesture.
@@ -122,6 +132,8 @@ nonisolated struct TimelineScrollAccumulator {
             reset()
             return nil
         }
+
+        guard let delta, delta.isFinite, delta != 0 else { return nil }
 
         // A traditional mouse-wheel tick is already a discrete action, even
         // when a driver reports a fractional value.

@@ -122,4 +122,35 @@ final class TimelineScrollDirectionTests: XCTestCase {
         accumulator.reset()
         XCTAssertNil(accumulator.navigationStep(for: 1, hasPreciseScrollingDeltas: true))
     }
+
+    func testZeroDeltaGestureEndResetsPartialMovement() {
+        var accumulator = TimelineScrollAccumulator()
+
+        XCTAssertNil(accumulator.navigationStep(
+            for: 3,
+            hasPreciseScrollingDeltas: true,
+            beginsGesture: true
+        ))
+        XCTAssertNil(accumulator.navigationStep(
+            for: nil,
+            hasPreciseScrollingDeltas: true,
+            endsGesture: true
+        ))
+        XCTAssertNil(accumulator.navigationStep(
+            for: 1,
+            hasPreciseScrollingDeltas: true,
+            beginsGesture: true
+        ))
+    }
+
+    func testNonFiniteDirectionInputIsRejected() {
+        XCTAssertNil(TimelineScrollDirection.upToRewind.navigationDelta(
+            horizontalDelta: .nan,
+            verticalDelta: 1
+        ))
+        XCTAssertNil(TimelineScrollDirection.upToRewind.navigationDelta(
+            horizontalDelta: 1,
+            verticalDelta: .infinity
+        ))
+    }
 }
