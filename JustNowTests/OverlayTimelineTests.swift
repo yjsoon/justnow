@@ -624,6 +624,37 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedTimestamp, base.addingTimeInterval(70))
     }
 
+    func testScrollNeverMovesAgainstRequestedDirectionAcrossOverlappingSpans() async throws {
+        let base = Date(timeIntervalSinceReferenceDate: 10_000)
+        let first = makeEntry(
+            start: base,
+            end: base.addingTimeInterval(20)
+        )
+        let second = makeEntry(
+            start: base.addingTimeInterval(10),
+            end: base.addingTimeInterval(30)
+        )
+        let viewModel = try await makeViewModel(
+            entries: [first, second],
+            referenceDate: base.addingTimeInterval(40)
+        )
+
+        viewModel.setSelectedTimestamp(base.addingTimeInterval(10))
+        XCTAssertEqual(viewModel.selectedSpanID, second.span.id)
+        viewModel.scrollBy(1)
+        XCTAssertEqual(viewModel.selectedSpanID, first.span.id)
+        XCTAssertEqual(viewModel.selectedTimestamp, base)
+
+        let forward = try XCTUnwrap(adjacentTimelineSelection(
+            in: [first, second],
+            excludingSpanID: first.span.id,
+            from: base.addingTimeInterval(20),
+            rewinding: false
+        ))
+        XCTAssertEqual(forward.spanID, second.span.id)
+        XCTAssertEqual(forward.timestamp, base.addingTimeInterval(30))
+    }
+
     func testSearchSelectionPreservesLogicalSpanIDAndTimestamp() throws {
         let base = Date(timeIntervalSinceReferenceDate: 10_000)
         let sharedFrameID = UUID()

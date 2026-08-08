@@ -36,7 +36,7 @@ final class TimelineScrollDirectionTests: XCTestCase {
         )
     }
 
-    func testSmallNonZeroDeltasRemainUsable() {
+    func testSmallNonZeroDeltasRemainAvailableForAccumulation() {
         XCTAssertEqual(
             TimelineScrollDirection.upToRewind.navigationDelta(
                 horizontalDelta: 0,
@@ -73,5 +73,53 @@ final class TimelineScrollDirectionTests: XCTestCase {
 
     func testUnknownStoredValueFallsBackToScrollUpToRewind() {
         XCTAssertEqual(TimelineScrollDirection.storedValue("missing"), .upToRewind)
+    }
+
+    func testPreciseDeltasAccumulateBeforeNavigating() {
+        var accumulator = TimelineScrollAccumulator()
+
+        XCTAssertNil(accumulator.navigationStep(for: 1, hasPreciseScrollingDeltas: true))
+        XCTAssertNil(accumulator.navigationStep(for: 1, hasPreciseScrollingDeltas: true))
+        XCTAssertNil(accumulator.navigationStep(for: 1, hasPreciseScrollingDeltas: true))
+        XCTAssertEqual(
+            accumulator.navigationStep(for: 1, hasPreciseScrollingDeltas: true),
+            1
+        )
+    }
+
+    func testTraditionalWheelTickNavigatesImmediately() {
+        var accumulator = TimelineScrollAccumulator()
+
+        XCTAssertEqual(
+            accumulator.navigationStep(for: -0.25, hasPreciseScrollingDeltas: false),
+            -1
+        )
+    }
+
+    func testPreciseDirectionReversalDiscardsOppositeRemainder() {
+        var accumulator = TimelineScrollAccumulator()
+
+        XCTAssertNil(accumulator.navigationStep(for: 3, hasPreciseScrollingDeltas: true))
+        XCTAssertNil(accumulator.navigationStep(for: -1, hasPreciseScrollingDeltas: true))
+        XCTAssertEqual(
+            accumulator.navigationStep(for: -3, hasPreciseScrollingDeltas: true),
+            -1
+        )
+    }
+
+    func testMomentumAndResetDiscardAccumulatedMovement() {
+        var accumulator = TimelineScrollAccumulator()
+
+        XCTAssertNil(accumulator.navigationStep(for: 3, hasPreciseScrollingDeltas: true))
+        XCTAssertNil(accumulator.navigationStep(
+            for: 2,
+            hasPreciseScrollingDeltas: true,
+            isMomentum: true
+        ))
+        XCTAssertEqual(accumulator.accumulatedDelta, 0)
+
+        XCTAssertNil(accumulator.navigationStep(for: 3, hasPreciseScrollingDeltas: true))
+        accumulator.reset()
+        XCTAssertNil(accumulator.navigationStep(for: 1, hasPreciseScrollingDeltas: true))
     }
 }

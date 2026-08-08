@@ -50,6 +50,7 @@ class OverlayWindowController: NSObject {
     private var dismissShortcutModifiers: Int
     private var keyEventMonitor: Any?
     private var scrollEventMonitor: Any?
+    private var timelineScrollAccumulator = TimelineScrollAccumulator()
     private var flagsChangedMonitor: Any?
     private(set) var viewModel: OverlayViewModel?
     private var payloadLease: (any FrameRepositoryPayloadLease)?
@@ -292,6 +293,7 @@ class OverlayWindowController: NSObject {
         }
 
         // Monitor scroll events
+        timelineScrollAccumulator.reset()
         scrollEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             guard let self = self, let vm = self.viewModel else { return event }
 
@@ -300,10 +302,19 @@ class OverlayWindowController: NSObject {
                 verticalDelta: event.scrollingDeltaY
             ) else { return event }
 
-            // A mouse-wheel tick and a gentle trackpad movement can both be
-            // smaller than one point. Direction, not magnitude, selects the
-            // neighbouring frame, so keep every non-zero event usable.
-            vm.scrollBy(delta)
+            if event.phase.contains(.began) {
+                self.timelineScrollAccumulator.reset()
+            }
+            if let step = self.timelineScrollAccumulator.navigationStep(
+                for: delta,
+                hasPreciseScrollingDeltas: event.hasPreciseScrollingDeltas,
+                isMomentum: !event.momentumPhase.isEmpty
+            ) {
+                vm.scrollBy(step)
+            }
+            if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
+                self.timelineScrollAccumulator.reset()
+            }
             return nil // Consume the event
         }
 

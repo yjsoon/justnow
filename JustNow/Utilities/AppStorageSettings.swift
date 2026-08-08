@@ -101,6 +101,55 @@ enum TimelineScrollDirection: String, CaseIterable, Identifiable {
     }
 }
 
+nonisolated struct TimelineScrollAccumulator {
+    /// Precise devices report points and emit many events per gesture. Four
+    /// points keeps a gentle gesture responsive without turning every tiny
+    /// update into a full timeline-entry jump.
+    static let preciseStepThreshold: CGFloat = 4
+
+    private(set) var accumulatedDelta: CGFloat = 0
+
+    mutating func navigationStep(
+        for delta: CGFloat,
+        hasPreciseScrollingDeltas: Bool,
+        isMomentum: Bool = false
+    ) -> CGFloat? {
+        guard delta.isFinite, delta != 0 else { return nil }
+
+        // Momentum can continue long after the user's fingers leave the
+        // device. Timeline navigation should stop with the direct gesture.
+        guard !isMomentum else {
+            reset()
+            return nil
+        }
+
+        // A traditional mouse-wheel tick is already a discrete action, even
+        // when a driver reports a fractional value.
+        guard hasPreciseScrollingDeltas else {
+            reset()
+            return delta > 0 ? 1 : -1
+        }
+
+        if accumulatedDelta != 0,
+           (accumulatedDelta > 0) != (delta > 0) {
+            accumulatedDelta = 0
+        }
+        accumulatedDelta += delta
+
+        guard abs(accumulatedDelta) >= Self.preciseStepThreshold else {
+            return nil
+        }
+
+        let step: CGFloat = accumulatedDelta > 0 ? 1 : -1
+        accumulatedDelta -= step * Self.preciseStepThreshold
+        return step
+    }
+
+    mutating func reset() {
+        accumulatedDelta = 0
+    }
+}
+
 enum AppStorageDefault {
     nonisolated static let captureInterval = 0.25
     nonisolated static let rewindHistorySeconds = RewindHistoryOption.defaultValue.rawValue

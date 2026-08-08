@@ -187,7 +187,7 @@ struct SettingsView: View {
                         Text("Scrolling")
                     }
 
-                    Text("Choose which scroll direction moves towards older frames. The opposite direction moves forwards.")
+                    Text("Turn timeline scrolling off, or choose which direction moves towards older frames. The opposite direction moves forwards.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

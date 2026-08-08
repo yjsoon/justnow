@@ -154,6 +154,48 @@ nonisolated func latestTimelineSelection(in entries: [TimelineEntry]) -> Timelin
     return resolveTimelineSelection(entries: entries, target: latestObservation)
 }
 
+nonisolated func adjacentTimelineSelection(
+    in entries: [TimelineEntry],
+    excludingSpanID: UUID?,
+    from timestamp: Date,
+    rewinding: Bool
+) -> TimelineSelection? {
+    var best: TimelineSelection?
+
+    for (index, entry) in entries.enumerated() where entry.span.id != excludingSpanID {
+        let bounds = timelineSpanBounds(for: entry)
+        let endpoints = [bounds.start, bounds.end]
+        let candidateTimestamp: Date?
+        if rewinding {
+            candidateTimestamp = endpoints.filter { $0 < timestamp }.max()
+        } else {
+            candidateTimestamp = endpoints.filter { $0 > timestamp }.min()
+        }
+        guard let candidateTimestamp else { continue }
+
+        let candidate = TimelineSelection(
+            spanID: entry.span.id,
+            timestamp: candidateTimestamp,
+            entryIndex: index
+        )
+        guard let currentBest = best else {
+            best = candidate
+            continue
+        }
+
+        let isCloser = rewinding
+            ? candidate.timestamp > currentBest.timestamp
+            : candidate.timestamp < currentBest.timestamp
+        if isCloser
+            || (candidate.timestamp == currentBest.timestamp
+                && candidate.entryIndex > currentBest.entryIndex) {
+            best = candidate
+        }
+    }
+
+    return best
+}
+
 nonisolated func preservingTimelineSelection(
     in entries: [TimelineEntry],
     preferredSpanID: UUID?,
@@ -599,11 +641,14 @@ class OverlayViewModel {
         // second at a time can repeatedly resolve to the same real endpoint
         // and appear to stop. Entry navigation always makes visible progress
         // when an older or newer item exists.
-        if delta > 0 {
-            moveLeft()
-        } else if delta < 0 {
-            moveRight()
-        }
+        guard delta != 0,
+              let selection = adjacentTimelineSelection(
+                  in: displayedEntries,
+                  excludingSpanID: selectedSpanID,
+                  from: selectedTimestamp,
+                  rewinding: delta > 0
+              ) else { return }
+        select(spanID: selection.spanID, timestamp: selection.timestamp)
     }
 
     var canSaveCurrentFrame: Bool {
