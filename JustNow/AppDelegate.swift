@@ -102,6 +102,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     @AppStorage(AppStorageKey.capturePauseShortcutModifiers) private var capturePauseShortcutModifiers: Int = AppStorageDefault.capturePauseShortcutModifiers
     @AppStorage(AppStorageKey.overlayDismissKeyCode) private var overlayDismissKeyCode: Int = AppStorageDefault.overlayDismissKeyCode
     @AppStorage(AppStorageKey.overlayDismissModifiers) private var overlayDismissModifiers: Int = AppStorageDefault.overlayDismissModifiers
+    @AppStorage(AppStorageKey.timelineScrollDirection)
+    private var timelineScrollDirection: String = AppStorageDefault.timelineScrollDirection
     @AppStorage(AppStorageKey.showMenuBarIcon) private var showMenuBarIcon: Bool = AppStorageDefault.showMenuBarIcon
     private var capturePolicyTimer: Timer?
     private var userDefaultsObserver: NSObjectProtocol?
@@ -888,6 +890,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             await self.overlayController?.showOverlay(
                 recentTimelineWindow: recentTimelineWindow.rawValue,
                 rewindHistoryOption: rewindHistoryOption,
+                timelineScrollDirection: TimelineScrollDirection.storedValue(
+                    self.timelineScrollDirection
+                ),
                 activeDisplay: targetDisplay,
                 availableDisplays: availableDisplays
             )

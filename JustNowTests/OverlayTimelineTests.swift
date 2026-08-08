@@ -598,6 +598,31 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertFalse(viewModel.accessibilityTimelineValue.contains("Frame"))
     }
 
+    func testScrollCrossesSparseHistoryGapsInBothDirections() async throws {
+        let base = Date(timeIntervalSinceReferenceDate: 10_000)
+        let older = makeEntry(
+            start: base,
+            end: base.addingTimeInterval(10)
+        )
+        let newer = makeEntry(
+            start: base.addingTimeInterval(70),
+            end: base.addingTimeInterval(90)
+        )
+        let viewModel = try await makeViewModel(
+            entries: [older, newer],
+            referenceDate: base.addingTimeInterval(100)
+        )
+
+        viewModel.setSelectedTimestamp(base.addingTimeInterval(70))
+        viewModel.scrollBy(1)
+        XCTAssertEqual(viewModel.selectedSpanID, older.span.id)
+        XCTAssertEqual(viewModel.selectedTimestamp, base.addingTimeInterval(10))
+
+        viewModel.scrollBy(-1)
+        XCTAssertEqual(viewModel.selectedSpanID, newer.span.id)
+        XCTAssertEqual(viewModel.selectedTimestamp, base.addingTimeInterval(70))
+    }
+
     func testSearchSelectionPreservesLogicalSpanIDAndTimestamp() throws {
         let base = Date(timeIntervalSinceReferenceDate: 10_000)
         let sharedFrameID = UUID()

@@ -15,6 +15,7 @@ enum AppStorageKey {
     nonisolated static let saveScreenshotSoundEnabled = "saveScreenshotSoundEnabled"
     nonisolated static let textGrabDebugPreviewEnabled = "textGrabDebugPreviewEnabled"
     nonisolated static let rewindDragAction = "rewindDragAction"
+    nonisolated static let timelineScrollDirection = "timelineScrollDirection"
     nonisolated static let showMenuBarIcon = "showMenuBarIcon"
     nonisolated static let hasSeenMenuBarHideInfo = "hasSeenMenuBarHideInfo"
     nonisolated static let screenshotSaveLocationOverride = "screenshotSaveLocationOverride"
@@ -61,6 +62,45 @@ enum RewindDragAction: String, CaseIterable, Identifiable {
     }
 }
 
+enum TimelineScrollDirection: String, CaseIterable, Identifiable {
+    case off
+    case upToRewind
+    case downToRewind
+
+    nonisolated var id: String { rawValue }
+
+    nonisolated var settingsLabel: String {
+        switch self {
+        case .off:
+            "Off"
+        case .upToRewind:
+            "Scroll up to rewind"
+        case .downToRewind:
+            "Scroll down to rewind"
+        }
+    }
+
+    /// Returns the signed delta expected by `OverlayViewModel.scrollBy`.
+    /// Positive values rewind; negative values move forwards.
+    nonisolated func navigationDelta(
+        horizontalDelta: CGFloat,
+        verticalDelta: CGFloat
+    ) -> CGFloat? {
+        guard self != .off else { return nil }
+
+        let dominantDelta = abs(horizontalDelta) > abs(verticalDelta)
+            ? horizontalDelta
+            : verticalDelta
+        guard dominantDelta != 0 else { return nil }
+
+        return self == .upToRewind ? dominantDelta : -dominantDelta
+    }
+
+    nonisolated static func storedValue(_ rawValue: String) -> TimelineScrollDirection {
+        TimelineScrollDirection(rawValue: rawValue) ?? .upToRewind
+    }
+}
+
 enum AppStorageDefault {
     nonisolated static let captureInterval = 0.25
     nonisolated static let rewindHistorySeconds = RewindHistoryOption.defaultValue.rawValue
@@ -76,6 +116,7 @@ enum AppStorageDefault {
     nonisolated static let saveScreenshotSoundEnabled = true
     nonisolated static let textGrabDebugPreviewEnabled = false
     nonisolated static let rewindDragAction = RewindDragAction.saveText.rawValue
+    nonisolated static let timelineScrollDirection = TimelineScrollDirection.upToRewind.rawValue
     nonisolated static let showMenuBarIcon = true
     nonisolated static let hasSeenMenuBarHideInfo = false
     nonisolated static let screenshotSaveLocationOverride = ""

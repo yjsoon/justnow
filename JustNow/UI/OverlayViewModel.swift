@@ -593,7 +593,23 @@ class OverlayViewModel {
 
     func scrollBy(_ delta: CGFloat) {
         guard ensureDisplayedSelection() else { return }
-        setSelectedTimestamp(selectedTimestamp.addingTimeInterval(delta > 0 ? -1 : 1))
+
+        let previousTimestamp = selectedTimestamp
+        let isRewinding = delta > 0
+        setSelectedTimestamp(
+            previousTimestamp.addingTimeInterval(isRewinding ? -1 : 1)
+        )
+
+        // Nearest-point resolution intentionally snaps timestamps in history
+        // gaps to a real span endpoint. Once the selection reaches the nearer
+        // side of a gap wider than two seconds, another one-second step can
+        // snap straight back to that same endpoint forever. If the requested
+        // direction made no progress, cross the gap to the adjacent span.
+        if isRewinding, selectedTimestamp >= previousTimestamp {
+            moveLeft()
+        } else if !isRewinding, selectedTimestamp <= previousTimestamp {
+            moveRight()
+        }
     }
 
     var canSaveCurrentFrame: Bool {

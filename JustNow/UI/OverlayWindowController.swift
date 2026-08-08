@@ -90,6 +90,7 @@ class OverlayWindowController: NSObject {
     func showOverlay(
         recentTimelineWindow: TimeInterval,
         rewindHistoryOption: RewindHistoryOption,
+        timelineScrollDirection: TimelineScrollDirection = .upToRewind,
         activeDisplay: DisplayInfo?,
         availableDisplays: [DisplayInfo]
     ) async {
@@ -294,12 +295,15 @@ class OverlayWindowController: NSObject {
         scrollEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             guard let self = self, let vm = self.viewModel else { return event }
 
-            // Use horizontal scroll or vertical scroll
-            let delta = event.scrollingDeltaX != 0 ? event.scrollingDeltaX : -event.scrollingDeltaY
+            guard let delta = timelineScrollDirection.navigationDelta(
+                horizontalDelta: event.scrollingDeltaX,
+                verticalDelta: event.scrollingDeltaY
+            ) else { return event }
 
-            if abs(delta) > 1 {
-                vm.scrollBy(delta)
-            }
+            // A mouse-wheel tick and a gentle trackpad movement can both be
+            // smaller than one point. Direction, not magnitude, selects the
+            // neighbouring frame, so keep every non-zero event usable.
+            vm.scrollBy(delta)
             return nil // Consume the event
         }
 

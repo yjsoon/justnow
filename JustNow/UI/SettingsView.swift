@@ -25,6 +25,8 @@ struct SettingsView: View {
     @AppStorage(AppStorageKey.saveScreenshotSoundEnabled) private var saveScreenshotSoundEnabled: Bool = AppStorageDefault.saveScreenshotSoundEnabled
     @AppStorage(AppStorageKey.textGrabDebugPreviewEnabled) private var textGrabDebugPreviewEnabled: Bool = AppStorageDefault.textGrabDebugPreviewEnabled
     @AppStorage(AppStorageKey.rewindDragAction) private var rewindDragAction: String = AppStorageDefault.rewindDragAction
+    @AppStorage(AppStorageKey.timelineScrollDirection)
+    private var timelineScrollDirection: String = AppStorageDefault.timelineScrollDirection
     @AppStorage(AppStorageKey.showMenuBarIcon) private var showMenuBarIcon: Bool = AppStorageDefault.showMenuBarIcon
     @AppStorage(AppStorageKey.hasSeenMenuBarHideInfo) private var hasSeenMenuBarHideInfo: Bool = AppStorageDefault.hasSeenMenuBarHideInfo
     @AppStorage(AppStorageKey.screenshotSaveLocationOverride)
@@ -171,6 +173,27 @@ struct SettingsView: View {
 
     private var rewindSettingsTab: some View {
         Form {
+            Section("Timeline navigation") {
+                VStack(alignment: .leading, spacing: 8) {
+                    LabeledContent {
+                        Picker("", selection: $timelineScrollDirection) {
+                            ForEach(TimelineScrollDirection.allCases) { direction in
+                                Text(direction.settingsLabel).tag(direction.rawValue)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                    } label: {
+                        Text("Scrolling")
+                    }
+
+                    Text("Choose which scroll direction moves towards older frames. The opposite direction moves forwards.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
             Section("Text and screenshots") {
                 VStack(alignment: .leading, spacing: 8) {
                     LabeledContent {
