@@ -136,10 +136,10 @@ final class TimelineScrollDirectionTests: XCTestCase {
             hasPreciseScrollingDeltas: true,
             endsGesture: true
         ))
+        XCTAssertEqual(accumulator.accumulatedDelta, 0)
         XCTAssertNil(accumulator.navigationStep(
             for: 1,
-            hasPreciseScrollingDeltas: true,
-            beginsGesture: true
+            hasPreciseScrollingDeltas: true
         ))
     }
 
