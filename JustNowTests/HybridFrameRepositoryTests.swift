@@ -387,6 +387,40 @@ final class HybridFrameRepositoryTests: XCTestCase {
         XCTAssertEqual(timeline.map(\.span.observationCount), [1, 1])
     }
 
+    func testMissingDurableOnlyActivePayloadIsInvalidatedBeforeFreshCapture() async throws {
+        let store = try FrameStore(directory: directory)
+        let repository = HybridFrameRepository(frameStore: store, byteCap: 4)
+        let displayID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 360)
+        _ = try await repository.beginCaptureSession(at: startedAt)
+        let jpeg = Data(repeating: 9, count: 8)
+        let missing = makeFrame(at: 361, displayID: displayID)
+        let fresh = makeFrame(at: 362, displayID: displayID)
+
+        let initial = try await repository.recordEncodedCapture(missing, jpegData: jpeg)
+        guard case .inserted(let missingEntry) = initial.mutation else {
+            return XCTFail("Expected the oversized first capture to be durable-only")
+        }
+        try FileManager.default.removeItem(
+            at: directory
+                .appendingPathComponent("frames", isDirectory: true)
+                .appendingPathComponent("\(missing.id.uuidString).jpg")
+        )
+
+        let recovered = try await repository.recordEncodedCapture(fresh, jpegData: jpeg)
+        guard case .inserted(let freshEntry) = recovered.mutation else {
+            return XCTFail("A missing durable payload must not wedge the fresh capture")
+        }
+
+        XCTAssertNotEqual(freshEntry.span.id, missingEntry.span.id)
+        XCTAssertEqual(recovered.effects.invalidation.spanIDs, [missingEntry.span.id])
+        XCTAssertEqual(recovered.effects.invalidation.finalPhysicalFrameIDs, [missing.id])
+        let timeline = await repository.orderedTimeline()
+        XCTAssertEqual(timeline.map(\.frame.id), [fresh.id])
+        let metadata = await store.getAllMetadata()
+        XCTAssertEqual(metadata.map(\.id), [fresh.id])
+    }
+
     func testCurrentTimelineLeaseIncludesEveryVolatileDisplay() async throws {
         let store = try FrameStore(directory: directory)
         let durable = HybridDurableRepositoryProbe(
@@ -596,6 +630,52 @@ final class HybridFrameRepositoryTests: XCTestCase {
         XCTAssertEqual(invalidation.finalPhysicalFrameIDs, [entry.frame.id])
         let timeline = await repository.orderedTimeline()
         XCTAssertEqual(timeline.map(\.frame.id), [anchor.id])
+    }
+
+    func testPruningVolatileSpanUsesTargetedDurableReferenceLookup() async throws {
+        let store = try FrameStore(directory: directory)
+        let durable = HybridDurableRepositoryProbe(base: DiskFrameRepository(frameStore: store))
+        let repository = HybridFrameRepository(durableRepository: durable, byteCap: 64)
+        let timestamp = Date(timeIntervalSince1970: 610)
+        _ = try await repository.beginCaptureSession(at: timestamp)
+        let anchor = makeFrame(at: 610, displayID: UUID())
+        _ = try await repository.recordEncodedCapture(anchor, jpegData: Data([1]))
+        let volatile = makeFrame(at: 611, displayID: anchor.displayID)
+        let result = try await repository.recordEncodedCapture(
+            volatile,
+            jpegData: Data(repeating: 4, count: 16)
+        )
+        guard case .inserted(let entry) = result.mutation else {
+            return XCTFail("Expected a volatile insert")
+        }
+        let readsBefore = await durable.capturedStorageReadCounts()
+
+        _ = try await repository.pruneSpans(ids: [entry.span.id])
+
+        let readsAfter = await durable.capturedStorageReadCounts()
+        XCTAssertEqual(readsAfter.orderedTimeline, readsBefore.orderedTimeline)
+    }
+
+    func testOrderedFramesKeepsPhysicalCaptureTimestampAfterSpanExtension() async throws {
+        let store = try FrameStore(directory: directory)
+        let repository = HybridFrameRepository(frameStore: store, byteCap: 64)
+        let displayID = UUID()
+        _ = try await repository.beginCaptureSession(at: Date(timeIntervalSince1970: 620))
+        let first = makeFrame(at: 620, displayID: displayID)
+        _ = try await repository.recordEncodedCapture(first, jpegData: Data([1]))
+        let repeated = StoredFrame(
+            id: UUID(),
+            timestamp: Date(timeIntervalSince1970: 625),
+            hash: first.hash,
+            displayID: displayID,
+            displayName: "Renamed Display"
+        )
+        _ = try await repository.recordEncodedCapture(repeated, jpegData: Data([1]))
+
+        let frames = await repository.orderedFrames()
+
+        XCTAssertEqual(frames.map(\.id), [first.id])
+        XCTAssertEqual(frames.first?.timestamp, first.timestamp)
     }
 
     func testPolicyUsesFirstMajorAndOrdinaryAnchorsWhileHashZeroNeverTriggersMajor() async throws {
@@ -1070,6 +1150,10 @@ actor HybridDurableRepositoryProbe: HybridDurableRepository {
 
     func durableEntry(frameID: UUID, spanID: UUID) async throws -> TimelineEntry? {
         try await base.durableEntry(frameID: frameID, spanID: spanID)
+    }
+
+    func referencedFrameIDs(among frameIDs: Set<UUID>) async throws -> Set<UUID> {
+        try await base.referencedFrameIDs(among: frameIDs)
     }
 
     func recordEncodedCapture(

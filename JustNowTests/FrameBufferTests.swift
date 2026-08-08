@@ -1254,6 +1254,85 @@ final class FrameBufferTests: XCTestCase {
         XCTAssertEqual(begunSessions.count, 2)
     }
 
+    func testClearRecoveryKeepsOnlyNewestPendingFramePerDisplay() async throws {
+        let image = try makeStructuredImage(seed: 963)
+        let repository = FrameRepositoryProbe(
+            frames: [],
+            image: image,
+            exportedURL: directory.appendingPathComponent("unused.jpg")
+        )
+        let buffer = try await FrameBuffer(
+            retentionPolicy: .default24Hours,
+            storageDirectory: directory,
+            diagnosticsLog: nil,
+            frameRepository: repository
+        )
+        _ = try await buffer.beginCaptureSession()
+        await repository.setBeginFailures(1)
+        do {
+            try await buffer.clear()
+            XCTFail("Expected post-clear reopen failure")
+        } catch is FrameBufferClearError {
+        }
+
+        let base = Date()
+        for offset in 0..<20 {
+            buffer.addFrame(
+                image,
+                timestamp: base.addingTimeInterval(TimeInterval(offset)),
+                display: nil
+            )
+        }
+        await repository.waitForSaveInvocation(count: 1)
+
+        let saves = await repository.saveRequests()
+        XCTAssertEqual(saves.count, 1)
+        XCTAssertEqual(saves.first?.frame.timestamp, base.addingTimeInterval(19))
+        while buffer.frameCount < 1 {
+            await Task.yield()
+        }
+        try await buffer.endCaptureSession(reason: .paused)
+    }
+
+    func testClearFencesRecoveryFrameQueuedBeforeTheNewHistoryEpoch() async throws {
+        let image = try makeStructuredImage(seed: 964)
+        let repository = FrameRepositoryProbe(
+            frames: [],
+            image: image,
+            exportedURL: directory.appendingPathComponent("unused.jpg")
+        )
+        let buffer = try await FrameBuffer(
+            retentionPolicy: .default24Hours,
+            storageDirectory: directory,
+            diagnosticsLog: nil,
+            frameRepository: repository
+        )
+        _ = try await buffer.beginCaptureSession()
+        await repository.setBeginFailures(1)
+        do {
+            try await buffer.clear()
+            XCTFail("Expected post-clear reopen failure")
+        } catch is FrameBufferClearError {
+        }
+
+        await repository.suspendNextBegin()
+        buffer.addFrame(image, timestamp: Date(), display: nil)
+        await repository.waitForBeginInvocation(count: 3)
+
+        let replacementClear = Task { @MainActor in
+            try await buffer.clear()
+        }
+        await Task.yield()
+        await repository.resumeSuspendedBegin()
+        try await replacementClear.value
+        await Task.yield()
+
+        let saves = await repository.saveRequests()
+        XCTAssertTrue(saves.isEmpty)
+        XCTAssertEqual(buffer.frameCount, 0)
+        try await buffer.endCaptureSession(reason: .paused)
+    }
+
     func testStopDuringClearPreventsSessionFromReopening() async throws {
         let image = try makeStructuredImage(seed: 92)
         let repository = FrameRepositoryProbe(
@@ -2306,6 +2385,8 @@ private actor FrameRepositoryProbe: FrameRepository {
     private var shouldSuspendFirstFullImage: Bool
     private var clearFailuresRemaining: Int
     private var beginFailuresRemaining: Int
+    private var shouldSuspendNextBegin = false
+    private var beginInvocationCount = 0
     private var endFailuresRemaining: Int
     private let coalesceExactJPEG: Bool
     private var jpegByFrameID: [UUID: Data] = [:]
@@ -2320,6 +2401,8 @@ private actor FrameRepositoryProbe: FrameRepository {
     private var endReasonValues: [CaptureSessionEndReason] = []
     private var begunSessionIDValues: [UUID] = []
     private var saveWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var beginWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var suspendedBeginContinuation: CheckedContinuation<Void, Never>?
     private var suspendedSaveContinuation: CheckedContinuation<Void, Never>?
     private var clearWaiters: [CheckedContinuation<Void, Never>] = []
     private var suspendedClearContinuation: CheckedContinuation<Void, Never>?
@@ -2397,10 +2480,22 @@ private actor FrameRepositoryProbe: FrameRepository {
         spans
     }
 
-    func beginCaptureSession(at startedAt: Date) throws -> CaptureSession {
+    func beginCaptureSession(at startedAt: Date) async throws -> CaptureSession {
+        beginInvocationCount += 1
+        let beginWaitersToResume = beginWaiters.filter { $0.count <= beginInvocationCount }
+        beginWaiters.removeAll { $0.count <= beginInvocationCount }
+        for waiter in beginWaitersToResume {
+            waiter.continuation.resume()
+        }
         if beginFailuresRemaining > 0 {
             beginFailuresRemaining -= 1
             throw FrameRepositoryProbeError.beginFailed
+        }
+        if shouldSuspendNextBegin {
+            shouldSuspendNextBegin = false
+            await withCheckedContinuation { continuation in
+                suspendedBeginContinuation = continuation
+            }
         }
         if activeSession != nil {
             throw FrameRepositoryProbeError.sessionMismatch
@@ -2636,6 +2731,23 @@ private actor FrameRepositoryProbe: FrameRepository {
 
     func setBeginFailures(_ count: Int) {
         beginFailuresRemaining = count
+    }
+
+    func suspendNextBegin() {
+        shouldSuspendNextBegin = true
+    }
+
+    func waitForBeginInvocation(count: Int) async {
+        guard beginInvocationCount < count else { return }
+        await withCheckedContinuation { continuation in
+            beginWaiters.append((count: count, continuation: continuation))
+        }
+    }
+
+    func resumeSuspendedBegin() {
+        let continuation = suspendedBeginContinuation
+        suspendedBeginContinuation = nil
+        continuation?.resume()
     }
 
     func waitForSaveInvocation(count: Int) async {

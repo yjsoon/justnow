@@ -89,7 +89,7 @@ nonisolated final class FrameDatabase: @unchecked Sendable {
 
     func close() {
         guard let db else { return }
-        sqlite3_close(db)
+        sqlite3_close_v2(db)
         self.db = nil
     }
 
@@ -633,6 +633,41 @@ nonisolated final class FrameDatabase: @unchecked Sendable {
             }
         }
         return removedAssets
+    }
+
+    /// Returns only candidate physical IDs that still have at least one
+    /// logical span reference, using the frame-spans index in bounded chunks.
+    func referencedFrameIDs(among frameIDs: Set<UUID>) throws -> Set<UUID> {
+        guard !frameIDs.isEmpty else { return [] }
+        let values = Array(frameIDs)
+        var resultIDs = Set<UUID>()
+        for start in stride(from: 0, to: values.count, by: 400) {
+            let end = min(start + 400, values.count)
+            let chunk = Array(values[start..<end])
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            try withPreparedStatement(
+                "SELECT DISTINCT frame_id FROM frame_spans WHERE frame_id IN (\(placeholders));"
+            ) { statement in
+                for (offset, id) in chunk.enumerated() {
+                    guard bindText(id.uuidString, to: statement, index: Int32(offset + 1)) else {
+                        throw sqliteError(message: "Failed to bind frame reference ID")
+                    }
+                }
+                var result = sqlite3_step(statement)
+                while result == SQLITE_ROW {
+                    guard let rawID = sqlite3_column_text(statement, 0),
+                          let id = UUID(uuidString: String(cString: rawID)) else {
+                        throw FrameDatabaseError.corrupt("Invalid span frame reference")
+                    }
+                    resultIDs.insert(id)
+                    result = sqlite3_step(statement)
+                }
+                guard result == SQLITE_DONE else {
+                    throw sqliteError(message: "Failed to finish frame reference lookup")
+                }
+            }
+        }
+        return resultIDs
     }
 
     func deleteAllFrames() throws {

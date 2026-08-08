@@ -26,8 +26,14 @@ enum FrameStoreError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .clearIncomplete(let paths):
-            let locations = paths.joined(separator: "\n")
-            return "History was removed from the timeline, but some stored data could not be deleted. Try Clear All History again.\n\(locations)"
+            let visibleLimit = 5
+            let names = paths.prefix(visibleLimit).map {
+                URL(fileURLWithPath: $0).lastPathComponent
+            }
+            let remainder = max(0, paths.count - names.count)
+            let locations = names.map { "• \($0)" }.joined(separator: "\n")
+            let remainderDescription = remainder > 0 ? "\n…and \(remainder) more." : ""
+            return "History was removed from the timeline, but some stored data could not be deleted. Try Clear All History again.\n\(locations)\(remainderDescription)"
         default:
             return nil
         }
@@ -369,9 +375,11 @@ actor FrameStore {
                 if activeEntry.frame.id != frame.id,
                    Int64(jpegData.count) == activeMetadata.fileSize {
                     let activePath = framesURL.appendingPathComponent(activeMetadata.filename)
-                    guard let activeData = try? FrameStoreFile.readRegularFile(at: activePath) else {
-                        throw FrameStoreError.fileNotFound(activeEntry.frame.id)
-                    }
+                    // A missing or unreadable active payload cannot be compared
+                    // exactly. Remove its broken logical span before inserting
+                    // the new frame so the live timeline cannot expose an
+                    // entry whose payload is already unavailable.
+                    let activeData = try? FrameStoreFile.readRegularFile(at: activePath)
                     if activeData == jpegData {
                         let extended = try database.extendSpan(
                             id: activeEntry.span.id,
@@ -379,6 +387,8 @@ actor FrameStore {
                             displayName: frame.displayName
                         )
                         return .extended(extended)
+                    } else if activeData == nil {
+                        _ = try pruneSpans(ids: [activeEntry.span.id])
                     }
                 }
             }
@@ -770,6 +780,14 @@ actor FrameStore {
             try? fileManager.removeItem(at: framesURL.appendingPathComponent(metadata.thumbnailFilename))
         }
         return Set(unreferencedRows.map(\.id))
+    }
+
+    func referencedFrameIDs(among frameIDs: Set<UUID>) throws -> Set<UUID> {
+        do {
+            return try database.referencedFrameIDs(among: frameIDs)
+        } catch {
+            throw FrameStoreError.database(String(describing: error))
+        }
     }
 
     func pruneFrames(ids: Set<UUID>) throws {

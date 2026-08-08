@@ -181,20 +181,11 @@ actor HybridFrameRepository: FrameRepository {
 
     func orderedFrames() async -> [StoredFrame] {
         let entries = await orderedTimeline()
-        var newestByPhysicalID: [UUID: StoredFrame] = [:]
+        var framesByPhysicalID: [UUID: StoredFrame] = [:]
         for entry in entries {
-            let projected = StoredFrame(
-                id: entry.frame.id,
-                timestamp: timelineSpanBounds(for: entry).end,
-                hash: entry.frame.hash,
-                displayID: entry.span.displayID,
-                displayName: entry.span.displayName ?? entry.frame.displayName
-            )
-            if projected.timestamp >= (newestByPhysicalID[projected.id]?.timestamp ?? .distantPast) {
-                newestByPhysicalID[projected.id] = projected
-            }
+            framesByPhysicalID[entry.frame.id] = entry.frame
         }
-        return newestByPhysicalID.values.sorted { lhs, rhs in
+        return framesByPhysicalID.values.sorted { lhs, rhs in
             if lhs.timestamp != rhs.timestamp { return lhs.timestamp < rhs.timestamp }
             return lhs.id.uuidString < rhs.id.uuidString
         }
@@ -285,7 +276,7 @@ actor HybridFrameRepository: FrameRepository {
 
                     case .mirrored, .durableOnly:
                         if let canonical = active.canonicalDurableEntry,
-                           self.isLogicallyNewer(active.entry, than: canonical) {
+                           self.requiresDurableCheckpoint(active.entry, than: canonical) {
                             let effects = try await self.checkpointActivePayload(for: key)
                             accumulated.merge(effects)
                             self.pendingSessionEndEffects[id] = accumulated
@@ -362,16 +353,27 @@ actor HybridFrameRepository: FrameRepository {
             throw FrameStoreError.staleCaptureObservation
         }
 
-        if let active = policyStates[key]?.active,
-           try await payloadMatches(active, jpegData: jpegData) {
-            let result = try await recordExactDuplicate(
-                frame,
-                jpegData: jpegData,
-                key: key,
-                active: active,
-                precedingEffects: effects
-            )
-            return completeCaptureResult(result, for: key)
+        if let active = policyStates[key]?.active {
+            do {
+                if try await payloadMatches(active, jpegData: jpegData) {
+                    let result = try await recordExactDuplicate(
+                        frame,
+                        jpegData: jpegData,
+                        key: key,
+                        active: active,
+                        precedingEffects: effects
+                    )
+                    return completeCaptureResult(result, for: key)
+                }
+            } catch let error as FrameStoreError {
+                // A durable-only active span may have had its payload removed
+                // externally after RAM eviction. Do not let that broken span
+                // wedge capture or remain visible while accepting a fresh
+                // durable anchor. Other storage failures remain observable.
+                guard case .fileNotFound = error else { throw error }
+                effects.merge(try await discardUnavailableDurablePayload(active, for: key))
+                pendingCaptureEffects[key] = effects
+            }
         }
 
         let boundaryEffects = try await checkpointDurableOnlyBoundaryIfNeeded(for: key)
@@ -561,24 +563,40 @@ actor HybridFrameRepository: FrameRepository {
 
     func pruneSpans(ids: Set<UUID>) async throws -> FrameRepositoryInvalidation {
         try await withMutationPermit {
-            let durableInvalidation = try await self.disk.pruneSpans(ids: ids)
-            let residentEviction = await self.ring.removeSpans(ids: ids)
-            let removedFrameIDs = Set(residentEviction.entries.map(\.frame.id))
-            let survivingFrameIDs = Set((await self.ring.entries()).map(\.frame.id))
-                .union((await self.disk.orderedTimeline()).map(\.frame.id))
-            let removedSpanIDs = Set(residentEviction.entries.map(\.span.id))
-                .union(durableInvalidation.spanIDs)
-            self.removePolicyState(spanIDs: removedSpanIDs, frameIDs: removedFrameIDs)
-            self.reconcilePendingEffectsAfterPrune(spanIDs: removedSpanIDs)
-            for spanID in removedSpanIDs {
-                self.durableEntriesBySpanID.removeValue(forKey: spanID)
-            }
-            return FrameRepositoryInvalidation(
-                spanIDs: removedSpanIDs,
-                finalPhysicalFrameIDs: durableInvalidation.finalPhysicalFrameIDs
-                    .union(removedFrameIDs.subtracting(survivingFrameIDs))
-            )
+            try await self.pruneSpansWithMutationPermit(ids: ids)
         }
+    }
+
+    private func pruneSpansWithMutationPermit(
+        ids: Set<UUID>
+    ) async throws -> FrameRepositoryInvalidation {
+        let durableInvalidation = try await disk.pruneSpans(ids: ids)
+        let residentEviction = await ring.removeSpans(ids: ids)
+        let removedFrameIDs = Set(residentEviction.entries.map(\.frame.id))
+        let stillInRing = Set((await ring.entries()).map(\.frame.id))
+        let durableCandidates = removedFrameIDs.subtracting(stillInRing)
+        let stillDurable: Set<UUID>
+        do {
+            stillDurable = try await disk.referencedFrameIDs(among: durableCandidates)
+        } catch {
+            // Durable pruning has already committed. On a follow-up read
+            // failure, conservatively retain decoded/cache state rather
+            // than throwing after both repositories have mutated.
+            stillDurable = durableCandidates
+        }
+        let survivingFrameIDs = stillInRing.union(stillDurable)
+        let removedSpanIDs = Set(residentEviction.entries.map(\.span.id))
+            .union(durableInvalidation.spanIDs)
+        removePolicyState(spanIDs: removedSpanIDs, frameIDs: removedFrameIDs)
+        reconcilePendingEffectsAfterPrune(spanIDs: removedSpanIDs)
+        for spanID in removedSpanIDs {
+            durableEntriesBySpanID.removeValue(forKey: spanID)
+        }
+        return FrameRepositoryInvalidation(
+            spanIDs: removedSpanIDs,
+            finalPhysicalFrameIDs: durableInvalidation.finalPhysicalFrameIDs
+                .union(removedFrameIDs.subtracting(survivingFrameIDs))
+        )
     }
 
     func clear() async throws {
@@ -856,7 +874,7 @@ actor HybridFrameRepository: FrameRepository {
         guard let active = policyStates[key]?.active,
               active.residency == .durableOnly,
               let canonical = active.canonicalDurableEntry,
-              isLogicallyNewer(active.entry, than: canonical) else {
+              requiresDurableCheckpoint(active.entry, than: canonical) else {
             return .empty
         }
         return try await checkpointActivePayload(for: key)
@@ -895,6 +913,23 @@ actor HybridFrameRepository: FrameRepository {
         }
         guard active.canonicalDurableEntry != nil else { return false }
         return try await disk.encodedPayload(id: active.entry.frame.id) == jpegData
+    }
+
+    private func discardUnavailableDurablePayload(
+        _ active: ActivePayload,
+        for key: ActiveCaptureKey
+    ) async throws -> FrameRepositoryEffects {
+        let invalidation = try await pruneSpansWithMutationPermit(ids: [active.entry.span.id])
+        // Unlike ordinary retention, this is a recovery boundary. Reset its
+        // anchor clock so the observation that exposed the unavailable payload
+        // is durably anchored as fresh history instead of being pressure-dropped.
+        policyStates.removeValue(forKey: key)
+        return FrameRepositoryEffects(
+            timelineUpserts: [],
+            invalidation: invalidation,
+            newlyDurableEntries: [],
+            persistenceEvents: []
+        )
     }
 
     private func anchorReason(
@@ -1066,7 +1101,17 @@ actor HybridFrameRepository: FrameRepository {
         if lhs.span.observationCount != rhs.span.observationCount {
             return lhs.span.observationCount > rhs.span.observationCount
         }
-        return lhs.span.displayName != rhs.span.displayName
+        return lhs.span.displayName != nil && rhs.span.displayName == nil
+    }
+
+    /// Checkpoint comparisons retain name-only updates even though merge order
+    /// leaves equal-ranked named entries to deterministic source priority.
+    private func requiresDurableCheckpoint(
+        _ lhs: TimelineEntry,
+        than rhs: TimelineEntry
+    ) -> Bool {
+        isLogicallyNewer(lhs, than: rhs)
+            || lhs.span.displayName != rhs.span.displayName
     }
 
     private func timelineOrder(_ lhs: TimelineEntry, _ rhs: TimelineEntry) -> Bool {

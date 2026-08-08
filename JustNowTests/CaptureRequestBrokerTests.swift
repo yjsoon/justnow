@@ -507,7 +507,7 @@ final class CaptureRequestBrokerTests: XCTestCase {
         await coordinator.stopCapture()
     }
 
-    func testUnexpectedStopQueuedDuringDurableBeginClosesPublishedSessionUnderGate() async {
+    func testUnexpectedStopQueuedDuringDurableBeginClosesPublishedSessionUnderGate() async throws {
         let beginGate = BrokerTestGate()
         let discovery = CoordinatorDisplayDiscoveryProbe(displays: [coordinatorDisplayA])
         let factory = CoordinatorCaptureManagerFactoryProbe()
@@ -529,7 +529,7 @@ final class CaptureRequestBrokerTests: XCTestCase {
             }
         }
         await waitUntil { delegate.beginCount == 1 && beginGate.waiterCount == 1 }
-        let manager = try! XCTUnwrap(factory.managers[1])
+        let manager = try XCTUnwrap(factory.managers[1])
 
         manager.reportUnexpectedStop()
         await settleTasks()

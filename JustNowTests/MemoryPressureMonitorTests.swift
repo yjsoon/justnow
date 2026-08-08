@@ -70,6 +70,34 @@ final class MemoryPressureMonitorTests: XCTestCase {
         XCTAssertTrue(source.didCancel)
     }
 
+    func testMonitorCanRestartWithANewSourceLifecycle() async {
+        let source = MemoryPressureEventSourceProbe()
+        let firstDelivered = expectation(description: "first lifecycle delivered")
+        let restartedDelivered = expectation(description: "restarted lifecycle delivered")
+        var received: [FrameMemoryPressureLevel] = []
+        let monitor = MemoryPressureMonitor(eventSource: source) { level in
+            received.append(level)
+            if received.count == 1 {
+                firstDelivered.fulfill()
+            } else if received.count == 2 {
+                restartedDelivered.fulfill()
+            }
+        }
+
+        monitor.start()
+        source.emit(.warning)
+        await fulfillment(of: [firstDelivered], timeout: 1)
+        await monitor.cancel()
+
+        monitor.start()
+        source.emit(.critical)
+        await fulfillment(of: [restartedDelivered], timeout: 1)
+
+        XCTAssertEqual(received, [.warning, .critical])
+        XCTAssertEqual(source.startCount, 2)
+        await monitor.cancel()
+    }
+
     func testCancelWaitsForSuspendedHandlerAndFencesQueuedCallbacks() async {
         final class CompletionState {
             var mayFinish = false
@@ -117,12 +145,15 @@ final class MemoryPressureMonitorTests: XCTestCase {
 private final class MemoryPressureEventSourceProbe: MemoryPressureEventSource, @unchecked Sendable {
     private var handler: (@Sendable (FrameMemoryPressureLevel) -> Void)?
     private(set) var didCancel = false
+    private(set) var startCount = 0
 
     func setEventHandler(_ handler: @escaping @Sendable (FrameMemoryPressureLevel) -> Void) {
         self.handler = handler
     }
 
-    func start() {}
+    func start() {
+        startCount += 1
+    }
 
     func cancel() {
         didCancel = true

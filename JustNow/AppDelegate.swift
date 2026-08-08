@@ -778,7 +778,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
 
     func captureCoordinatorDidBeginCaptureSession(_ coordinator: CaptureCoordinator) async throws {
         guard let frameBuffer else {
-            throw CaptureCoordinatorSessionError.missingDelegate
+            throw CaptureCoordinatorSessionError.missingFrameBuffer
         }
         _ = try await frameBuffer.beginCaptureSession()
     }

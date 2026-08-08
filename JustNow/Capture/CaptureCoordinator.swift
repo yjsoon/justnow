@@ -25,6 +25,7 @@ nonisolated enum CaptureLogicalSessionTransition: Equatable {
 
 enum CaptureCoordinatorSessionError: Error {
     case missingDelegate
+    case missingFrameBuffer
 }
 
 nonisolated enum CaptureBackgroundReconcileRecoveryAction: Equatable {

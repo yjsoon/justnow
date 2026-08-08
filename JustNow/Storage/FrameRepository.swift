@@ -340,6 +340,8 @@ nonisolated enum DurablePersistenceOperation: Sendable, Equatable {
 nonisolated protocol FrameRepository: Sendable {
     func captureAdmissionMode() async -> FrameCaptureAdmissionMode
     func cleanupOrphans() async throws
+    /// Returns each physical capture once, ordered by its immutable capture
+    /// timestamp. Logical observation recency belongs to `orderedTimeline()`.
     func orderedFrames() async -> [StoredFrame]
     func orderedTimeline() async -> [TimelineEntry]
     func beginCaptureSession(at startedAt: Date) async throws -> CaptureSession
@@ -419,6 +421,7 @@ nonisolated protocol HybridDurableRepository: FrameRepository {
     ) async throws -> DurablePersistenceResult
     func checkpointPromotedSpan(_ span: TimelineSpan) async throws -> DurablePersistenceResult
     func durableEntry(frameID: UUID, spanID: UUID) async throws -> TimelineEntry?
+    func referencedFrameIDs(among frameIDs: Set<UUID>) async throws -> Set<UUID>
 }
 
 /// Current repository implementation. It intentionally remains all-durable:
@@ -478,6 +481,10 @@ nonisolated final class DiskFrameRepository: HybridDurableRepository, Sendable {
 
     func durableEntry(frameID: UUID, spanID: UUID) async throws -> TimelineEntry? {
         try await frameStore.durableEntry(frameID: frameID, spanID: spanID)
+    }
+
+    func referencedFrameIDs(among frameIDs: Set<UUID>) async throws -> Set<UUID> {
+        try await frameStore.referencedFrameIDs(among: frameIDs)
     }
 
     /// Hybrid mode uses this narrowly scoped escape hatch after a volatile

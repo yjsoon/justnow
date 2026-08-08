@@ -72,10 +72,17 @@ enum FrameBufferClearError: LocalizedError {
         case .captureResumeFailed(let detail):
             "History was cleared, but capture could not resume. JustNow will retry automatically. \(detail)"
         case .cleanupIncomplete(let failures):
-            "History was removed from the timeline, but some stored data could not be deleted. Try Clear All History again.\n\(failures.joined(separator: "\n"))"
+            "History was removed from the timeline, but some stored data could not be deleted. Try Clear All History again.\n\(Self.boundedCleanupDescription(failures))"
         case .cleanupIncompleteAndCaptureResumeFailed(let failures, let detail):
-            "History was removed from the timeline, but some stored data could not be deleted and capture could not resume. Try Clear All History again; JustNow will retry capture automatically.\n\(failures.joined(separator: "\n"))\n\(detail)"
+            "History was removed from the timeline, but some stored data could not be deleted and capture could not resume. Try Clear All History again; JustNow will retry capture automatically.\n\(Self.boundedCleanupDescription(failures))\n\(detail)"
         }
+    }
+
+    private static func boundedCleanupDescription(_ paths: [String]) -> String {
+        let names = paths.prefix(5).map { URL(fileURLWithPath: $0).lastPathComponent }
+        let remainder = max(0, paths.count - names.count)
+        let visible = names.map { "• \($0)" }.joined(separator: "\n")
+        return remainder > 0 ? "\(visible)\n…and \(remainder) more." : visible
     }
 }
 
@@ -169,6 +176,19 @@ class FrameBuffer {
     private var ingestProcessorTask: Task<Void, Never>?
     /// Incremented when starting each ingest drain and when clearing the buffer so a superseded drain cannot clear `ingestProcessorTask` or restart incorrectly.
     private var ingestProcessorSerial = 0
+    /// During post-clear recovery, retain at most the newest decoded capture
+    /// per display instead of one potentially huge `CGImage` per capture tick.
+    private struct PendingRecoveryFrame {
+        let cgImage: CGImage
+        let timestamp: Date
+        let display: DisplayInfo?
+        let intentGeneration: Int
+        let recoveryGeneration: Int
+    }
+    private var pendingRecoveryFrames: [CaptureDisplayKey: PendingRecoveryFrame] = [:]
+    private var recoveryFrameTask: Task<Void, Never>?
+    private var recoveryFrameTaskSerial = 0
+    private var recoveryFrameGeneration = 0
     private let maxIngestBacklog = 6
     private static let captureInstrumentationDiagnosticInterval: TimeInterval = 300
     private var lastCaptureInstrumentationDiagnosticAt: Date = .distantPast
@@ -302,15 +322,58 @@ class FrameBuffer {
             )
         } else {
             // A durable reopen after clear may fail transiently while capture
-            // intent remains live. Keep this observation and let it drive the
-            // next serialised reopen attempt instead of stranding capture.
-            Task { @MainActor [weak self] in
-                await self?.addFrameSyncAfterValidation(
-                    cgImage,
-                    timestamp: timestamp,
-                    display: display
-                )
+            // intent remains live. Keep only the newest observation per display
+            // to drive the next serialised reopen attempt without unbounded
+            // decoded-image retention.
+            enqueueRecoveryFrame(cgImage, timestamp: timestamp, display: display)
+        }
+    }
+
+    private func enqueueRecoveryFrame(
+        _ cgImage: CGImage,
+        timestamp: Date,
+        display: DisplayInfo?
+    ) {
+        let key = CaptureDisplayKey(display?.id)
+        let pending = PendingRecoveryFrame(
+            cgImage: cgImage,
+            timestamp: timestamp,
+            display: display,
+            intentGeneration: captureSessionIntentGeneration,
+            recoveryGeneration: recoveryFrameGeneration
+        )
+        if let existing = pendingRecoveryFrames[key], existing.timestamp >= pending.timestamp {
+            return
+        }
+        pendingRecoveryFrames[key] = pending
+        guard recoveryFrameTask == nil else { return }
+        recoveryFrameTaskSerial += 1
+        let taskSerial = recoveryFrameTaskSerial
+        recoveryFrameTask = Task { @MainActor [weak self] in
+            await self?.drainRecoveryFrames(taskSerial: taskSerial)
+        }
+    }
+
+    private func drainRecoveryFrames(taskSerial: Int) async {
+        defer {
+            if recoveryFrameTaskSerial == taskSerial {
+                recoveryFrameTask = nil
             }
+        }
+        while !Task.isCancelled,
+              captureSessionIntentActive,
+              let next = pendingRecoveryFrames.values.max(by: { $0.timestamp < $1.timestamp }) {
+            pendingRecoveryFrames[CaptureDisplayKey(next.display?.id)] = nil
+            await addFrameSyncAfterValidation(
+                next.cgImage,
+                timestamp: next.timestamp,
+                display: next.display,
+                intentGeneration: next.intentGeneration,
+                recoveryGeneration: next.recoveryGeneration
+            )
+        }
+        if !captureSessionIntentActive {
+            pendingRecoveryFrames.removeAll(keepingCapacity: false)
         }
     }
 
@@ -329,10 +392,20 @@ class FrameBuffer {
     private func addFrameSyncAfterValidation(
         _ cgImage: CGImage,
         timestamp: Date,
-        display: DisplayInfo?
+        display: DisplayInfo?,
+        intentGeneration: Int? = nil,
+        recoveryGeneration: Int? = nil
     ) async {
 
         while !Task.isCancelled {
+            if let intentGeneration,
+               intentGeneration != captureSessionIntentGeneration {
+                return
+            }
+            if let recoveryGeneration,
+               recoveryGeneration != recoveryFrameGeneration {
+                return
+            }
             do {
                 try await waitUntilNotClearing()
             } catch is CancellationError {
@@ -341,7 +414,12 @@ class FrameBuffer {
                 return
             }
 
-            guard !Task.isCancelled, captureSessionIntentActive else { return }
+            guard !Task.isCancelled,
+                  captureSessionIntentActive,
+                  intentGeneration == nil || intentGeneration == captureSessionIntentGeneration,
+                  recoveryGeneration == nil || recoveryGeneration == recoveryFrameGeneration else {
+                return
+            }
             if !isCaptureSessionActive {
                 do {
                     try await recoverCaptureSessionIfNeeded(at: timestamp)
@@ -357,7 +435,12 @@ class FrameBuffer {
                     return
                 }
             }
-            guard !Task.isCancelled, isCaptureSessionActive else { return }
+            guard !Task.isCancelled,
+                  isCaptureSessionActive,
+                  intentGeneration == nil || intentGeneration == captureSessionIntentGeneration,
+                  recoveryGeneration == nil || recoveryGeneration == recoveryFrameGeneration else {
+                return
+            }
 
             let result = await withCheckedContinuation { continuation in
                 enqueueIngest(
@@ -794,6 +877,7 @@ class FrameBuffer {
         captureSessionIntentGeneration += 1
         captureSessionIntentActive = false
         isCaptureSessionActive = false
+        invalidateRecoveryFrames()
         try await captureSessionGate.withPermitIgnoringCancellation {
             try await self.endCaptureSessionWithLifecyclePermit(reason: reason)
         }
@@ -849,6 +933,7 @@ class FrameBuffer {
     private func clearWithLifecyclePermit() async throws {
         let clearIntentGeneration = captureSessionIntentGeneration
         isCaptureSessionActive = false
+        invalidateRecoveryFrames()
         activeClearOperationCount += 1
         isBufferClearing = true
         defer {
@@ -932,6 +1017,14 @@ class FrameBuffer {
         if !cleanupFailures.isEmpty {
             throw FrameBufferClearError.cleanupIncomplete(cleanupFailures)
         }
+    }
+
+    private func invalidateRecoveryFrames() {
+        recoveryFrameGeneration &+= 1
+        recoveryFrameTaskSerial &+= 1
+        recoveryFrameTask?.cancel()
+        recoveryFrameTask = nil
+        pendingRecoveryFrames.removeAll(keepingCapacity: false)
     }
 
     private func resetInMemoryAfterRepositoryClear() async throws {
@@ -1188,6 +1281,8 @@ class FrameBuffer {
             let image = try await loadTask.value
             if generation == decodedCacheGeneration, frameLookup[frame.id] != nil {
                 fullImageCache.setObject(image, forKey: key, cost: Self.byteCost(of: image))
+            }
+            if generation == decodedCacheGeneration {
                 inFlightFullImageLoads.removeValue(forKey: frame.id)
             }
             return image

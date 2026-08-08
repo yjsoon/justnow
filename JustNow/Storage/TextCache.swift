@@ -129,6 +129,7 @@ actor TextCache {
     /// Advances search recency for an already-indexed physical asset without
     /// re-running OCR or rewriting its FTS content.
     func updateTimestamp(for frameID: UUID, timestamp: Date) {
+        guard hasCachedRecord(for: frameID) else { return }
         do {
             try withTransaction {
                 try withPreparedStatement(

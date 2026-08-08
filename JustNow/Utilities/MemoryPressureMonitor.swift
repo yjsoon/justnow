@@ -8,38 +8,68 @@ nonisolated protocol MemoryPressureEventSource: AnyObject, Sendable {
 }
 
 nonisolated final class DispatchMemoryPressureEventSource: MemoryPressureEventSource, @unchecked Sendable {
-    private let source: DispatchSourceMemoryPressure
+    private let queue: DispatchQueue
+    private let lock = NSLock()
+    private var source: DispatchSourceMemoryPressure?
     private var handler: (@Sendable (FrameMemoryPressureLevel) -> Void)?
     private var didStart = false
+    private var lifecycleGeneration = 0
 
     init(queue: DispatchQueue = DispatchQueue(label: "sg.tk.JustNow.memory-pressure")) {
-        source = DispatchSource.makeMemoryPressureSource(
-            eventMask: [.warning, .critical],
-            queue: queue
-        )
-        source.setEventHandler { [weak self] in
-            guard let self else { return }
-            let event = self.source.data
-            if event.contains(.critical) {
-                self.handler?(.critical)
-            } else if event.contains(.warning) {
-                self.handler?(.warning)
-            }
-        }
+        self.queue = queue
     }
 
     func setEventHandler(_ handler: @escaping @Sendable (FrameMemoryPressureLevel) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
         self.handler = handler
     }
 
     func start() {
+        lock.lock()
+        defer { lock.unlock() }
         guard !didStart else { return }
+
         didStart = true
+        lifecycleGeneration &+= 1
+        let generation = lifecycleGeneration
+        let source = DispatchSource.makeMemoryPressureSource(
+            eventMask: [.warning, .critical],
+            queue: queue
+        )
+        source.setEventHandler { [weak self, weak source] in
+            guard let source else { return }
+            self?.handleEvent(from: source, generation: generation)
+        }
+        self.source = source
         source.activate()
     }
 
     func cancel() {
-        source.cancel()
+        lock.lock()
+        didStart = false
+        lifecycleGeneration &+= 1
+        let source = self.source
+        self.source = nil
+        lock.unlock()
+        source?.cancel()
+    }
+
+    private func handleEvent(from source: DispatchSourceMemoryPressure, generation: Int) {
+        lock.lock()
+        guard didStart, lifecycleGeneration == generation else {
+            lock.unlock()
+            return
+        }
+        let handler = self.handler
+        lock.unlock()
+
+        let event = source.data
+        if event.contains(.critical) {
+            handler?(.critical)
+        } else if event.contains(.warning) {
+            handler?(.warning)
+        }
     }
 }
 

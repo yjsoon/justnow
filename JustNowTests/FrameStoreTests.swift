@@ -1061,6 +1061,20 @@ final class FrameStoreTests: XCTestCase {
         XCTAssertEqual(timeline.map(\.frame.id), [nextFrame.id])
     }
 
+    func testClearIncompleteDescriptionBoundsAndRedactsPaths() {
+        let paths = (0..<8).map {
+            "/Users/private/Library/Application Support/JustNow/frame-\($0).jpg"
+        }
+
+        let description = FrameStoreError.clearIncomplete(paths).errorDescription
+
+        XCTAssertNotNil(description)
+        XCTAssertFalse(description?.contains("/Users/private") == true)
+        XCTAssertTrue(description?.contains("frame-0.jpg") == true)
+        XCTAssertFalse(description?.contains("frame-5.jpg") == true)
+        XCTAssertTrue(description?.contains("and 3 more") == true)
+    }
+
     func testStartupQuarantinesZeroLengthPayloadEvenWhenExpectedLengthIsZero() async throws {
         let metadata: FrameMetadata
         do {
@@ -1217,6 +1231,40 @@ final class FrameStoreTests: XCTestCase {
                 atPath: directory.appendingPathComponent("frames/\(second.id.uuidString).jpg").path
             )
         )
+    }
+
+    func testMissingActivePayloadFallsBackToFreshCapture() async throws {
+        let store = try FrameStore(directory: directory)
+        let base = Date(timeIntervalSince1970: 15_000)
+        let jpeg = try XCTUnwrap(
+            ImageEncoder.jpegData(from: makeImage(width: 32, height: 24), quality: 0.8)
+        )
+        _ = try await store.beginCaptureSession(at: base)
+        let first = StoredFrame(
+            id: UUID(), timestamp: base, hash: 1,
+            displayID: nil, displayName: nil
+        )
+        let second = StoredFrame(
+            id: UUID(), timestamp: base.addingTimeInterval(1), hash: 2,
+            displayID: nil, displayName: nil
+        )
+        _ = try await store.recordEncodedCapture(frame: first, jpegData: jpeg)
+        try FileManager.default.removeItem(
+            at: framesDirectoryURL().appendingPathComponent("\(first.id.uuidString).jpg")
+        )
+
+        guard case .inserted(let entry) = try await store.recordEncodedCapture(
+            frame: second,
+            jpegData: jpeg
+        ) else {
+            return XCTFail("An unreadable comparison payload must not wedge capture")
+        }
+
+        XCTAssertEqual(entry.frame.id, second.id)
+        let timeline = await store.getTimelineEntries()
+        XCTAssertEqual(timeline.map(\.frame.id), [second.id])
+        let metadata = await store.getAllMetadata()
+        XCTAssertEqual(metadata.map(\.id), [second.id])
     }
 
     func testSamePerceptualHashWithDifferentJPEGBytesCreatesAnotherSpan() async throws {
@@ -1548,12 +1596,18 @@ final class FrameStoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: payloadURL.path))
         let afterFirstPrune = await store.getAllMetadata()
         XCTAssertEqual(afterFirstPrune.map(\.id), [frame.id])
+        let referencesAfterFirstPrune = try await store.referencedFrameIDs(
+            among: [frame.id, UUID()]
+        )
+        XCTAssertEqual(referencesAfterFirstPrune, [frame.id])
 
         let finalRemovedAssets = try await store.pruneSpans(ids: [secondSpanID])
         XCTAssertEqual(finalRemovedAssets, [frame.id])
         XCTAssertFalse(FileManager.default.fileExists(atPath: payloadURL.path))
         let afterFinalPrune = await store.getAllMetadata()
         XCTAssertTrue(afterFinalPrune.isEmpty)
+        let referencesAfterFinalPrune = try await store.referencedFrameIDs(among: [frame.id])
+        XCTAssertTrue(referencesAfterFinalPrune.isEmpty)
     }
 
     private func makeImage(width: Int = 8, height: Int = 8) throws -> CGImage {
@@ -1664,6 +1718,7 @@ final class FrameStoreTests: XCTestCase {
             throw FrameDatabaseError.sqlite("Failed to inspect test database")
         }
         defer { sqlite3_close(connection) }
+        sqlite3_busy_timeout(connection, 5_000)
 
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(connection, sql, -1, &statement, nil) == SQLITE_OK,
@@ -1710,6 +1765,7 @@ final class FrameStoreTests: XCTestCase {
             throw FrameDatabaseError.sqlite("Failed to create test database")
         }
         defer { sqlite3_close(connection) }
+        sqlite3_busy_timeout(connection, 5_000)
         guard sqlite3_exec(connection, sql, nil, nil, nil) == SQLITE_OK else {
             throw FrameDatabaseError.sqlite("Failed to create malformed test schema")
         }

@@ -110,7 +110,7 @@ actor CompressedFrameRing {
         let evictionIDs = evictionPlan(requiredAdditionalBytes: jpegData.count)
         guard let evictionIDs else { return .needsDurableSpill }
 
-        let evictedEntries = evictionIDs.compactMap { removePayload(id: $0)?.entry }
+        let evictedEntries = removePayloads(ids: Set(evictionIDs)).map(\.entry)
         payloads[entry.frame.id] = Payload(entry: entry, data: jpegData)
         fifoFrameIDs.append(entry.frame.id)
         totalBytes += jpegData.count
@@ -226,11 +226,11 @@ actor CompressedFrameRing {
     }
 
     func removeSpans(ids: Set<UUID>) -> Eviction {
-        let frameIDs = fifoFrameIDs.filter { id in
+        let frameIDs = Set(fifoFrameIDs.filter { id in
             guard let entry = payloads[id]?.entry else { return false }
             return ids.contains(entry.span.id)
-        }
-        return Eviction(entries: frameIDs.compactMap { removePayload(id: $0)?.entry })
+        })
+        return Eviction(entries: removePayloads(ids: frameIDs).map(\.entry))
     }
 
     func clear() -> Eviction {
@@ -301,15 +301,34 @@ actor CompressedFrameRing {
     }
 
     private func trimUnleased(toByteCount target: Int) -> Eviction {
-        var removed: [TimelineEntry] = []
-        let candidates = fifoFrameIDs
-        for id in candidates where totalBytes > target {
-            guard leaseCounts[id] == nil else { continue }
-            if let payload = removePayload(id: id) {
-                removed.append(payload.entry)
-            }
+        var removalIDs = Set<UUID>()
+        var projectedBytes = totalBytes
+        for id in fifoFrameIDs where projectedBytes > target {
+            guard leaseCounts[id] == nil, let payload = payloads[id] else { continue }
+            removalIDs.insert(id)
+            projectedBytes -= payload.data.count
         }
-        return Eviction(entries: removed)
+        return Eviction(entries: removePayloads(ids: removalIDs).map(\.entry))
+    }
+
+    /// Removes a batch in one FIFO pass. Critical-pressure and multi-span
+    /// pruning therefore remain linear in the number of resident payloads.
+    private func removePayloads(ids: Set<UUID>) -> [Payload] {
+        guard !ids.isEmpty else { return [] }
+        var removed: [Payload] = []
+        var retainedIDs: [UUID] = []
+        retainedIDs.reserveCapacity(max(0, fifoFrameIDs.count - ids.count))
+        for id in fifoFrameIDs {
+            guard ids.contains(id), let payload = payloads.removeValue(forKey: id) else {
+                retainedIDs.append(id)
+                continue
+            }
+            removed.append(payload)
+            totalBytes -= payload.data.count
+            leaseCounts.removeValue(forKey: id)
+        }
+        fifoFrameIDs = retainedIDs
+        return removed
     }
 
     private func removePayload(id: UUID) -> Payload? {
