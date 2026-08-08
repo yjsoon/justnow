@@ -189,6 +189,7 @@ class FrameBuffer {
     private var recoveryFrameTask: Task<Void, Never>?
     private var recoveryFrameTaskSerial = 0
     private var recoveryFrameGeneration = 0
+    private var recoverySessionAttemptCount = 0
     private let maxIngestBacklog = 6
     private static let captureInstrumentationDiagnosticInterval: TimeInterval = 300
     private var lastCaptureInstrumentationDiagnosticAt: Date = .distantPast
@@ -198,6 +199,9 @@ class FrameBuffer {
     /// Clear bypasses the reconciliation gate, so work admitted before the
     /// reset must not apply stale effects after it returns.
     private var repositoryEffectGeneration = 0
+#if DEBUG
+    var repositoryEffectGenerationForTesting: Int { repositoryEffectGeneration }
+#endif
     /// While true, new captures are not queued and disk reset is in progress — avoids races with `frames.removeAll()` and ingest teardown.
     private var isBufferClearing = false
     /// Pressure maintenance drains already-admitted ingest before repository
@@ -932,6 +936,7 @@ class FrameBuffer {
 
     private func clearWithLifecyclePermit() async throws {
         let clearIntentGeneration = captureSessionIntentGeneration
+        let shouldDeferCaptureResume = recoverySessionAttemptCount > 0
         isCaptureSessionActive = false
         invalidateRecoveryFrames()
         activeClearOperationCount += 1
@@ -981,7 +986,8 @@ class FrameBuffer {
                 cleanupFailures.append("OCR cache: \(DiagnosticsLogFormat.describe(error))")
             }
             if captureSessionIntentActive,
-               captureSessionIntentGeneration == clearIntentGeneration {
+               captureSessionIntentGeneration == clearIntentGeneration,
+               !shouldDeferCaptureResume {
                 do {
                     let session = try await frameRepository.beginCaptureSession(at: Date())
                     activeCaptureSession = session
@@ -1050,6 +1056,8 @@ class FrameBuffer {
     private func recoverCaptureSessionIfNeeded(at startedAt: Date) async throws {
         let generation = captureSessionIntentGeneration
         let repositoryGeneration = repositoryEffectGeneration
+        recoverySessionAttemptCount += 1
+        defer { recoverySessionAttemptCount -= 1 }
         try await repositoryReconciliationGate.withPermitIgnoringCancellation {
             guard self.captureSessionIntentActive,
                   self.captureSessionIntentGeneration == generation,
@@ -1065,6 +1073,34 @@ class FrameBuffer {
             if self.activeCaptureSession == nil {
                 let session = try await self.frameRepository.beginCaptureSession(at: startedAt)
                 guard self.repositoryEffectGeneration == repositoryGeneration else {
+                    // Clear deliberately bypasses this gate so it cannot queue
+                    // behind an uncooperative repository operation. If that
+                    // clear finishes while this begin is suspended, close the
+                    // stale session before the new history epoch reopens one.
+                    let staleCloseRepositoryGeneration = self.repositoryEffectGeneration
+                    do {
+                        _ = try await self.frameRepository.endCaptureSession(
+                            id: session.id,
+                            reason: .cleared
+                        )
+                    } catch let failure as DurablePromotionFailure {
+                        if self.repositoryEffectGeneration == staleCloseRepositoryGeneration {
+                            self.captureInstrumentation.recordPersistedJPEG(
+                                receipt: failure.writeReceipt
+                            )
+                            self.pendingCaptureSessionClose = PendingCaptureSessionClose(
+                                session: session,
+                                reason: .cleared
+                            )
+                        }
+                    } catch {
+                        if self.repositoryEffectGeneration == staleCloseRepositoryGeneration {
+                            self.pendingCaptureSessionClose = PendingCaptureSessionClose(
+                                session: session,
+                                reason: .cleared
+                            )
+                        }
+                    }
                     throw CancellationError()
                 }
                 self.activeCaptureSession = session

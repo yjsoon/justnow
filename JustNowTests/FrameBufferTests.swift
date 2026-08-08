@@ -1299,7 +1299,8 @@ final class FrameBufferTests: XCTestCase {
         let repository = FrameRepositoryProbe(
             frames: [],
             image: image,
-            exportedURL: directory.appendingPathComponent("unused.jpg")
+            exportedURL: directory.appendingPathComponent("unused.jpg"),
+            endFailures: 1
         )
         let buffer = try await FrameBuffer(
             retentionPolicy: .default24Hours,
@@ -1319,17 +1320,101 @@ final class FrameBufferTests: XCTestCase {
         buffer.addFrame(image, timestamp: Date(), display: nil)
         await repository.waitForBeginInvocation(count: 3)
 
+        let priorRepositoryGeneration = buffer.repositoryEffectGenerationForTesting
         let replacementClear = Task { @MainActor in
             try await buffer.clear()
         }
-        await Task.yield()
+        while buffer.repositoryEffectGenerationForTesting == priorRepositoryGeneration {
+            await Task.yield()
+        }
         await repository.resumeSuspendedBegin()
         try await replacementClear.value
-        await Task.yield()
+
+        let savesAfterClear = await repository.saveRequests()
+        XCTAssertTrue(savesAfterClear.isEmpty)
+        XCTAssertEqual(buffer.frameCount, 0)
+
+        let freshTimestamp = Date().addingTimeInterval(1)
+        buffer.addFrame(image, timestamp: freshTimestamp, display: nil)
+        let saveCompleted = expectation(description: "Fresh capture saved after retrying stale close")
+        let savePoll = Task { @MainActor in
+            for _ in 0..<100 {
+                if await !repository.saveRequests().isEmpty {
+                    saveCompleted.fulfill()
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        await fulfillment(of: [saveCompleted], timeout: 2)
+        savePoll.cancel()
 
         let saves = await repository.saveRequests()
-        XCTAssertTrue(saves.isEmpty)
-        XCTAssertEqual(buffer.frameCount, 0)
+        let activeSession = await repository.currentActiveSession()
+        XCTAssertEqual(saves.map(\.frame.timestamp), [freshTimestamp])
+        XCTAssertNotNil(activeSession)
+        try await buffer.endCaptureSession(reason: .paused)
+    }
+
+    func testNewerClearDiscardsFailedStaleCloseFromPriorEpoch() async throws {
+        let image = try makeStructuredImage(seed: 965)
+        let repository = FrameRepositoryProbe(
+            frames: [],
+            image: image,
+            exportedURL: directory.appendingPathComponent("unused.jpg"),
+            endFailures: 1
+        )
+        let buffer = try await FrameBuffer(
+            retentionPolicy: .default24Hours,
+            storageDirectory: directory,
+            diagnosticsLog: nil,
+            frameRepository: repository
+        )
+        _ = try await buffer.beginCaptureSession()
+        await repository.setBeginFailures(1)
+        do {
+            try await buffer.clear()
+            XCTFail("Expected post-clear reopen failure")
+        } catch is FrameBufferClearError {
+        }
+
+        await repository.suspendNextBegin()
+        buffer.addFrame(image, timestamp: Date(), display: nil)
+        await repository.waitForBeginInvocation(count: 3)
+
+        let priorRepositoryGeneration = buffer.repositoryEffectGenerationForTesting
+        let firstReplacementClear = Task { @MainActor in
+            try await buffer.clear()
+        }
+        while buffer.repositoryEffectGenerationForTesting == priorRepositoryGeneration {
+            await Task.yield()
+        }
+
+        await repository.suspendNextEnd()
+        await repository.resumeSuspendedBegin()
+        await repository.waitForEndInvocation(count: 1)
+
+        try await buffer.clear()
+        await repository.resumeSuspendedEnd()
+        try await firstReplacementClear.value
+
+        let freshTimestamp = Date().addingTimeInterval(1)
+        buffer.addFrame(image, timestamp: freshTimestamp, display: nil)
+        let saveCompleted = expectation(description: "Fresh capture saved after newer clear")
+        let savePoll = Task { @MainActor in
+            for _ in 0..<100 {
+                if await !repository.saveRequests().isEmpty {
+                    saveCompleted.fulfill()
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        await fulfillment(of: [saveCompleted], timeout: 2)
+        savePoll.cancel()
+
+        let saves = await repository.saveRequests()
+        XCTAssertEqual(saves.map(\.frame.timestamp), [freshTimestamp])
         try await buffer.endCaptureSession(reason: .paused)
     }
 
@@ -2387,6 +2472,8 @@ private actor FrameRepositoryProbe: FrameRepository {
     private var beginFailuresRemaining: Int
     private var shouldSuspendNextBegin = false
     private var beginInvocationCount = 0
+    private var shouldSuspendNextEnd = false
+    private var endInvocationCount = 0
     private var endFailuresRemaining: Int
     private let coalesceExactJPEG: Bool
     private var jpegByFrameID: [UUID: Data] = [:]
@@ -2402,7 +2489,9 @@ private actor FrameRepositoryProbe: FrameRepository {
     private var begunSessionIDValues: [UUID] = []
     private var saveWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private var beginWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var endWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private var suspendedBeginContinuation: CheckedContinuation<Void, Never>?
+    private var suspendedEndContinuation: CheckedContinuation<Void, Never>?
     private var suspendedSaveContinuation: CheckedContinuation<Void, Never>?
     private var clearWaiters: [CheckedContinuation<Void, Never>] = []
     private var suspendedClearContinuation: CheckedContinuation<Void, Never>?
@@ -2509,7 +2598,19 @@ private actor FrameRepositoryProbe: FrameRepository {
     func endCaptureSession(
         id: UUID,
         reason: CaptureSessionEndReason
-    ) throws -> FrameRepositoryEffects {
+    ) async throws -> FrameRepositoryEffects {
+        endInvocationCount += 1
+        let endWaitersToResume = endWaiters.filter { $0.count <= endInvocationCount }
+        endWaiters.removeAll { $0.count <= endInvocationCount }
+        for waiter in endWaitersToResume {
+            waiter.continuation.resume()
+        }
+        if shouldSuspendNextEnd {
+            shouldSuspendNextEnd = false
+            await withCheckedContinuation { continuation in
+                suspendedEndContinuation = continuation
+            }
+        }
         endReasonValues.append(reason)
         if endFailuresRemaining > 0 {
             endFailuresRemaining -= 1
@@ -2729,6 +2830,10 @@ private actor FrameRepositoryProbe: FrameRepository {
         begunSessionIDValues
     }
 
+    func currentActiveSession() -> CaptureSession? {
+        activeSession
+    }
+
     func setBeginFailures(_ count: Int) {
         beginFailuresRemaining = count
     }
@@ -2747,6 +2852,23 @@ private actor FrameRepositoryProbe: FrameRepository {
     func resumeSuspendedBegin() {
         let continuation = suspendedBeginContinuation
         suspendedBeginContinuation = nil
+        continuation?.resume()
+    }
+
+    func suspendNextEnd() {
+        shouldSuspendNextEnd = true
+    }
+
+    func waitForEndInvocation(count: Int) async {
+        guard endInvocationCount < count else { return }
+        await withCheckedContinuation { continuation in
+            endWaiters.append((count: count, continuation: continuation))
+        }
+    }
+
+    func resumeSuspendedEnd() {
+        let continuation = suspendedEndContinuation
+        suspendedEndContinuation = nil
         continuation?.resume()
     }
 
