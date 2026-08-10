@@ -317,9 +317,9 @@ struct SettingsView: View {
 
             Section("Recent detail") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Toggle("Reduced disk writes (Beta)", isOn: $reducedDiskWritesEnabled)
+                    Toggle("Keep recent history in memory", isOn: $reducedDiskWritesEnabled)
 
-                    Text("Keeps recent detail in memory and saves fewer recovery points to disk. Memory detail may be shorter than your rewind window and is lost on restart, unexpected quit, or memory pressure.")
+                    Text(recentDetailMemoryDescription)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -335,7 +335,7 @@ struct SettingsView: View {
                     .pickerStyle(.menu)
                     .disabled(!reducedDiskWritesEnabled)
                 } label: {
-                    Text("Memory for recent detail")
+                    Text("Memory limit")
                 }
 
                 if historyStorageChangeNeedsRelaunch {
@@ -542,6 +542,15 @@ struct SettingsView: View {
             get: { RecentDetailMemoryLimit.resolved(from: recentDetailMemoryMiB).rawValue },
             set: { recentDetailMemoryMiB = RecentDetailMemoryLimit.resolved(from: $0).rawValue }
         )
+    }
+
+    private var recentDetailMemoryDescription: String {
+        guard reducedDiskWritesEnabled else {
+            return "Saves recent detail to disk instead. This uses less RAM, but browsing may be slower and disk writes will increase."
+        }
+
+        let limit = RecentDetailMemoryLimit.resolved(from: recentDetailMemoryMiB).label
+        return "Speeds up recent browsing and reduces disk writes. Uses up to \(limit) of RAM for compressed history; this is a limit, not reserved memory. JustNow scales back when memory is tight. Recent detail may be shorter than your rewind window and is cleared when JustNow quits."
     }
 
     private var desiredHistoryStorageMode: HistoryStorageMode {
