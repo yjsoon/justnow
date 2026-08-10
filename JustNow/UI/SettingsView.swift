@@ -546,11 +546,17 @@ struct SettingsView: View {
 
     private var recentDetailMemoryDescription: String {
         guard reducedDiskWritesEnabled else {
+            if historyStorageChangeNeedsRelaunch {
+                return "After relaunching, JustNow will save recent detail to disk instead. This will use less RAM, but browsing may be slower and disk writes will increase."
+            }
             return "Saves recent detail to disk instead. This uses less RAM, but browsing may be slower and disk writes will increase."
         }
 
         let limit = RecentDetailMemoryLimit.resolved(from: recentDetailMemoryMiB).label
-        return "Speeds up recent browsing and reduces disk writes. Uses up to \(limit) of RAM for compressed history; this is a limit, not reserved memory. JustNow scales back when memory is tight. Recent detail may be shorter than your rewind window and is cleared when JustNow quits."
+        if historyStorageChangeNeedsRelaunch {
+            return "After relaunching, recent browsing will be faster and disk writes will be reduced. JustNow will use up to \(limit) of RAM for compressed history; this is a limit, not reserved memory. It will scale back when memory is tight. Recovery points remain on disk. On a normal quit, JustNow saves the latest frame from each display; other memory-only detail is cleared."
+        }
+        return "Speeds up recent browsing and reduces disk writes. Uses up to \(limit) of RAM for compressed history; this is a limit, not reserved memory. JustNow scales back when memory is tight. Recovery points remain on disk. On a normal quit, JustNow saves the latest frame from each display; other memory-only detail is cleared."
     }
 
     private var desiredHistoryStorageMode: HistoryStorageMode {
