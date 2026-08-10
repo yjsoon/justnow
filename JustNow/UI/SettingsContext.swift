@@ -14,19 +14,22 @@ final class SettingsContext {
     var updater: SPUUpdater?
     private let onCheckForUpdates: @MainActor () -> Void
     private let onShortcutChanged: @MainActor () -> Void
+    private let onRelaunch: @MainActor () -> Void
 
     init(
         frameBuffer: FrameBuffer? = nil,
         launchAtLoginManager: LaunchAtLoginManager? = nil,
         updater: SPUUpdater? = nil,
         onCheckForUpdates: @escaping @MainActor () -> Void = {},
-        onShortcutChanged: @escaping @MainActor () -> Void = {}
+        onShortcutChanged: @escaping @MainActor () -> Void = {},
+        onRelaunch: @escaping @MainActor () -> Void = {}
     ) {
         self.frameBuffer = frameBuffer
         self.launchAtLoginManager = launchAtLoginManager
         self.updater = updater
         self.onCheckForUpdates = onCheckForUpdates
         self.onShortcutChanged = onShortcutChanged
+        self.onRelaunch = onRelaunch
     }
 
     func checkForUpdates() {
@@ -35,6 +38,10 @@ final class SettingsContext {
 
     func notifyShortcutChanged() {
         onShortcutChanged()
+    }
+
+    func relaunch() {
+        onRelaunch()
     }
 
     var canConfigureLaunchAtLogin: Bool {
