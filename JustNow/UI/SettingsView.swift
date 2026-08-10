@@ -53,6 +53,7 @@ struct SettingsView: View {
     @State private var launchAtLoginEnabled = false
     @State private var launchAtLoginAlertMessage: String?
     @State private var clearHistoryAlertMessage: String?
+    @State private var showRelaunchConfirmation = false
 
     var body: some View {
         TabView {
@@ -109,6 +110,14 @@ struct SettingsView: View {
             Button("Got it", role: .cancel) { }
         } message: {
             Text("To bring it back, relaunch JustNow from Finder or Spotlight to reopen Settings, or switch it back on from the rewind overlay.")
+        }
+        .alert("Relaunch JustNow?", isPresented: $showRelaunchConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Relaunch", role: .destructive) {
+                context.relaunch()
+            }
+        } message: {
+            Text("JustNow will briefly stop recording, save the latest frame from each display, then reopen. Other memory-only recent detail will be cleared.")
         }
     }
 
@@ -325,23 +334,36 @@ struct SettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                LabeledContent {
-                    Picker("", selection: resolvedRecentDetailMemoryMiB) {
-                        ForEach(RecentDetailMemoryLimit.allCases) { limit in
-                            Text(limit.label).tag(limit.rawValue)
+                VStack(alignment: .leading, spacing: 8) {
+                    LabeledContent {
+                        Picker("", selection: resolvedRecentDetailMemoryMiB) {
+                            ForEach(RecentDetailMemoryLimit.allCases) { limit in
+                                Text(limit.label).tag(limit.rawValue)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .disabled(!reducedDiskWritesEnabled)
+                    } label: {
+                        Text("Memory limit")
+                    }
+
+                    if historyStorageChangeNeedsRelaunch {
+                        HStack(spacing: 12) {
+                            Text("Changes apply after you relaunch JustNow.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            Spacer()
+
+                            Button("Relaunch JustNow…", role: .destructive) {
+                                showRelaunchConfirmation = true
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .tint(.red)
                         }
                     }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .disabled(!reducedDiskWritesEnabled)
-                } label: {
-                    Text("Memory limit")
-                }
-
-                if historyStorageChangeNeedsRelaunch {
-                    Text("Changes apply after you relaunch JustNow.")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
                 }
             }
 

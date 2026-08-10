@@ -79,6 +79,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         },
         onShortcutChanged: { [weak self] in
             self?.keyboardShortcutsDidChange()
+        },
+        onRelaunch: { [weak self] in
+            self?.relaunchApp()
         }
     )
     private lazy var settingsWindowCoordinator = SettingsWindowCoordinator(
@@ -114,6 +117,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     private var setupCaptureTask: Task<Void, Never>?
     private var memoryPressureMonitor: MemoryPressureMonitor?
     private var isTerminationFlushInProgress = false
+    private let relaunchCoordinator = AppRelaunchCoordinator()
     private var idleTransitionTimer: Timer?
     private var screenRecordingPermission = ScreenRecordingPermissionState()
     private var captureRecoveryNeedsAttention = false
@@ -229,6 +233,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         }
 
         return .terminateLater
+    }
+
+    private func relaunchApp() {
+        do {
+            guard try relaunchCoordinator.prepareRelaunch() else { return }
+            NSApp.terminate(nil)
+        } catch {
+            DiagnosticsLog.shared.log(
+                "App",
+                "Could not prepare relaunch: \(DiagnosticsLogFormat.describe(error))"
+            )
+
+            let alert = NSAlert()
+            alert.messageText = "Could Not Relaunch JustNow"
+            alert.informativeText = "Quit and reopen JustNow to apply this change."
+            alert.alertStyle = .critical
+            alert.runModal()
+        }
     }
 
     func applicationDidResignActive(_ notification: Notification) {
