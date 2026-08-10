@@ -11,10 +11,22 @@
   },
   "releases": [
     {
+      "tag": "v1.5.1",
+      "version": "1.5.1",
+      "published_at": "2026-08-10",
+      "status": "Current public build",
+      "notes": [
+        "Recent-history settings that need a relaunch now offer a Relaunch JustNow button beside the relevant setting.",
+        "JustNow confirms before relaunching, closes cleanly, saves the latest frame from each display, and then reopens automatically.",
+        "The relaunch note now sits with the Memory limit setting, making it clearer which change is waiting to be applied.",
+        "Other recent detail held only in memory is cleared during the relaunch; on-disk recovery points remain available."
+      ]
+    },
+    {
       "tag": "v1.5.0",
       "version": "1.5.0",
       "published_at": "2026-08-10",
-      "status": "Current public build",
+      "status": "Previous release",
       "notes": [
         "Scroll through your timeline with a mouse or trackpad. By default, scroll up to rewind and down to move forwards. You can reverse this direction—or turn scrolling off—in Settings.",
         "Recent history is now kept in memory by default. This makes browsing feel much faster and reduces disk writes.",
