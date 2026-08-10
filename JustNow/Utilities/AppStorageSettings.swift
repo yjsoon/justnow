@@ -24,7 +24,7 @@ enum AppStorageKey {
     nonisolated static let hasSeenSaveQualityInfo = "hasSeenSaveQualityInfo"
     nonisolated static let regionScreenshotShortcutHintCount = "regionScreenshotShortcutHintCount"
     nonisolated static let settingsMigrationVersion = "settingsMigrationVersion"
-    /// Launch-scoped beta. This is the sole enable flag for hybrid RAM history.
+    /// Launch-scoped setting. This is the sole enable flag for hybrid RAM history.
     nonisolated static let reducedDiskWritesEnabled = "reducedDiskWritesEnabled"
     nonisolated static let recentDetailMemoryMiB = "recentDetailMemoryMiB"
 }
