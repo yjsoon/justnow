@@ -352,7 +352,7 @@ struct SettingsView: View {
                         HStack(spacing: 12) {
                             Text("Changes apply after you relaunch JustNow.")
                                 .font(.caption)
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(.secondary)
 
                             Spacer()
 
