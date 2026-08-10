@@ -554,7 +554,7 @@ struct SettingsView: View {
 
         let limit = RecentDetailMemoryLimit.resolved(from: recentDetailMemoryMiB).label
         if historyStorageChangeNeedsRelaunch {
-            return "After relaunching, recent browsing will be faster and disk writes will be reduced. JustNow will use up to \(limit) of RAM for compressed history; this is a limit, not reserved memory. It will scale back when memory is tight. Recovery points remain on disk. On a normal quit, JustNow saves the latest frame from each display; other memory-only detail is cleared."
+            return "After relaunching, JustNow will apply the selected memory setting. It will use up to \(limit) of RAM for compressed history; this is a limit, not reserved memory. It will scale back when memory is tight. Recovery points remain on disk. On a normal quit, JustNow saves the latest frame from each display; other memory-only detail is cleared."
         }
         return "Speeds up recent browsing and reduces disk writes. Uses up to \(limit) of RAM for compressed history; this is a limit, not reserved memory. JustNow scales back when memory is tight. Recovery points remain on disk. On a normal quit, JustNow saves the latest frame from each display; other memory-only detail is cleared."
     }
