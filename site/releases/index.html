@@ -38,9 +38,25 @@
 
       <main class="release-list">
         <article class="release-card">
-          <h2>v1.4.0</h2>
+          <h2>v1.5.0</h2>
           <div class="release-meta">
             <span>Current public build</span>
+            <span>August 10, 2026</span>
+          </div>
+          <ul>
+            <li>Scroll through your timeline with a mouse or trackpad. By default, scroll up to rewind and down to move forwards. You can reverse this direction—or turn scrolling off—in Settings.</li>
+            <li>Recent history is now kept in memory by default. This makes browsing feel much faster and reduces disk writes.</li>
+            <li>Choose a memory limit of 256 MB, 512 MB, or 1 GB. The default is 512 MB.</li>
+            <li>The memory limit is a ceiling, not RAM reserved upfront. JustNow automatically scales back when memory is tight. Changes to this setting take effect after relaunching the app.</li>
+            <li>Recent detail held in memory is temporary. Periodic recovery points remain on disk, and on a normal quit JustNow saves the latest frame from each display; other memory-only detail is cleared. History restored after a restart may therefore contain less detail.</li>
+            <li>Timeline navigation now works consistently across both detailed recent history and more widely spaced older history.</li>
+            <li>Improved capture recovery, with fewer stalls and repeated Screen Recording permission prompts.</li>
+          </ul>
+        </article>
+        <article class="release-card">
+          <h2>v1.4.0</h2>
+          <div class="release-meta">
+            <span>Previous release</span>
             <span>July 18, 2026</span>
           </div>
           <ul>
