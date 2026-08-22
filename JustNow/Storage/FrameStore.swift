@@ -1076,7 +1076,8 @@ actor FrameStore {
                 durableCommitHook: durableCommitHook
             )
             openedDatabase = candidate
-            _ = try candidate.allMetadata() // Validate row-level UUID/hash/filename invariants.
+            _ = try candidate.deleteFramesWithUnusableFilenames()
+            _ = try candidate.allMetadata()
             _ = try candidate.allTimelineEntries()
             database = candidate
         } catch {

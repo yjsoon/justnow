@@ -316,16 +316,25 @@ final class FrameStoreTests: XCTestCase {
 
         let values = try directory.resourceValues(forKeys: [.isExcludedFromBackupKey])
         XCTAssertEqual(values.isExcludedFromBackup, true)
+        XCTAssertTrue(PrivateStorageProtection.isExcludedFromTimeMachine(directory))
     }
 
     func testReopenDropsTraversingFilenameWithoutTouchingSiblingFile() async throws {
-        let saved: FrameMetadata
+        let poisoned: FrameMetadata
+        let sibling: FrameMetadata
         do {
             let store = try FrameStore(directory: directory)
-            saved = try await store.saveFrame(
+            poisoned = try await store.saveFrame(
                 makeImage(width: 8, height: 8),
                 timestamp: Date(),
                 hash: 1,
+                displayID: nil,
+                displayName: nil
+            )
+            sibling = try await store.saveFrame(
+                makeImage(width: 8, height: 8),
+                timestamp: Date(),
+                hash: 2,
                 displayID: nil,
                 displayName: nil
             )
@@ -337,14 +346,23 @@ final class FrameStoreTests: XCTestCase {
         let decoyData = try XCTUnwrap(ImageEncoder.jpegData(from: decoyImage, quality: 0.8))
         try decoyData.write(to: decoyURL)
 
+        let databaseURL = directory.appendingPathComponent("frames.sqlite")
         try executeSQLite(
-            databaseURL: directory.appendingPathComponent("frames.sqlite"),
-            sql: "UPDATE frames SET filename = '../secret.jpg' WHERE id = '\(saved.id.uuidString)';"
+            databaseURL: databaseURL,
+            sql: "UPDATE frames SET filename = '../secret.jpg' WHERE id = '\(poisoned.id.uuidString)';"
         )
 
         let reopened = try FrameStore(directory: directory)
         let remaining = await reopened.getAllMetadata()
-        XCTAssertFalse(remaining.contains { $0.id == saved.id })
+        XCTAssertFalse(remaining.contains { $0.id == poisoned.id })
+        XCTAssertEqual(remaining.map(\.id), [sibling.id])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: databaseURL.path))
+        XCTAssertFalse(recoveryContains(filename: "frames.sqlite"))
+
+        let siblingImage = try await reopened.loadFullImage(id: sibling.id)
+        XCTAssertEqual(siblingImage.width, 8)
+        XCTAssertEqual(siblingImage.height, 8)
+
         XCTAssertTrue(FileManager.default.fileExists(atPath: decoyURL.path))
         XCTAssertEqual(try Data(contentsOf: decoyURL), decoyData)
     }
