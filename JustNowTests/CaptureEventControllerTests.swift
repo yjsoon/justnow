@@ -211,6 +211,42 @@ final class CaptureEventControllerTests: XCTestCase {
         )
     }
 
+    func testScreenLockBlocksStartUntilUnlock() {
+        let recorder = CaptureEventControllerRecorder(
+            context: CaptureEventContext(
+                hasCaptureManager: true,
+                isCapturing: true,
+                isSetupCaptureInProgress: false,
+                hasPendingStart: false,
+                isOverlayVisible: false
+            )
+        )
+        let controller = recorder.makeController()
+
+        controller.handleScreenLock()
+        XCTAssertFalse(controller.canStartCapture())
+        XCTAssertEqual(controller.blockedStatus(), "Screen Locked")
+        XCTAssertEqual(controller.blockedSessionEndReason(), .screenLock)
+
+        recorder.clearEvents()
+        recorder.context = CaptureEventContext(
+            hasCaptureManager: true,
+            isCapturing: false,
+            isSetupCaptureInProgress: false,
+            hasPendingStart: false,
+            isOverlayVisible: false
+        )
+        controller.handleWake()
+        XCTAssertFalse(controller.canStartCapture())
+        XCTAssertEqual(controller.blockedStatus(), "Screen Locked")
+        XCTAssertEqual(recorder.events, ["filter:5.0", "start:Resuming..."])
+
+        recorder.clearEvents()
+        controller.handleScreenUnlock()
+        XCTAssertTrue(controller.canStartCapture())
+        XCTAssertEqual(recorder.events, ["filter:5.0", "start:Resuming..."])
+    }
+
     func testHandleScreenUnlockSchedulesResumeWithRetry() {
         let recorder = CaptureEventControllerRecorder(
             context: CaptureEventContext(
