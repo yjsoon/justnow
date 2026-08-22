@@ -348,7 +348,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         configureCaptureStartupCoordinator()
 
         guard captureEventController.canStartCapture() else {
-            applyBlockedCaptureStatusIfAvailable()
+            replaceStartStatusWithBlockedStatus()
             return
         }
 
@@ -465,7 +465,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 await captureCoordinator.stopCapture(
                     reason: captureEventController.blockedSessionEndReason()
                 )
-                applyBlockedCaptureStatusIfAvailable()
+                replaceStartStatusWithBlockedStatus()
                 return
             }
             handleSuccessfulCaptureStart()
@@ -704,7 +704,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 await captureCoordinator.stopCapture(
                     reason: captureEventController.blockedSessionEndReason()
                 )
-                applyBlockedCaptureStatusIfAvailable()
+                replaceStartStatusWithBlockedStatus()
                 return .failed
             }
             handleSuccessfulCaptureStart(successMessage: successMessage)
@@ -759,16 +759,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             return true
         }
         guard captureEventController.canStartCapture() else {
-            // Without this update, the caller's transient "Resuming..."
-            // (or similar) status would stick forever when the lifecycle
-            // says we shouldn't start.
-            applyBlockedCaptureStatusIfAvailable()
+            replaceStartStatusWithBlockedStatus()
             return true
         }
         return false
     }
 
-    private func applyBlockedCaptureStatusIfAvailable() {
+    private func replaceStartStatusWithBlockedStatus() {
         if let blockedStatus = captureEventController.blockedStatus() {
             updateCaptureStatus(blockedStatus)
         }
