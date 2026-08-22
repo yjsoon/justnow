@@ -4,9 +4,11 @@ struct CaptureLifecycleState {
     private(set) var isPausedForOverlay = false
     private(set) var wasCapturingBeforeSession = false
     private(set) var isPausedForSession = false
+    private(set) var wasCapturingBeforeLock = false
+    private(set) var isPausedForLock = false
 
     func canStartCapture(isOverlayVisible: Bool) -> Bool {
-        !isUserPaused && !isPausedForOverlay && !isPausedForSession && !isOverlayVisible
+        !isUserPaused && !isPausedForOverlay && !isPausedForSession && !isPausedForLock && !isOverlayVisible
     }
 
     func blockedStatus(isOverlayVisible: Bool, includeOverlay: Bool = true) -> String? {
@@ -19,11 +21,14 @@ struct CaptureLifecycleState {
         if isPausedForSession {
             return "Session Inactive"
         }
+        if isPausedForLock {
+            return "Screen Locked"
+        }
         return nil
     }
 
     func shouldRestartAfterUnexpectedStop(isOverlayVisible: Bool) -> Bool {
-        !isOverlayVisible && !isPausedForOverlay && !isPausedForSession && !isUserPaused
+        !isOverlayVisible && !isPausedForOverlay && !isPausedForSession && !isPausedForLock && !isUserPaused
     }
 
     mutating func toggleUserPause() -> Bool {
@@ -58,6 +63,21 @@ struct CaptureLifecycleState {
         isPausedForOverlay = false
         let shouldResumeCapture = wasCapturingBeforeOverlay
         wasCapturingBeforeOverlay = false
+        return shouldResumeCapture
+    }
+
+    mutating func pauseForLock(captureWasActive: Bool, shouldResumeCapture: Bool) -> Bool {
+        guard !isPausedForLock else { return false }
+        isPausedForLock = true
+        wasCapturingBeforeLock = shouldResumeCapture
+        return captureWasActive
+    }
+
+    mutating func resumeAfterLock() -> Bool {
+        guard isPausedForLock else { return false }
+        isPausedForLock = false
+        let shouldResumeCapture = wasCapturingBeforeLock
+        wasCapturingBeforeLock = false
         return shouldResumeCapture
     }
 }

@@ -71,6 +71,7 @@ final class CaptureEventController {
             return .overlay
         }
         if lifecycle.isPausedForSession { return .sessionInactive }
+        if lifecycle.isPausedForLock { return .screenLock }
         return .paused
     }
 
@@ -107,6 +108,19 @@ final class CaptureEventController {
     }
 
     func handleScreenLock() {
+        let current = context()
+        let shouldResumeCaptureAfterLock =
+            current.isCapturing
+            || current.isSetupCaptureInProgress
+            || current.hasPendingStart
+            || (lifecycle.isPausedForOverlay && lifecycle.wasCapturingBeforeOverlay)
+            || (lifecycle.isPausedForSession && lifecycle.wasCapturingBeforeSession)
+        _ = lifecycle.pauseForLock(
+            captureWasActive: current.isCapturing
+                || current.isSetupCaptureInProgress
+                || current.hasPendingStart,
+            shouldResumeCapture: shouldResumeCaptureAfterLock
+        )
         cancelPendingStart()
         scheduleStop(
             CaptureStopRequest(
@@ -118,6 +132,7 @@ final class CaptureEventController {
     }
 
     func handleScreenUnlock() {
+        _ = lifecycle.resumeAfterLock()
         enableBlackFrameFilter(5)
         scheduleResume(reason: "screen unlock")
     }
