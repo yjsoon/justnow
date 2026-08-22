@@ -121,9 +121,13 @@ final class CaptureStartController {
                 await sleep(initialDelay)
             }
 
-            guard !Task.isCancelled,
-                  generation == self.pendingStartGeneration,
-                  canStartCapture() else {
+            guard !Task.isCancelled, generation == self.pendingStartGeneration else {
+                return
+            }
+            guard canStartCapture() else {
+                if let blockedStatus = blockedStatus(request.includeOverlayInBlockedStatus) {
+                    updateStatus(blockedStatus)
+                }
                 return
             }
 
@@ -146,9 +150,13 @@ final class CaptureStartController {
 
             await sleep(retry.delay)
 
-            guard !Task.isCancelled,
-                  generation == self.pendingStartGeneration,
-                  canStartCapture() else {
+            guard !Task.isCancelled, generation == self.pendingStartGeneration else {
+                return
+            }
+            guard canStartCapture() else {
+                if let blockedStatus = blockedStatus(request.includeOverlayInBlockedStatus) {
+                    updateStatus(blockedStatus)
+                }
                 return
             }
 

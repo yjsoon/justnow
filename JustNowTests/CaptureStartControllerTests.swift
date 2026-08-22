@@ -95,6 +95,48 @@ final class CaptureStartControllerTests: XCTestCase {
         XCTAssertFalse(controller.hasPendingStart)
     }
 
+    func testScheduleStartAppliesBlockedStatusWhenBlockedAfterDelay() async {
+        let sleeper = CaptureStartControllerSleepProbe()
+        let controller = CaptureStartController(
+            sleep: { duration in
+                await sleeper.sleep(for: duration)
+            }
+        )
+        var statuses: [String] = []
+        var canStart = true
+        var startAttempts = 0
+
+        controller.scheduleStart(
+            request: CaptureStartRequest(
+                status: "Resuming...",
+                initialDelay: .seconds(2),
+                attempt: CaptureStartAttempt(
+                    successMessage: "started",
+                    failurePrefix: "failed",
+                    failureStatus: "Error"
+                )
+            ),
+            canStartCapture: { canStart },
+            blockedStatus: { _ in "Screen Locked" },
+            updateStatus: { statuses.append($0) },
+            startCapture: { _ in
+                startAttempts += 1
+                return .started
+            }
+        )
+
+        await waitUntil {
+            statuses == ["Resuming..."] && controller.hasPendingStart
+        }
+
+        canStart = false
+        await sleeper.resumeAll()
+        await waitUntil { !controller.hasPendingStart }
+
+        XCTAssertEqual(statuses, ["Resuming...", "Screen Locked"])
+        XCTAssertEqual(startAttempts, 0)
+    }
+
     func testCancelPendingStartPreventsDelayedAttempt() async {
         let sleeper = CaptureStartControllerSleepProbe()
         let controller = CaptureStartController(

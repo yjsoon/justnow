@@ -71,6 +71,7 @@ final class CaptureEventController {
             return .overlay
         }
         if lifecycle.isPausedForSession { return .sessionInactive }
+        if lifecycle.isPausedForLock { return .screenLock }
         return .paused
     }
 
@@ -107,6 +108,19 @@ final class CaptureEventController {
     }
 
     func handleScreenLock() {
+        let current = context()
+        let shouldResumeCaptureAfterLock =
+            current.isCapturing
+            || current.isSetupCaptureInProgress
+            || current.hasPendingStart
+            || (lifecycle.isPausedForOverlay && lifecycle.wasCapturingBeforeOverlay)
+            || (lifecycle.isPausedForSession && lifecycle.wasCapturingBeforeSession)
+        _ = lifecycle.pauseForLock(
+            captureWasActive: current.isCapturing
+                || current.isSetupCaptureInProgress
+                || current.hasPendingStart,
+            shouldResumeCapture: shouldResumeCaptureAfterLock
+        )
         cancelPendingStart()
         scheduleStop(
             CaptureStopRequest(
@@ -118,8 +132,32 @@ final class CaptureEventController {
     }
 
     func handleScreenUnlock() {
+        // Always resume: launch-while-locked never calls pauseForLock.
+        _ = lifecycle.resumeAfterLock()
         enableBlackFrameFilter(5)
         scheduleResume(reason: "screen unlock")
+    }
+
+    func retryResumeUntilUnlocked() {
+        scheduleStart(
+            CaptureStartRequest(
+                status: "Screen Locked",
+                initialDelay: .seconds(2),
+                attempt: CaptureStartAttempt(
+                    successMessage: "Capture resumed after waiting for unlock",
+                    failurePrefix: "Failed to resume capture after waiting for unlock",
+                    failureStatus: "Error"
+                ),
+                retry: CaptureStartRetryPolicy(
+                    delay: .seconds(3),
+                    attempt: CaptureStartAttempt(
+                        successMessage: "Capture resumed on retry",
+                        failurePrefix: "Retry also failed",
+                        failureStatus: "Failed"
+                    )
+                )
+            )
+        )
     }
 
     func handleSessionResignActive() {
@@ -129,6 +167,7 @@ final class CaptureEventController {
             || current.isSetupCaptureInProgress
             || current.hasPendingStart
             || (lifecycle.isPausedForOverlay && lifecycle.wasCapturingBeforeOverlay)
+            || hasLockResumeIntent
         let shouldStopCapture = lifecycle.pauseForSession(
             captureWasActive: current.isCapturing
                 || current.isSetupCaptureInProgress
@@ -223,6 +262,7 @@ final class CaptureEventController {
             || current.isSetupCaptureInProgress
             || current.hasPendingStart
             || (lifecycle.isPausedForSession && lifecycle.wasCapturingBeforeSession)
+            || hasLockResumeIntent
         let shouldStopCapture = lifecycle.pauseForOverlay(
             captureWasActive: current.isCapturing
                 || current.isSetupCaptureInProgress
@@ -255,6 +295,10 @@ final class CaptureEventController {
                 )
             )
         )
+    }
+
+    private var hasLockResumeIntent: Bool {
+        lifecycle.isPausedForLock && lifecycle.wasCapturingBeforeLock
     }
 
     private func scheduleResume(reason: String) {

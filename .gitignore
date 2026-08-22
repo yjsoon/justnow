@@ -1,6 +1,7 @@
 # Xcode
 build/
 build-tests/
+build-tests-unsigned/
 DerivedData/
 *.xcuserstate
 *.xccheckout

@@ -348,7 +348,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         configureCaptureStartupCoordinator()
 
         guard captureEventController.canStartCapture() else {
-            applyBlockedCaptureStatusIfAvailable()
+            replaceStartStatusWithBlockedStatus()
             return
         }
 
@@ -465,7 +465,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 await captureCoordinator.stopCapture(
                     reason: captureEventController.blockedSessionEndReason()
                 )
-                applyBlockedCaptureStatusIfAvailable()
+                replaceStartStatusWithBlockedStatus()
                 return
             }
             handleSuccessfulCaptureStart()
@@ -676,11 +676,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         failureStatus: String
     ) async -> CaptureStartResult {
         guard !Task.isCancelled else { return .failed }
-        guard captureEventController.canStartCapture() else {
-            // Without this update, the caller's transient "Resuming..."
-            // (or similar) status would stick forever when the lifecycle
-            // says we shouldn't start.
-            applyBlockedCaptureStatusIfAvailable()
+        if abortIfCaptureStartBlocked(failurePrefix: failurePrefix) {
             return .failed
         }
 
@@ -690,30 +686,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             // start a second reconciliation against partially installed state.
             let startupTask = setupCaptureTask
             await startupTask?.value
-            guard !Task.isCancelled, captureEventController.canStartCapture() else {
-                applyBlockedCaptureStatusIfAvailable()
+            guard !Task.isCancelled else { return .failed }
+            if abortIfCaptureStartBlocked(failurePrefix: failurePrefix) {
                 return .failed
             }
             // Stop and start requests are scheduled by separate lifecycle
             // tasks. A later resume must wait for any already-queued stop so
             // the newest user/system intent wins deterministically.
             await captureStopController.waitForPendingStop()
-            guard !Task.isCancelled, captureEventController.canStartCapture() else {
-                applyBlockedCaptureStatusIfAvailable()
+            guard !Task.isCancelled else { return .failed }
+            if abortIfCaptureStartBlocked(failurePrefix: failurePrefix) {
                 return .failed
             }
             try await captureCoordinator.startCapture()
             guard !Task.isCancelled else { return .failed }
-            guard captureEventController.canStartCapture() else {
-                await captureCoordinator.stopCapture(
-                    reason: captureEventController.blockedSessionEndReason()
-                )
-                applyBlockedCaptureStatusIfAvailable()
+            if abortIfCaptureStartBlocked(failurePrefix: failurePrefix) {
+                let reason = captureEventController.canStartCapture()
+                    ? CaptureSessionEndReason.screenLock
+                    : captureEventController.blockedSessionEndReason()
+                await captureCoordinator.stopCapture(reason: reason)
                 return .failed
             }
             handleSuccessfulCaptureStart(successMessage: successMessage)
             return .started
         } catch is CancellationError {
+            DiagnosticsLog.shared.log(
+                "Capture",
+                "\(failurePrefix): cancelled; \(CaptureSystemState.summary())"
+            )
             return .failed
         } catch CaptureError.permissionDenied {
             presentPermissionAlert(status: "No Permission")
@@ -749,7 +749,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         }
     }
 
-    private func applyBlockedCaptureStatusIfAvailable() {
+    private func abortIfCaptureStartBlocked(failurePrefix: String) -> Bool {
+        guard captureEventController.canStartCapture() else {
+            replaceStartStatusWithBlockedStatus()
+            return true
+        }
+        if CaptureSystemState.isScreenLocked() {
+            DiagnosticsLog.shared.log(
+                "Capture",
+                "\(failurePrefix): screen is locked; waiting for unlock"
+            )
+            updateCaptureStatus("Screen Locked")
+            captureEventController.retryResumeUntilUnlocked()
+            return true
+        }
+        return false
+    }
+
+    private func replaceStartStatusWithBlockedStatus() {
         if let blockedStatus = captureEventController.blockedStatus() {
             updateCaptureStatus(blockedStatus)
         }

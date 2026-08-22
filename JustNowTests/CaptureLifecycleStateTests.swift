@@ -8,6 +8,7 @@ final class CaptureLifecycleStateTests: XCTestCase {
         XCTAssertTrue(state.toggleUserPause())
         XCTAssertFalse(state.pauseForOverlay(captureWasActive: false, shouldResumeCapture: true))
         XCTAssertFalse(state.pauseForSession(captureWasActive: false, shouldResumeCapture: true))
+        XCTAssertFalse(state.pauseForLock(captureWasActive: false, shouldResumeCapture: true))
 
         XCTAssertEqual(
             state.blockedStatus(isOverlayVisible: true),
@@ -79,11 +80,44 @@ final class CaptureLifecycleStateTests: XCTestCase {
         XCTAssertTrue(state.resumeAfterOverlay())
     }
 
+    func testPauseAndResumeForLockPreservesResumeIntent() {
+        var state = CaptureLifecycleState()
+
+        XCTAssertTrue(
+            state.pauseForLock(captureWasActive: true, shouldResumeCapture: true)
+        )
+        XCTAssertTrue(state.isPausedForLock)
+        XCTAssertTrue(state.wasCapturingBeforeLock)
+        XCTAssertFalse(state.canStartCapture(isOverlayVisible: false))
+        XCTAssertEqual(
+            state.blockedStatus(isOverlayVisible: false),
+            "Screen Locked"
+        )
+
+        XCTAssertTrue(state.resumeAfterLock())
+        XCTAssertFalse(state.isPausedForLock)
+        XCTAssertFalse(state.wasCapturingBeforeLock)
+        XCTAssertTrue(state.canStartCapture(isOverlayVisible: false))
+    }
+
+    func testDuplicateLockPauseDoesNotClobberResumeIntent() {
+        var state = CaptureLifecycleState()
+
+        XCTAssertTrue(state.pauseForLock(captureWasActive: true, shouldResumeCapture: true))
+        XCTAssertFalse(
+            state.pauseForLock(captureWasActive: false, shouldResumeCapture: false),
+            "Second lock while locked must be a no-op"
+        )
+
+        XCTAssertTrue(state.resumeAfterLock(), "Original resume intent must survive")
+    }
+
     func testResumeWithoutMatchingPauseIsANoOp() {
         var state = CaptureLifecycleState()
 
         XCTAssertFalse(state.resumeAfterSession())
         XCTAssertFalse(state.resumeAfterOverlay())
+        XCTAssertFalse(state.resumeAfterLock())
         XCTAssertTrue(state.canStartCapture(isOverlayVisible: false))
     }
 
@@ -100,6 +134,10 @@ final class CaptureLifecycleStateTests: XCTestCase {
         _ = state.pauseForSession(captureWasActive: true, shouldResumeCapture: true)
         XCTAssertFalse(state.shouldRestartAfterUnexpectedStop(isOverlayVisible: false))
         _ = state.resumeAfterSession()
+
+        _ = state.pauseForLock(captureWasActive: true, shouldResumeCapture: true)
+        XCTAssertFalse(state.shouldRestartAfterUnexpectedStop(isOverlayVisible: false))
+        _ = state.resumeAfterLock()
 
         XCTAssertTrue(state.shouldRestartAfterUnexpectedStop(isOverlayVisible: false))
     }
