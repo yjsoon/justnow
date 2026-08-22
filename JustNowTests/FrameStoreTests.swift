@@ -318,6 +318,37 @@ final class FrameStoreTests: XCTestCase {
         XCTAssertEqual(values.isExcludedFromBackup, true)
     }
 
+    func testReopenDropsTraversingFilenameWithoutTouchingSiblingFile() async throws {
+        let saved: FrameMetadata
+        do {
+            let store = try FrameStore(directory: directory)
+            saved = try await store.saveFrame(
+                makeImage(width: 8, height: 8),
+                timestamp: Date(),
+                hash: 1,
+                displayID: nil,
+                displayName: nil
+            )
+            await store.flush()
+        }
+
+        let decoyURL = directory.appendingPathComponent("secret.jpg")
+        let decoyImage = try makeImage(width: 16, height: 16)
+        let decoyData = try XCTUnwrap(ImageEncoder.jpegData(from: decoyImage, quality: 0.8))
+        try decoyData.write(to: decoyURL)
+
+        try executeSQLite(
+            databaseURL: directory.appendingPathComponent("frames.sqlite"),
+            sql: "UPDATE frames SET filename = '../secret.jpg' WHERE id = '\(saved.id.uuidString)';"
+        )
+
+        let reopened = try FrameStore(directory: directory)
+        let remaining = await reopened.getAllMetadata()
+        XCTAssertFalse(remaining.contains { $0.id == saved.id })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: decoyURL.path))
+        XCTAssertEqual(try Data(contentsOf: decoyURL), decoyData)
+    }
+
     func testSymlinkedStorageRootIsRejectedWithoutTouchingExternalDirectory() throws {
         let externalDirectory = try makeExternalDirectory()
         let sentinelURL = externalDirectory.appendingPathComponent("sentinel.txt")
