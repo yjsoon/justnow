@@ -346,10 +346,14 @@ final class CaptureEventControllerTests: XCTestCase {
         XCTAssertEqual(recorder.startRequests.count, 1)
         XCTAssertEqual(recorder.startRequests[0].status, "Screen Locked")
         XCTAssertEqual(recorder.startRequests[0].initialDelay, .seconds(2))
-        XCTAssertNil(recorder.startRequests[0].retry)
+        XCTAssertEqual(recorder.startRequests[0].retry?.delay, .seconds(3))
         XCTAssertEqual(
             recorder.startRequests[0].attempt.failureStatus,
-            "Screen Locked"
+            "Error"
+        )
+        XCTAssertEqual(
+            recorder.startRequests[0].retry?.attempt.failureStatus,
+            "Failed"
         )
     }
 

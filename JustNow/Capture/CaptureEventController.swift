@@ -146,7 +146,15 @@ final class CaptureEventController {
                 attempt: CaptureStartAttempt(
                     successMessage: "Capture resumed after waiting for unlock",
                     failurePrefix: "Failed to resume capture after waiting for unlock",
-                    failureStatus: "Screen Locked"
+                    failureStatus: "Error"
+                ),
+                retry: CaptureStartRetryPolicy(
+                    delay: .seconds(3),
+                    attempt: CaptureStartAttempt(
+                        successMessage: "Capture resumed on retry",
+                        failurePrefix: "Retry also failed",
+                        failureStatus: "Failed"
+                    )
                 )
             )
         )
