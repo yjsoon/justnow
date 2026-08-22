@@ -213,7 +213,8 @@ final class TextCacheTests: XCTestCase {
         await cache.setText("should not persist", for: UUID())
 
         XCTAssertEqual(try Data(contentsOf: externalURL), sentinel)
-        XCTAssertEqual(await cache.count, 0)
+        let count = await cache.count
+        XCTAssertEqual(count, 0)
     }
 
     func testDiacriticInsensitiveSearch() async {
