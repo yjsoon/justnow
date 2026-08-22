@@ -44,7 +44,11 @@ actor TextCache {
         self.clearHook = clearHook
 
         do {
-            try FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(
+                at: appDir,
+                withIntermediateDirectories: true,
+                attributes: PrivateStorageProtection.ownerOnlyDirectoryAttributes
+            )
             PrivateStorageProtection.apply(to: appDir)
             let connection = try Self.openDatabase(at: databaseURL)
             db = connection
@@ -243,52 +247,26 @@ actor TextCache {
         let safeLimit = Int32(clamping: limit)
         let sinceEpoch = since?.timeIntervalSince1970
 
-        var ids: [UUID] = []
+        let needsUnsegmentedFallback = query.contains { !$0.isASCII }
 
         if let matchQuery = ftsQuery(from: query) {
-            try? withPreparedStatement(
-                sinceEpoch == nil
-                    ?
-                    """
-                   SELECT frame_text.frame_id
-                   FROM frame_text_fts
-                   JOIN frame_text ON frame_text.frame_id = frame_text_fts.frame_id
-                   WHERE frame_text_fts MATCH ?
-                   ORDER BY frame_text.timestamp DESC
-                   LIMIT ?;
-                   """
-                   :
-                   """
-                   SELECT frame_text.frame_id
-                   FROM frame_text_fts
-                   JOIN frame_text ON frame_text.frame_id = frame_text_fts.frame_id
-                   WHERE frame_text_fts MATCH ?
-                     AND frame_text.timestamp >= ?
-                   ORDER BY frame_text.timestamp DESC
-                   LIMIT ?;
-                   """
-            ) { statement in
-                var bindIndex: Int32 = 1
-                var canQuery = bindText(matchQuery, to: statement, index: bindIndex)
-                bindIndex += 1
-
-                if canQuery, let sinceEpoch {
-                    canQuery = bindDouble(sinceEpoch, to: statement, index: bindIndex)
-                    bindIndex += 1
+            do {
+                let ids = try searchFrameIDsUsingFTS(
+                    matchQuery,
+                    limit: safeLimit,
+                    sinceEpoch: sinceEpoch
+                )
+                if !ids.isEmpty || !needsUnsegmentedFallback {
+                    return ids
                 }
-
-                if canQuery,
-                   bindInt32(safeLimit, to: statement, index: bindIndex) {
-                    while sqlite3_step(statement) == SQLITE_ROW {
-                        guard let cText = sqlite3_column_text(statement, 0) else { continue }
-                        let raw = String(cString: cText)
-                        if let id = UUID(uuidString: raw) {
-                            ids.append(id)
-                        }
-                    }
+            } catch {
+                Self.logger.error(
+                    "FTS search failed: \(error.localizedDescription, privacy: .public)"
+                )
+                if !needsUnsegmentedFallback {
+                    return []
                 }
             }
-            return ids
         }
 
         let fallbackSQL =
@@ -404,8 +382,15 @@ actor TextCache {
     // MARK: - SQLite Helpers
 
     private static func openDatabase(at databaseURL: URL) throws -> OpaquePointer {
+        try FrameStoreFile.requireNotSymbolicLink(
+            at: databaseURL,
+            description: "text cache database"
+        )
         var connection: OpaquePointer?
-        let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
+        let flags = SQLITE_OPEN_CREATE
+            | SQLITE_OPEN_READWRITE
+            | SQLITE_OPEN_FULLMUTEX
+            | SQLITE_OPEN_NOFOLLOW
         guard sqlite3_open_v2(databaseURL.path, &connection, flags, nil) == SQLITE_OK,
               let connection else {
             throw sqliteError(message: "Failed to open text cache database", on: connection)
@@ -707,6 +692,58 @@ actor TextCache {
 
     private func bindInt32(_ value: Int32, to statement: OpaquePointer, index: Int32) -> Bool {
         sqlite3_bind_int(statement, index, value) == SQLITE_OK
+    }
+
+    private func searchFrameIDsUsingFTS(
+        _ matchQuery: String,
+        limit: Int32,
+        sinceEpoch: TimeInterval?
+    ) throws -> [UUID] {
+        try withPreparedStatement(
+            sinceEpoch == nil
+                ?
+                """
+                SELECT frame_text.frame_id
+                FROM frame_text_fts
+                JOIN frame_text ON frame_text.frame_id = frame_text_fts.frame_id
+                WHERE frame_text_fts MATCH ?
+                ORDER BY frame_text.timestamp DESC
+                LIMIT ?;
+                """
+                :
+                """
+                SELECT frame_text.frame_id
+                FROM frame_text_fts
+                JOIN frame_text ON frame_text.frame_id = frame_text_fts.frame_id
+                WHERE frame_text_fts MATCH ?
+                  AND frame_text.timestamp >= ?
+                ORDER BY frame_text.timestamp DESC
+                LIMIT ?;
+                """
+        ) { statement in
+            var ids: [UUID] = []
+            var bindIndex: Int32 = 1
+            var canQuery = bindText(matchQuery, to: statement, index: bindIndex)
+            bindIndex += 1
+
+            if canQuery, let sinceEpoch {
+                canQuery = bindDouble(sinceEpoch, to: statement, index: bindIndex)
+                bindIndex += 1
+            }
+
+            guard canQuery, bindInt32(limit, to: statement, index: bindIndex) else {
+                return ids
+            }
+
+            while sqlite3_step(statement) == SQLITE_ROW {
+                guard let cText = sqlite3_column_text(statement, 0) else { continue }
+                let raw = String(cString: cText)
+                if let id = UUID(uuidString: raw) {
+                    ids.append(id)
+                }
+            }
+            return ids
+        }
     }
 
     private func ftsQuery(from query: String) -> String? {

@@ -142,7 +142,11 @@ actor FrameStore {
             at: storageURL,
             description: "storage directory"
         )
-        try FileManager.default.createDirectory(at: storageURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: storageURL,
+            withIntermediateDirectories: true,
+            attributes: PrivateStorageProtection.ownerOnlyDirectoryAttributes
+        )
         PrivateStorageProtection.apply(to: storageURL)
         try Self.validateManagedStorePaths(
             storageURL: storageURL,
@@ -296,8 +300,8 @@ actor FrameStore {
     ) throws -> FrameMetadata {
         let filename = "\(id.uuidString).jpg"
         let thumbnailFilename = "\(id.uuidString)_thumb.jpg"
-        let fullPath = try managedFileURL(filename)
-        let thumbnailPath = try managedFileURL(thumbnailFilename)
+        let fullPath = framesURL.appendingPathComponent(filename)
+        let thumbnailPath = framesURL.appendingPathComponent(thumbnailFilename)
 
         do {
             guard try database.metadata(for: id) == nil,
@@ -375,7 +379,7 @@ actor FrameStore {
                 let activeMetadata = try requiredMetadata(for: activeEntry.frame.id)
                 if activeEntry.frame.id != frame.id,
                    Int64(jpegData.count) == activeMetadata.fileSize {
-                    let activePath = try managedFileURL(activeMetadata.filename)
+                    let activePath = framesURL.appendingPathComponent(activeMetadata.filename)
                     // A missing or unreadable active payload cannot be compared
                     // exactly. Remove its broken logical span before inserting
                     // the new frame so the live timeline cannot expose an
@@ -441,8 +445,8 @@ actor FrameStore {
             throw mapPromotionDatabaseError(error)
         }
 
-        let fullPath = try managedFileURL(metadata.filename)
-        let thumbnailPath = try managedFileURL(metadata.thumbnailFilename)
+        let fullPath = framesURL.appendingPathComponent(metadata.filename)
+        let thumbnailPath = framesURL.appendingPathComponent(metadata.thumbnailFilename)
         if before == nil, FrameStoreFile.exists(at: thumbnailPath) {
             throw FrameStoreError.promotionConflict(
                 "Promotion thumbnail identity already exists"
@@ -632,7 +636,7 @@ actor FrameStore {
 
     func loadFullImage(id: UUID) throws -> CGImage {
         let metadata = try requiredMetadata(for: id)
-        let path = try managedFileURL(metadata.filename)
+        let path = framesURL.appendingPathComponent(metadata.filename)
         guard let data = try? FrameStoreFile.readRegularFile(at: path) else {
             throw FrameStoreError.fileNotFound(id)
         }
@@ -647,7 +651,7 @@ actor FrameStore {
     /// fallback resolution.
     func encodedPayload(id: UUID) throws -> Data {
         let metadata = try requiredMetadata(for: id)
-        let path = try managedFileURL(metadata.filename)
+        let path = framesURL.appendingPathComponent(metadata.filename)
         guard let data = try? FrameStoreFile.readRegularFile(at: path) else {
             throw FrameStoreError.fileNotFound(id)
         }
@@ -656,7 +660,7 @@ actor FrameStore {
 
     func loadSearchIndexImage(id: UUID, maxPixelSize: Int) throws -> CGImage {
         let metadata = try requiredMetadata(for: id)
-        let path = try managedFileURL(metadata.filename)
+        let path = framesURL.appendingPathComponent(metadata.filename)
         guard let data = try? FrameStoreFile.readRegularFile(at: path) else {
             throw FrameStoreError.fileNotFound(id)
         }
@@ -670,7 +674,7 @@ actor FrameStore {
     /// preserving original pixel dimensions and encoder quality.
     func copyFrameToScreenshotsLocation(id: UUID, timestamp: Date) throws -> URL {
         let metadata = try requiredMetadata(for: id)
-        let sourcePath = try managedFileURL(metadata.filename)
+        let sourcePath = framesURL.appendingPathComponent(metadata.filename)
         guard let sourceData = try? FrameStoreFile.readRegularFile(at: sourcePath) else {
             throw FrameStoreError.fileNotFound(id)
         }
@@ -732,8 +736,8 @@ actor FrameStore {
     }
 
     func loadThumbnail(id: UUID) -> CGImage? {
-        guard let metadata = try? requiredMetadata(for: id),
-              let path = try? managedFileURL(metadata.thumbnailFilename) else { return nil }
+        guard let metadata = try? requiredMetadata(for: id) else { return nil }
+        let path = framesURL.appendingPathComponent(metadata.thumbnailFilename)
         if let data = try? FrameStoreFile.readRegularFile(at: path),
            let image = ImageEncoder.cgImage(from: data) {
             return image
@@ -777,12 +781,8 @@ actor FrameStore {
         // References are removed first. Any failed unlink is an owned orphan
         // that the existing startup recovery path will preserve.
         for metadata in unreferencedRows {
-            if let url = try? managedFileURL(metadata.filename) {
-                try? fileManager.removeItem(at: url)
-            }
-            if let url = try? managedFileURL(metadata.thumbnailFilename) {
-                try? fileManager.removeItem(at: url)
-            }
+            try? fileManager.removeItem(at: framesURL.appendingPathComponent(metadata.filename))
+            try? fileManager.removeItem(at: framesURL.appendingPathComponent(metadata.thumbnailFilename))
         }
         return Set(unreferencedRows.map(\.id))
     }
@@ -872,9 +872,7 @@ actor FrameStore {
         }
 
         let missingIDs = Set(rows.compactMap { metadata -> UUID? in
-            guard let fullPath = try? managedFileURL(metadata.filename) else {
-                return metadata.id
-            }
+            let fullPath = framesURL.appendingPathComponent(metadata.filename)
             return FrameStoreFile.isRegularFile(at: fullPath) ? nil : metadata.id
         })
         if !missingIDs.isEmpty {
@@ -1009,7 +1007,11 @@ actor FrameStore {
         markerURL: URL,
         durableCommitHook: FrameDatabaseCommitHook?
     ) throws -> PreparedStore {
-        try fileManager.createDirectory(at: storageURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(
+            at: storageURL,
+            withIntermediateDirectories: true,
+            attributes: PrivateStorageProtection.ownerOnlyDirectoryAttributes
+        )
         PrivateStorageProtection.apply(to: storageURL, fileManager: fileManager)
 
         let databaseExisted = fileManager.fileExists(atPath: databaseURL.path)
@@ -1309,14 +1311,11 @@ actor FrameStore {
             var unusableFrameIDs = Set<UUID>()
             var unusableFiles: [URL] = []
             for metadata in rows {
-                guard let payloadURL = try? managedFileURL(metadata.filename, in: framesURL) else {
-                    unusableFrameIDs.insert(metadata.id)
-                    continue
-                }
+                let payloadURL = framesURL.appendingPathComponent(metadata.filename)
                 guard FrameStoreFile.isRegularFile(at: payloadURL) else {
                     unusableFrameIDs.insert(metadata.id)
-                    if let thumbnailURL = try? managedFileURL(metadata.thumbnailFilename, in: framesURL),
-                       FrameStoreFile.isRegularFile(at: thumbnailURL) {
+                    let thumbnailURL = framesURL.appendingPathComponent(metadata.thumbnailFilename)
+                    if FrameStoreFile.isRegularFile(at: thumbnailURL) {
                         unusableFiles.append(thumbnailURL)
                     }
                     continue
@@ -1333,8 +1332,8 @@ actor FrameStore {
                 if !payloadIsValid {
                     unusableFrameIDs.insert(metadata.id)
                     unusableFiles.append(payloadURL)
-                    if let thumbnailURL = try? managedFileURL(metadata.thumbnailFilename, in: framesURL),
-                       FrameStoreFile.isRegularFile(at: thumbnailURL) {
+                    let thumbnailURL = framesURL.appendingPathComponent(metadata.thumbnailFilename)
+                    if FrameStoreFile.isRegularFile(at: thumbnailURL) {
                         unusableFiles.append(thumbnailURL)
                     }
                 }
@@ -1515,17 +1514,6 @@ actor FrameStore {
         } catch {
             throw FrameStoreError.database(String(describing: error))
         }
-    }
-
-    private func managedFileURL(_ filename: String) throws -> URL {
-        try Self.managedFileURL(filename, in: framesURL)
-    }
-
-    private static func managedFileURL(_ filename: String, in framesURL: URL) throws -> URL {
-        guard FrameStoreFilename.isSafe(filename) else {
-            throw FrameStoreError.recovery("Refusing unsafe payload filename")
-        }
-        return framesURL.appendingPathComponent(filename)
     }
 }
 

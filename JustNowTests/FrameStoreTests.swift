@@ -317,6 +317,11 @@ final class FrameStoreTests: XCTestCase {
         let values = try directory.resourceValues(forKeys: [.isExcludedFromBackupKey])
         XCTAssertEqual(values.isExcludedFromBackup, true)
         XCTAssertTrue(PrivateStorageProtection.isExcludedFromTimeMachine(directory))
+        XCTAssertTrue(
+            PrivateStorageProtection.isExcludedFromTimeMachine(
+                directory.appendingPathComponent("frames", isDirectory: true)
+            )
+        )
     }
 
     func testReopenDropsTraversingFilenameWithoutTouchingSiblingFile() async throws {
