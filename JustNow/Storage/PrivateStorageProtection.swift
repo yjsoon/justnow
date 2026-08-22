@@ -40,6 +40,7 @@ nonisolated enum PrivateStorageProtection {
     }
 
     static func isExcludedFromTimeMachine(_ directory: URL) -> Bool {
-        CSBackupIsItemExcluded(directory as CFURL)
+        var excludedByPath = DarwinBoolean(false)
+        return CSBackupIsItemExcluded(directory as CFURL, &excludedByPath)
     }
 }
