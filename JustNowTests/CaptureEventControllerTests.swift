@@ -247,6 +247,112 @@ final class CaptureEventControllerTests: XCTestCase {
         XCTAssertEqual(recorder.events, ["filter:5.0", "start:Resuming..."])
     }
 
+    func testLockThenOverlayResumesWhenOverlayCloses() {
+        let recorder = CaptureEventControllerRecorder(
+            context: CaptureEventContext(
+                hasCaptureManager: true,
+                isCapturing: true,
+                isSetupCaptureInProgress: false,
+                hasPendingStart: false,
+                isOverlayVisible: false
+            )
+        )
+        let controller = recorder.makeController()
+
+        controller.handleScreenLock()
+        recorder.context = CaptureEventContext(
+            hasCaptureManager: true,
+            isCapturing: false,
+            isSetupCaptureInProgress: false,
+            hasPendingStart: false,
+            isOverlayVisible: true
+        )
+        controller.handleOverlayVisibilityChanged(isVisible: true)
+
+        recorder.clearEvents()
+        controller.handleScreenUnlock()
+        XCTAssertFalse(controller.canStartCapture())
+        XCTAssertEqual(controller.blockedStatus(), "Paused (Overlay)")
+
+        recorder.clearEvents()
+        recorder.context = CaptureEventContext(
+            hasCaptureManager: true,
+            isCapturing: false,
+            isSetupCaptureInProgress: false,
+            hasPendingStart: false,
+            isOverlayVisible: false
+        )
+        controller.handleOverlayVisibilityChanged(isVisible: false)
+
+        XCTAssertEqual(recorder.events, ["start:Resuming..."])
+        XCTAssertEqual(
+            recorder.startRequests.last?.attempt.successMessage,
+            "Capture resumed after overlay"
+        )
+    }
+
+    func testLockThenSessionResignResumesWhenSessionBecomesActive() {
+        let recorder = CaptureEventControllerRecorder(
+            context: CaptureEventContext(
+                hasCaptureManager: true,
+                isCapturing: true,
+                isSetupCaptureInProgress: false,
+                hasPendingStart: false,
+                isOverlayVisible: false
+            )
+        )
+        let controller = recorder.makeController()
+
+        controller.handleScreenLock()
+        recorder.context = CaptureEventContext(
+            hasCaptureManager: true,
+            isCapturing: false,
+            isSetupCaptureInProgress: false,
+            hasPendingStart: false,
+            isOverlayVisible: false
+        )
+        controller.handleSessionResignActive()
+
+        recorder.clearEvents()
+        controller.handleScreenUnlock()
+        XCTAssertFalse(controller.canStartCapture())
+        XCTAssertEqual(controller.blockedStatus(), "Session Inactive")
+
+        recorder.clearEvents()
+        controller.handleSessionBecomeActive()
+
+        XCTAssertEqual(recorder.events, ["filter:5.0", "start:Resuming..."])
+        XCTAssertEqual(
+            recorder.startRequests.last?.attempt.successMessage,
+            "Capture resumed after session active"
+        )
+    }
+
+    func testRetryResumeUntilUnlockedKeepsLockedStatus() {
+        let recorder = CaptureEventControllerRecorder(
+            context: CaptureEventContext(
+                hasCaptureManager: true,
+                isCapturing: false,
+                isSetupCaptureInProgress: false,
+                hasPendingStart: false,
+                isOverlayVisible: false
+            )
+        )
+        let controller = recorder.makeController()
+
+        controller.retryResumeUntilUnlocked()
+
+        XCTAssertEqual(recorder.events, ["start:Screen Locked"])
+        XCTAssertEqual(recorder.startRequests.count, 1)
+        XCTAssertEqual(recorder.startRequests[0].status, "Screen Locked")
+        XCTAssertEqual(recorder.startRequests[0].initialDelay, .seconds(2))
+        XCTAssertNil(recorder.startRequests[0].retry)
+        XCTAssertEqual(
+            recorder.startRequests[0].attempt.failureStatus,
+            "Screen Locked"
+        )
+    }
+
     func testHandleScreenUnlockSchedulesResumeWithRetry() {
         let recorder = CaptureEventControllerRecorder(
             context: CaptureEventContext(

@@ -700,11 +700,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             }
             try await captureCoordinator.startCapture()
             guard !Task.isCancelled else { return .failed }
-            guard captureEventController.canStartCapture() else {
-                await captureCoordinator.stopCapture(
-                    reason: captureEventController.blockedSessionEndReason()
-                )
-                replaceStartStatusWithBlockedStatus()
+            if abortIfCaptureStartBlocked(failurePrefix: failurePrefix) {
+                let reason = captureEventController.canStartCapture()
+                    ? CaptureSessionEndReason.screenLock
+                    : captureEventController.blockedSessionEndReason()
+                await captureCoordinator.stopCapture(reason: reason)
                 return .failed
             }
             handleSuccessfulCaptureStart(successMessage: successMessage)
@@ -750,16 +750,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     private func abortIfCaptureStartBlocked(failurePrefix: String) -> Bool {
+        guard captureEventController.canStartCapture() else {
+            replaceStartStatusWithBlockedStatus()
+            return true
+        }
         if CaptureSystemState.isScreenLocked() {
             DiagnosticsLog.shared.log(
                 "Capture",
                 "\(failurePrefix): screen is locked; waiting for unlock"
             )
             updateCaptureStatus("Screen Locked")
-            return true
-        }
-        guard captureEventController.canStartCapture() else {
-            replaceStartStatusWithBlockedStatus()
+            captureEventController.retryResumeUntilUnlocked()
             return true
         }
         return false
