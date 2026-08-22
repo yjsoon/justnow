@@ -4,6 +4,9 @@
 //
 
 import Foundation
+import os.log
+
+private let searchTelemetryLogger = Logger(subsystem: "sg.tk.JustNow", category: "SearchTelemetry")
 
 struct SearchTelemetrySnapshot: Sendable {
     let queueDepth: Int
@@ -96,17 +99,16 @@ actor SearchTelemetry {
         let averageLag = average(indexLagSamples)
         let p95Lag = percentile(indexLagSamples, percentile: 0.95)
 
-        print(
-            String(
-                format: "[SearchTelemetry] summary[%@] queue=%d/%d ocr=%.2f/s lag(avg=%.1fs p95=%.1fs)",
-                reason,
-                queueDepth,
-                queueCapacity,
-                ocrPerSecond,
-                averageLag,
-                p95Lag
-            )
+        let line = String(
+            format: "summary[%@] queue=%d/%d ocr=%.2f/s lag(avg=%.1fs p95=%.1fs)",
+            reason,
+            queueDepth,
+            queueCapacity,
+            ocrPerSecond,
+            averageLag,
+            p95Lag
         )
+        searchTelemetryLogger.info("\(line, privacy: .public)")
     }
 
     private func average(_ values: [TimeInterval]) -> TimeInterval {

@@ -142,7 +142,12 @@ actor FrameStore {
             at: storageURL,
             description: "storage directory"
         )
-        try FileManager.default.createDirectory(at: storageURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: storageURL,
+            withIntermediateDirectories: true,
+            attributes: PrivateStorageProtection.ownerOnlyDirectoryAttributes
+        )
+        PrivateStorageProtection.apply(to: storageURL)
         try Self.validateManagedStorePaths(
             storageURL: storageURL,
             framesURL: framesURL,
@@ -1002,7 +1007,12 @@ actor FrameStore {
         markerURL: URL,
         durableCommitHook: FrameDatabaseCommitHook?
     ) throws -> PreparedStore {
-        try fileManager.createDirectory(at: storageURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(
+            at: storageURL,
+            withIntermediateDirectories: true,
+            attributes: PrivateStorageProtection.ownerOnlyDirectoryAttributes
+        )
+        PrivateStorageProtection.apply(to: storageURL, fileManager: fileManager)
 
         let databaseExisted = fileManager.fileExists(atPath: databaseURL.path)
         let databaseJournalURL = URL(fileURLWithPath: databaseURL.path + "-journal")
@@ -1068,7 +1078,8 @@ actor FrameStore {
                 durableCommitHook: durableCommitHook
             )
             openedDatabase = candidate
-            _ = try candidate.allMetadata() // Validate row-level UUID/hash/filename invariants.
+            _ = try candidate.deleteFramesWithUnusableFilenames()
+            _ = try candidate.allMetadata()
             _ = try candidate.allTimelineEntries()
             database = candidate
         } catch {

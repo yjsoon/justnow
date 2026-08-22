@@ -205,10 +205,7 @@ nonisolated enum TextRecognitionManager {
             .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        Self.logger.debug("Extracted \(text.count) chars from image")
-        if !text.isEmpty {
-            Self.logger.debug("OCR sample: \(String(text.prefix(120)))")
-        }
+        Self.logger.debug("Extracted \(text.count, privacy: .public) chars from image")
         return text
     }
 

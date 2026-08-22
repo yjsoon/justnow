@@ -936,7 +936,7 @@ class OverlayViewModel {
     }
 
     private func beginSearch(for request: SearchRequest) {
-        overlayViewLogger.info("Starting index-only search for: '\(request.query)'")
+        overlayViewLogger.info("Starting index-only search")
 
         isSearchPending = false
         isSearchInProgress = true

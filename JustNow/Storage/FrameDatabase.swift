@@ -9,6 +9,7 @@ import SQLite3
 enum FrameDatabaseError: Error {
     case sqlite(String)
     case corrupt(String)
+    case unusableFilename
     case unsupportedSchema(Int)
     case activeCaptureSession(UUID)
     case captureSessionNotFound(UUID)
@@ -203,7 +204,9 @@ nonisolated final class FrameDatabase: @unchecked Sendable {
             case SQLITE_DONE:
                 return nil
             case SQLITE_ROW:
-                let metadata = try decodeMetadata(from: statement)
+                guard let metadata = try decodeUsableMetadata(from: statement) else {
+                    return nil
+                }
                 try requireDone(statement, message: "Failed to finish reading frame metadata")
                 return metadata
             default:
@@ -225,14 +228,15 @@ nonisolated final class FrameDatabase: @unchecked Sendable {
             var filenames = Set<String>()
             var result = sqlite3_step(statement)
             while result == SQLITE_ROW {
-                let metadata = try decodeMetadata(from: statement)
-                guard filenames.insert(FrameStoreFilename.collisionKey(metadata.filename)).inserted,
-                      filenames.insert(FrameStoreFilename.collisionKey(metadata.thumbnailFilename)).inserted else {
-                    throw FrameDatabaseError.corrupt(
-                        "Duplicate or cross-colliding frame filename in frame database"
-                    )
+                if let metadata = try decodeUsableMetadata(from: statement) {
+                    guard filenames.insert(FrameStoreFilename.collisionKey(metadata.filename)).inserted,
+                          filenames.insert(FrameStoreFilename.collisionKey(metadata.thumbnailFilename)).inserted else {
+                        throw FrameDatabaseError.corrupt(
+                            "Duplicate or cross-colliding frame filename in frame database"
+                        )
+                    }
+                    rows.append(metadata)
                 }
-                rows.append(metadata)
                 result = sqlite3_step(statement)
             }
             guard result == SQLITE_DONE else {
@@ -592,6 +596,37 @@ nonisolated final class FrameDatabase: @unchecked Sendable {
             try setMetadataValue(backupFilename, for: "legacy_manifest_backup_filename")
             try setMetadataValue("0", for: "legacy_manifest_healthy_launches")
         }
+    }
+
+    func deleteFramesWithUnusableFilenames() throws -> Set<UUID> {
+        var ids = Set<UUID>()
+        try withPreparedStatement(
+            """
+            SELECT id, filename, thumbnail_filename
+            FROM frames;
+            """
+        ) { statement in
+            var result = sqlite3_step(statement)
+            while result == SQLITE_ROW {
+                if let rawID = sqlite3_column_text(statement, 0),
+                   let id = UUID(uuidString: String(cString: rawID)),
+                   let rawFilename = sqlite3_column_text(statement, 1),
+                   let rawThumbnailFilename = sqlite3_column_text(statement, 2) {
+                    let filename = String(cString: rawFilename)
+                    let thumbnailFilename = String(cString: rawThumbnailFilename)
+                    if !FrameStoreFilename.isSafe(filename)
+                        || !FrameStoreFilename.isSafe(thumbnailFilename) {
+                        ids.insert(id)
+                    }
+                }
+                result = sqlite3_step(statement)
+            }
+            guard result == SQLITE_DONE else {
+                throw sqliteError(message: "Failed to finish scanning unusable filenames")
+            }
+        }
+        try deleteFrames(ids: ids)
+        return ids
     }
 
     func deleteFrames(ids: Set<UUID>) throws {
@@ -1848,11 +1883,12 @@ nonisolated final class FrameDatabase: @unchecked Sendable {
             var result = sqlite3_step(statement)
             while result == SQLITE_ROW {
                 let span = try decodeSpan(from: statement)
-                let metadata = try decodeMetadata(from: statement, offset: 8)
-                guard metadata.id == span.frameID else {
-                    throw FrameDatabaseError.corrupt("Timeline span resolves to the wrong frame")
+                if let metadata = try decodeUsableMetadata(from: statement, offset: 8) {
+                    guard metadata.id == span.frameID else {
+                        throw FrameDatabaseError.corrupt("Timeline span resolves to the wrong frame")
+                    }
+                    entries.append(TimelineEntry(span: span, frame: storedFrame(from: metadata)))
                 }
-                entries.append(TimelineEntry(span: span, frame: storedFrame(from: metadata)))
                 result = sqlite3_step(statement)
             }
             guard result == SQLITE_DONE else {
@@ -2076,6 +2112,17 @@ nonisolated final class FrameDatabase: @unchecked Sendable {
         return decoded
     }
 
+    private func decodeUsableMetadata(
+        from statement: OpaquePointer,
+        offset: Int32 = 0
+    ) throws -> FrameMetadata? {
+        do {
+            return try decodeMetadata(from: statement, offset: offset)
+        } catch FrameDatabaseError.unusableFilename {
+            return nil
+        }
+    }
+
     private func decodeMetadata(from statement: OpaquePointer, offset: Int32 = 0) throws -> FrameMetadata {
         guard let rawID = sqlite3_column_text(statement, offset),
               let id = UUID(uuidString: String(cString: rawID)) else {
@@ -2100,7 +2147,7 @@ nonisolated final class FrameDatabase: @unchecked Sendable {
         let thumbnailFilename = String(cString: rawThumbnailFilename)
         guard FrameStoreFilename.isSafe(filename),
               FrameStoreFilename.isSafe(thumbnailFilename) else {
-            throw FrameDatabaseError.corrupt("Unsafe frame filename in frame database")
+            throw FrameDatabaseError.unusableFilename
         }
 
         let fileSize = sqlite3_column_int64(statement, offset + 5)

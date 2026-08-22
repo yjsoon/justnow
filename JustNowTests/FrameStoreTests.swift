@@ -307,6 +307,71 @@ final class FrameStoreTests: XCTestCase {
         XCTAssertNoThrow(try FrameStore(directory: directory))
     }
 
+    func testNewStoreDirectoryIsOwnerOnlyAndExcludedFromBackup() throws {
+        _ = try FrameStore(directory: directory)
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: directory.path)
+        let permissions = try XCTUnwrap(attributes[.posixPermissions] as? NSNumber)
+        XCTAssertEqual(permissions.intValue, 0o700)
+
+        let values = try directory.resourceValues(forKeys: [.isExcludedFromBackupKey])
+        XCTAssertEqual(values.isExcludedFromBackup, true)
+        XCTAssertTrue(PrivateStorageProtection.isExcludedFromTimeMachine(directory))
+        XCTAssertTrue(
+            PrivateStorageProtection.isExcludedFromTimeMachine(
+                directory.appendingPathComponent("frames", isDirectory: true)
+            )
+        )
+    }
+
+    func testReopenDropsTraversingFilenameWithoutTouchingSiblingFile() async throws {
+        let poisoned: FrameMetadata
+        let sibling: FrameMetadata
+        do {
+            let store = try FrameStore(directory: directory)
+            poisoned = try await store.saveFrame(
+                makeImage(width: 8, height: 8),
+                timestamp: Date(),
+                hash: 1,
+                displayID: nil,
+                displayName: nil
+            )
+            sibling = try await store.saveFrame(
+                makeImage(width: 8, height: 8),
+                timestamp: Date(),
+                hash: 2,
+                displayID: nil,
+                displayName: nil
+            )
+            await store.flush()
+        }
+
+        let decoyURL = directory.appendingPathComponent("secret.jpg")
+        let decoyImage = try makeImage(width: 16, height: 16)
+        let decoyData = try XCTUnwrap(ImageEncoder.jpegData(from: decoyImage, quality: 0.8))
+        try decoyData.write(to: decoyURL)
+
+        let databaseURL = directory.appendingPathComponent("frames.sqlite")
+        try executeSQLite(
+            databaseURL: databaseURL,
+            sql: "UPDATE frames SET filename = '../secret.jpg' WHERE id = '\(poisoned.id.uuidString)';"
+        )
+
+        let reopened = try FrameStore(directory: directory)
+        let remaining = await reopened.getAllMetadata()
+        XCTAssertFalse(remaining.contains { $0.id == poisoned.id })
+        XCTAssertEqual(remaining.map(\.id), [sibling.id])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: databaseURL.path))
+        XCTAssertFalse(recoveryContains(filename: "frames.sqlite"))
+
+        let siblingImage = try await reopened.loadFullImage(id: sibling.id)
+        XCTAssertEqual(siblingImage.width, 8)
+        XCTAssertEqual(siblingImage.height, 8)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: decoyURL.path))
+        XCTAssertEqual(try Data(contentsOf: decoyURL), decoyData)
+    }
+
     func testSymlinkedStorageRootIsRejectedWithoutTouchingExternalDirectory() throws {
         let externalDirectory = try makeExternalDirectory()
         let sentinelURL = externalDirectory.appendingPathComponent("sentinel.txt")
@@ -828,11 +893,13 @@ final class FrameStoreTests: XCTestCase {
                 "WHERE id = '\(saved.id.uuidString)';"
         )
 
+        let databaseURL = directory.appendingPathComponent("frames.sqlite")
         let reopened = try FrameStore(directory: directory)
 
         let metadata = await reopened.getAllMetadata()
         XCTAssertTrue(metadata.isEmpty)
-        XCTAssertTrue(recoveryContains(filename: "frames.sqlite"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: databaseURL.path))
+        XCTAssertFalse(recoveryContains(filename: "frames.sqlite"))
         XCTAssertTrue(recoveryContains(filename: saved.filename))
     }
 

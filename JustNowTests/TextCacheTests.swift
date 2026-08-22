@@ -176,6 +176,47 @@ final class TextCacheTests: XCTestCase {
         XCTAssertEqual(hits, [frameID])
     }
 
+    func testTokenQueryDoesNotFallBackToMidTokenSubstring() async {
+        let cache = TextCache(directory: directory)
+        let frameID = UUID()
+        await cache.setText("Kubernetes deployment failed", for: frameID)
+
+        let midTokenHits = await cache.searchFrameIDs(matching: "ploy", limit: 10)
+
+        XCTAssertTrue(midTokenHits.isEmpty)
+    }
+
+    func testUnsegmentedScriptQueryFallsBackToSubstring() async {
+        let cache = TextCache(directory: directory)
+        let frameID = UUID()
+        await cache.setText("東京都庁", for: frameID)
+
+        let hits = await cache.searchFrameIDs(matching: "京都", limit: 10)
+
+        XCTAssertEqual(hits, [frameID])
+    }
+
+    func testSymlinkedDatabaseIsRejectedWithoutTouchingExternalFile() async throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let externalURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TextCacheExternal-\(UUID().uuidString).sqlite")
+        let sentinel = Data("external text cache sentinel".utf8)
+        try sentinel.write(to: externalURL)
+        defer { try? FileManager.default.removeItem(at: externalURL) }
+
+        try FileManager.default.createSymbolicLink(
+            at: directory.appendingPathComponent("text_cache.sqlite"),
+            withDestinationURL: externalURL
+        )
+
+        let cache = TextCache(directory: directory)
+        await cache.setText("should not persist", for: UUID())
+
+        XCTAssertEqual(try Data(contentsOf: externalURL), sentinel)
+        let count = await cache.count
+        XCTAssertEqual(count, 0)
+    }
+
     func testDiacriticInsensitiveSearch() async {
         let cache = TextCache(directory: directory)
         let frameID = UUID()
