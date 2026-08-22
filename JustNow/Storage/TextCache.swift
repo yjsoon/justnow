@@ -387,10 +387,7 @@ actor TextCache {
             description: "text cache database"
         )
         var connection: OpaquePointer?
-        let flags = SQLITE_OPEN_CREATE
-            | SQLITE_OPEN_READWRITE
-            | SQLITE_OPEN_FULLMUTEX
-            | SQLITE_OPEN_NOFOLLOW
+        let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
         guard sqlite3_open_v2(databaseURL.path, &connection, flags, nil) == SQLITE_OK,
               let connection else {
             throw sqliteError(message: "Failed to open text cache database", on: connection)

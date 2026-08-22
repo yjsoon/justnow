@@ -893,11 +893,13 @@ final class FrameStoreTests: XCTestCase {
                 "WHERE id = '\(saved.id.uuidString)';"
         )
 
+        let databaseURL = directory.appendingPathComponent("frames.sqlite")
         let reopened = try FrameStore(directory: directory)
 
         let metadata = await reopened.getAllMetadata()
         XCTAssertTrue(metadata.isEmpty)
-        XCTAssertTrue(recoveryContains(filename: "frames.sqlite"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: databaseURL.path))
+        XCTAssertFalse(recoveryContains(filename: "frames.sqlite"))
         XCTAssertTrue(recoveryContains(filename: saved.filename))
     }
 
