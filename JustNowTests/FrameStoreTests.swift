@@ -307,6 +307,17 @@ final class FrameStoreTests: XCTestCase {
         XCTAssertNoThrow(try FrameStore(directory: directory))
     }
 
+    func testNewStoreDirectoryIsOwnerOnlyAndExcludedFromBackup() throws {
+        _ = try FrameStore(directory: directory)
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: directory.path)
+        let permissions = try XCTUnwrap(attributes[.posixPermissions] as? NSNumber)
+        XCTAssertEqual(permissions.intValue, 0o700)
+
+        let values = try directory.resourceValues(forKeys: [.isExcludedFromBackupKey])
+        XCTAssertEqual(values.isExcludedFromBackup, true)
+    }
+
     func testSymlinkedStorageRootIsRejectedWithoutTouchingExternalDirectory() throws {
         let externalDirectory = try makeExternalDirectory()
         let sentinelURL = externalDirectory.appendingPathComponent("sentinel.txt")

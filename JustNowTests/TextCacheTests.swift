@@ -176,6 +176,16 @@ final class TextCacheTests: XCTestCase {
         XCTAssertEqual(hits, [frameID])
     }
 
+    func testTokenQueryDoesNotFallBackToMidTokenSubstring() async {
+        let cache = TextCache(directory: directory)
+        let frameID = UUID()
+        await cache.setText("Kubernetes deployment failed", for: frameID)
+
+        let midTokenHits = await cache.searchFrameIDs(matching: "ploy", limit: 10)
+
+        XCTAssertTrue(midTokenHits.isEmpty)
+    }
+
     func testDiacriticInsensitiveSearch() async {
         let cache = TextCache(directory: directory)
         let frameID = UUID()

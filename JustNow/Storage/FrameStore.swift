@@ -143,6 +143,7 @@ actor FrameStore {
             description: "storage directory"
         )
         try FileManager.default.createDirectory(at: storageURL, withIntermediateDirectories: true)
+        PrivateStorageProtection.apply(to: storageURL)
         try Self.validateManagedStorePaths(
             storageURL: storageURL,
             framesURL: framesURL,
@@ -1003,6 +1004,7 @@ actor FrameStore {
         durableCommitHook: FrameDatabaseCommitHook?
     ) throws -> PreparedStore {
         try fileManager.createDirectory(at: storageURL, withIntermediateDirectories: true)
+        PrivateStorageProtection.apply(to: storageURL, fileManager: fileManager)
 
         let databaseExisted = fileManager.fileExists(atPath: databaseURL.path)
         let databaseJournalURL = URL(fileURLWithPath: databaseURL.path + "-journal")

@@ -646,6 +646,7 @@ struct SettingsView: View {
                 .appendingPathComponent("Library/Application Support", isDirectory: true)
         let storageURL = applicationSupportURL.appendingPathComponent("JustNow", isDirectory: true)
         try? FileManager.default.createDirectory(at: storageURL, withIntermediateDirectories: true)
+        PrivateStorageProtection.apply(to: storageURL)
         NSWorkspace.shared.open(storageURL)
     }
 

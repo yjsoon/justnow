@@ -45,6 +45,7 @@ actor TextCache {
 
         do {
             try FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
+            PrivateStorageProtection.apply(to: appDir)
             let connection = try Self.openDatabase(at: databaseURL)
             db = connection
             try Self.createSchema(on: connection)
@@ -287,9 +288,6 @@ actor TextCache {
                     }
                 }
             }
-        }
-
-        if !ids.isEmpty {
             return ids
         }
 
