@@ -2,10 +2,10 @@ import CoreServices
 import Foundation
 import os.log
 
-enum PrivateStorageProtection {
-    static let ownerOnlyDirectoryAttributes: [FileAttributeKey: Any] = [
-        .posixPermissions: 0o700
-    ]
+nonisolated enum PrivateStorageProtection {
+    static var ownerOnlyDirectoryAttributes: [FileAttributeKey: Any] {
+        [.posixPermissions: 0o700]
+    }
 
     private static let logger = Logger(subsystem: "sg.tk.JustNow", category: "Storage")
 
@@ -40,10 +40,6 @@ enum PrivateStorageProtection {
     }
 
     static func isExcludedFromTimeMachine(_ directory: URL) -> Bool {
-        var excluded = DarwinBoolean(false)
-        guard CSBackupIsItemExcluded(directory as CFURL, &excluded, nil) == noErr else {
-            return false
-        }
-        return excluded.boolValue
+        CSBackupIsItemExcluded(directory as CFURL)
     }
 }
