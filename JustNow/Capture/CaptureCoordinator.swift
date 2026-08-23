@@ -174,7 +174,7 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
     private let cooldownRestartScheduler: CaptureCooldownRestartScheduler
 
     override convenience init() {
-        let broker = CaptureRequestBroker()
+        let broker = CaptureRequestBroker(persistence: UserDefaultsCaptureCircuitStore())
         self.init(
             captureRequestBroker: broker,
             cooldownRestartScheduler: CaptureCooldownRestartScheduler(),
@@ -259,6 +259,10 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
             }
     }
 
+    var isCaptureCircuitCoolingDown: Bool {
+        captureRequestBroker.openCircuitMonotonicDeadline != nil
+    }
+
     func startCapture() async throws {
         isRunning = true
         try await reconcileDisplays(startNewManagers: true)
@@ -332,8 +336,8 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
         hasOpenCircuit: Bool
     ) -> CaptureBackgroundReconcileRecoveryAction {
         guard isRunning, !errorIsCancellation else { return .none }
-        if errorIsPermissionDenied { return .notifyPermissionFlow }
         if hasOpenCircuit { return .retryAfterCooldown }
+        if errorIsPermissionDenied { return .notifyPermissionFlow }
         return isCapturing ? .none : .retryFallback
     }
 
@@ -451,10 +455,23 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
         activeReconciliationCount += 1
         defer { activeReconciliationCount -= 1 }
 
-        // If permission has genuinely been revoked, surface that immediately
-        // instead of letting the request be classified as a cooldown deferral
-        // (or touching ScreenCaptureKit at all).
-        guard hasScreenRecordingPermission() else {
+        // A false ScreenCaptureKit denial can flap preflight to denied for a
+        // few seconds. If the shared circuit is already open, do not treat
+        // that as a real revoke or we show the permission alert and the user
+        // quits, which wipes the in-memory cooldown.
+        switch CapturePermissionGate.resolve(
+            hasPermission: hasScreenRecordingPermission(),
+            circuitIsOpen: captureRequestBroker.openCircuitMonotonicDeadline != nil
+        ) {
+        case .allowed:
+            break
+        case .coolingDown:
+            if let deadline = captureRequestBroker.openCircuitMonotonicDeadline {
+                scheduleCooldownRestart()
+                throw CaptureRequestBrokerError.cooldown(untilMonotonicTime: deadline)
+            }
+            throw CaptureError.permissionDenied
+        case .denied:
             throw CaptureError.permissionDenied
         }
         let discoveredDisplays: [DisplayInfo]
@@ -466,11 +483,22 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
                 try await self.discoverDisplays()
             }
         } catch {
-            // A genuine revocation must reach the app's permission flow even
-            // when a circuit from an earlier false-denial episode is open.
-            if CaptureFailureRecovery.isPermissionDenial(error),
-               !hasScreenRecordingPermission() {
-                throw CaptureError.permissionDenied
+            if CaptureFailureRecovery.isPermissionDenial(error) {
+                switch CapturePermissionGate.resolve(
+                    hasPermission: hasScreenRecordingPermission(),
+                    circuitIsOpen: captureRequestBroker.openCircuitMonotonicDeadline != nil
+                ) {
+                case .denied:
+                    throw CaptureError.permissionDenied
+                case .coolingDown:
+                    if let deadline = captureRequestBroker.openCircuitMonotonicDeadline {
+                        scheduleCooldownRestart()
+                        throw CaptureRequestBrokerError.cooldown(untilMonotonicTime: deadline)
+                    }
+                    throw CaptureError.permissionDenied
+                case .allowed:
+                    break
+                }
             }
             if !(error is CancellationError),
                let deadline = captureRequestBroker.openCircuitMonotonicDeadline {

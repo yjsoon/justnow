@@ -437,7 +437,30 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     private func startCaptureForLaunchState() async {
-        switch resolveLaunchPermissionState() {
+        // Quitting during a false-denial cooldown used to wipe the in-memory
+        // circuit. A restored cooldown must start capture in Recovering, not
+        // through the permission alert, even if preflight is still flapping.
+        if captureCoordinator.isCaptureCircuitCoolingDown {
+            DiagnosticsLog.shared.log(
+                "Capture",
+                "Launch capture deferred: restored ScreenCaptureKit circuit cooldown; \(CaptureSystemState.summary())"
+            )
+            await startCaptureForGrantedLaunchPermission()
+            return
+        }
+
+        // A false ScreenCaptureKit denial can make preflight lie for a few
+        // seconds. Wait it out before treating launch as a real revoke.
+        let hasPermission = await CapturePermissionPreflight.waitForGrant(
+            hasPermission: { ScreenCaptureManager.hasScreenRecordingPermission() },
+            sleep: { duration in
+                try? await Task.sleep(for: duration)
+            }
+        )
+        switch screenRecordingPermission.resolveLaunchState(
+            hasPermission: hasPermission,
+            requestPermission: { false }
+        ) {
         case .granted:
             // Launching into a locked screen (e.g. a remote reinstall) would fail
             // with noDisplay and raise a spurious error alert; wait for unlock.
@@ -457,7 +480,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         }
     }
 
-    private func startCaptureForGrantedLaunchPermission() async {
+    private func startCaptureForGrantedLaunchPermission(allowPermissionRetry: Bool = true) async {
         do {
             try await captureCoordinator.startCapture()
             guard !Task.isCancelled else { return }
@@ -472,7 +495,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         } catch is CancellationError {
             return
         } catch CaptureError.permissionDenied {
-            presentPermissionAlert(status: "No Permission")
+            if await isScreenRecordingStillDeniedAfterSettle() {
+                presentPermissionAlert(status: "No Permission")
+            } else if allowPermissionRetry {
+                DiagnosticsLog.shared.log(
+                    "Capture",
+                    "Launch capture preflight recovered after a transient denial; retrying once; \(CaptureSystemState.summary())"
+                )
+                await startCaptureForGrantedLaunchPermission(allowPermissionRetry: false)
+            } else {
+                captureStartController.beginDeferredStart()
+                updateCaptureStatus("Recovering…")
+            }
         } catch CaptureError.noDisplay {
             captureStartController.beginDeferredStart()
             DiagnosticsLog.shared.log(
@@ -716,7 +750,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             )
             return .failed
         } catch CaptureError.permissionDenied {
-            presentPermissionAlert(status: "No Permission")
+            if await isScreenRecordingStillDeniedAfterSettle() {
+                presentPermissionAlert(status: "No Permission")
+            } else {
+                DiagnosticsLog.shared.log(
+                    "Capture",
+                    "Screen recording preflight recovered after a transient denial; \(CaptureSystemState.summary())"
+                )
+            }
             return .failed
         } catch CaptureError.noDisplay {
             DiagnosticsLog.shared.log(
@@ -1104,14 +1145,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         )
     }
 
-    private func resolveLaunchPermissionState() -> ScreenRecordingPermissionLaunchState {
-        // Skip the native TCC prompt; Permiso will guide the user to drag the app into
-        // the Screen Recording list instead. Returning false here keeps the permission
-        // state machine's "awaiting resolution" bookkeeping intact.
-        screenRecordingPermission.resolveLaunchState(
-            hasPermission: ScreenCaptureManager.hasScreenRecordingPermission(),
-            requestPermission: { false }
-        )
+    private func isScreenRecordingStillDeniedAfterSettle() async -> Bool {
+        !(await CapturePermissionPreflight.waitForGrant(
+            hasPermission: { ScreenCaptureManager.hasScreenRecordingPermission() },
+            sleep: { duration in
+                try? await Task.sleep(for: duration)
+            }
+        ))
     }
 
     private func handlePendingPermissionPromptResolutionIfNeeded() {
