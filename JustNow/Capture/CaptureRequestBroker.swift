@@ -58,11 +58,13 @@ final class CaptureRequestBroker {
     }
 
     private let monotonicNow: @MainActor () -> TimeInterval
+    private let wallClock: @MainActor () -> Date
     private let hasScreenRecordingPermission: @MainActor () -> Bool
     private let log: @MainActor (String) -> Void
     private let cooldown: TimeInterval
     private let maximumCooldown: TimeInterval
     private let escalationResetInterval: TimeInterval
+    private let persistence: CaptureCircuitPersisting?
 
     var recoveryStateDidChange: @MainActor (CaptureRequestBrokerRecoveryState) -> Void = { _ in }
 
@@ -83,6 +85,7 @@ final class CaptureRequestBroker {
         monotonicNow: @escaping @MainActor () -> TimeInterval = {
             TimeInterval(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
         },
+        wallClock: @escaping @MainActor () -> Date = { Date() },
         hasScreenRecordingPermission: @escaping @MainActor () -> Bool = {
             ScreenCaptureManager.hasScreenRecordingPermission()
         },
@@ -90,17 +93,21 @@ final class CaptureRequestBroker {
         maximumCooldown: TimeInterval = CaptureFailureRecovery.falsePermissionDenialMaximumDelay,
         escalationResetInterval: TimeInterval =
             CaptureFailureRecovery.falsePermissionDenialEscalationResetInterval,
+        persistence: CaptureCircuitPersisting? = nil,
         log: @escaping @MainActor (String) -> Void = { message in
             captureBrokerLogger.warning("\(message, privacy: .public)")
             DiagnosticsLog.shared.log("Capture", message)
         }
     ) {
         self.monotonicNow = monotonicNow
+        self.wallClock = wallClock
         self.hasScreenRecordingPermission = hasScreenRecordingPermission
         self.cooldown = cooldown
         self.maximumCooldown = maximumCooldown
         self.escalationResetInterval = escalationResetInterval
+        self.persistence = persistence
         self.log = log
+        restorePersistedCircuitIfNeeded()
     }
 
     /// Monotonic deadline of the currently open circuit, if any. Callers use
@@ -239,6 +246,7 @@ final class CaptureRequestBroker {
             if case .halfOpen = circuitState {
                 circuitState = .closed
                 lastRecoveryMonotonicTime = monotonicNow()
+                persistRecovery()
                 logCircuitRecovery()
                 recoveryStateDidChange(.normal)
             }
@@ -305,6 +313,7 @@ final class CaptureRequestBroker {
             "Global ScreenCaptureKit capture circuit \(event) for \(delay) seconds "
                 + "(queuedRequests=\(queuedCount), circuitOpenCount=\(openedCircuitCount))"
         )
+        persistOpenCircuit(cooldownSeconds: delay)
         publishOpenCircuitRecoveryState()
 
         let pending = waiters
@@ -344,6 +353,59 @@ final class CaptureRequestBroker {
             "Global ScreenCaptureKit capture circuit recovered "
                 + "(queuedRequests=\(waiters.count), circuitOpenCount=\(openedCircuitCount))"
         )
+    }
+
+    private func persistOpenCircuit(cooldownSeconds: TimeInterval) {
+        persistence?.save(
+            PersistedCaptureCircuit(
+                openedAt: wallClock(),
+                cooldownSeconds: cooldownSeconds,
+                escalationLevel: cooldownEscalationLevel,
+                recoveredAt: nil
+            )
+        )
+    }
+
+    private func persistRecovery() {
+        guard var snapshot = persistence?.load() else { return }
+        snapshot.recoveredAt = wallClock()
+        snapshot.escalationLevel = cooldownEscalationLevel
+        persistence?.save(snapshot)
+    }
+
+    private func restorePersistedCircuitIfNeeded() {
+        guard let snapshot = persistence?.load() else { return }
+
+        cooldownEscalationLevel = min(
+            max(snapshot.escalationLevel, 0),
+            Self.maximumCooldownEscalationLevel
+        )
+        let now = wallClock()
+        let elapsed = now.timeIntervalSince(snapshot.openedAt)
+
+        if let recoveredAt = snapshot.recoveredAt, recoveredAt >= snapshot.openedAt {
+            lastRecoveryMonotonicTime = monotonicNow() - now.timeIntervalSince(recoveredAt)
+            return
+        }
+
+        guard elapsed < escalationResetInterval else {
+            persistence?.clear()
+            cooldownEscalationLevel = 0
+            return
+        }
+
+        let remaining = elapsed < snapshot.cooldownSeconds
+            ? snapshot.cooldownSeconds - elapsed
+            : currentCooldownDelay
+        let monotonicDeadline = monotonicNow() + remaining
+        circuitState = .open(monotonicDeadline: monotonicDeadline)
+        openedCircuitCount = max(openedCircuitCount, 1)
+        log(
+            "Restored ScreenCaptureKit capture circuit for \(remaining) seconds "
+                + "(elapsed=\(Int(elapsed)), circuitOpenCount=\(openedCircuitCount))"
+        )
+        persistOpenCircuit(cooldownSeconds: remaining)
+        publishOpenCircuitRecoveryState()
     }
 
 #if DEBUG

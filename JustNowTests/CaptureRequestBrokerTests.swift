@@ -253,6 +253,113 @@ final class CaptureRequestBrokerTests: XCTestCase {
         XCTAssertEqual(recoveryStates, [.needsAttention])
     }
 
+    func testFalseDenialPersistsAndRestoresOpenCircuit() async {
+        let clock = BrokerTestClock()
+        let wall = BrokerTestWallClock()
+        let store = InMemoryCaptureCircuitStore()
+        let first = makeBroker(clock: clock, wallClock: wall, persistence: store)
+
+        _ = await captureError(from: first, owner: UUID()) {
+            throw self.falsePermissionDenial()
+        }
+        XCTAssertNotNil(store.snapshot)
+        XCTAssertNil(store.snapshot?.recoveredAt)
+        XCTAssertEqual(
+            store.snapshot?.cooldownSeconds,
+            CaptureFailureRecovery.falsePermissionDenialDelay
+        )
+
+        wall.advance(by: 10)
+        clock.advance(by: 10)
+        let restored = makeBroker(clock: clock, wallClock: wall, persistence: store)
+        let blocked = await captureError(from: restored, owner: UUID()) {
+            XCTFail("Restored circuit must not touch ScreenCaptureKit")
+        }
+
+        XCTAssertEqual(
+            blocked as? CaptureRequestBrokerError,
+            .cooldown(
+                untilMonotonicTime: clock.monotonicTime
+                    + CaptureFailureRecovery.falsePermissionDenialDelay
+                    - 10
+            )
+        )
+    }
+
+    func testExpiredUnrecoveredCircuitHoldsAcrossRelaunch() async {
+        let clock = BrokerTestClock()
+        let wall = BrokerTestWallClock()
+        let store = InMemoryCaptureCircuitStore()
+        let first = makeBroker(clock: clock, wallClock: wall, persistence: store)
+
+        _ = await captureError(from: first, owner: UUID()) {
+            throw self.falsePermissionDenial()
+        }
+
+        let elapsed = CaptureFailureRecovery.falsePermissionDenialDelay + 6
+        wall.advance(by: elapsed)
+        clock.advance(by: elapsed)
+        let restored = makeBroker(clock: clock, wallClock: wall, persistence: store)
+        let blocked = await captureError(from: restored, owner: UUID()) {
+            XCTFail("A hot unrecovered episode must not poke ScreenCaptureKit on relaunch")
+        }
+
+        XCTAssertEqual(
+            blocked as? CaptureRequestBrokerError,
+            .cooldown(
+                untilMonotonicTime: clock.monotonicTime
+                    + CaptureFailureRecovery.falsePermissionDenialDelay
+            )
+        )
+    }
+
+    func testRecoveredCircuitDoesNotRestoreAsOpen() async throws {
+        let clock = BrokerTestClock()
+        let wall = BrokerTestWallClock()
+        let store = InMemoryCaptureCircuitStore()
+        let first = makeBroker(clock: clock, wallClock: wall, persistence: store)
+
+        _ = await captureError(from: first, owner: UUID()) {
+            throw self.falsePermissionDenial()
+        }
+        clock.advance(by: CaptureFailureRecovery.falsePermissionDenialDelay)
+        wall.advance(by: CaptureFailureRecovery.falsePermissionDenialDelay)
+        _ = try await first.perform(owner: UUID()) { "ok" }
+        XCTAssertNotNil(store.snapshot?.recoveredAt)
+
+        let restored = makeBroker(clock: clock, wallClock: wall, persistence: store)
+        var osCalls = 0
+        let value = try await restored.perform(owner: UUID()) {
+            osCalls += 1
+            return "ok"
+        }
+        XCTAssertEqual(value, "ok")
+        XCTAssertEqual(osCalls, 1)
+    }
+
+    func testStaleUnrecoveredCircuitClearsOnLaunch() async throws {
+        let clock = BrokerTestClock()
+        let wall = BrokerTestWallClock()
+        let store = InMemoryCaptureCircuitStore()
+        let first = makeBroker(clock: clock, wallClock: wall, persistence: store)
+
+        _ = await captureError(from: first, owner: UUID()) {
+            throw self.falsePermissionDenial()
+        }
+
+        let stale = CaptureFailureRecovery.falsePermissionDenialEscalationResetInterval + 1
+        wall.advance(by: stale)
+        clock.advance(by: stale)
+        let restored = makeBroker(clock: clock, wallClock: wall, persistence: store)
+        XCTAssertNil(store.snapshot)
+
+        var osCalls = 0
+        _ = try await restored.perform(owner: UUID()) {
+            osCalls += 1
+        }
+        XCTAssertEqual(osCalls, 1)
+    }
+
     func testCoordinatorStartReadinessPrefersGlobalCooldownOverPartialCapture() {
         XCTAssertEqual(
             CaptureCoordinator.startReadiness(
@@ -408,6 +515,16 @@ final class CaptureRequestBrokerTests: XCTestCase {
                 hasOpenCircuit: false
             ),
             .notifyPermissionFlow
+        )
+        XCTAssertEqual(
+            CaptureCoordinator.backgroundReconcileRecoveryAction(
+                isRunning: true,
+                isCapturing: false,
+                errorIsCancellation: false,
+                errorIsPermissionDenied: true,
+                hasOpenCircuit: true
+            ),
+            .retryAfterCooldown
         )
         XCTAssertEqual(
             CaptureCoordinator.backgroundReconcileRecoveryAction(
@@ -1163,12 +1280,16 @@ final class CaptureRequestBrokerTests: XCTestCase {
 
     private func makeBroker(
         clock: BrokerTestClock,
+        wallClock: BrokerTestWallClock = BrokerTestWallClock(),
         hasScreenRecordingPermission: Bool = true,
+        persistence: CaptureCircuitPersisting? = nil,
         log: @escaping @MainActor (String) -> Void = { _ in }
     ) -> CaptureRequestBroker {
         CaptureRequestBroker(
             monotonicNow: { clock.monotonicTime },
+            wallClock: { wallClock.date },
             hasScreenRecordingPermission: { hasScreenRecordingPermission },
+            persistence: persistence,
             log: log
         )
     }
@@ -1262,6 +1383,22 @@ private final class BrokerTestClock {
     func advance(by interval: TimeInterval) {
         monotonicTime += interval
     }
+}
+
+private final class BrokerTestWallClock {
+    var date = Date(timeIntervalSince1970: 1_700_000_000)
+
+    func advance(by interval: TimeInterval) {
+        date.addTimeInterval(interval)
+    }
+}
+
+private final class InMemoryCaptureCircuitStore: CaptureCircuitPersisting {
+    var snapshot: PersistedCaptureCircuit?
+
+    func load() -> PersistedCaptureCircuit? { snapshot }
+    func save(_ snapshot: PersistedCaptureCircuit) { self.snapshot = snapshot }
+    func clear() { snapshot = nil }
 }
 
 @MainActor
