@@ -273,9 +273,6 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
         case .ready:
             return
         case .coolingDown(let deadline):
-            // A process-wide cooldown blocks every display, including managers
-            // that started earlier in this reconciliation pass. Do not let a
-            // partial multi-display start overwrite "Recovering…" with "Active".
             throw CaptureRequestBrokerError.cooldown(untilMonotonicTime: deadline)
         case .noDisplay:
             scheduleFallbackRestart()
