@@ -217,6 +217,7 @@ private enum ScreenshotCaptureError: Error {
 enum CaptureFailureRecovery: Equatable {
     case countTowardsStop
     case backOff(TimeInterval)
+    case adaptiveBackOff
 
     nonisolated static let falsePermissionDenialDelay: TimeInterval = 30
     /// Upper bound for the shared circuit's escalating cooldown. A sustained
@@ -227,6 +228,7 @@ enum CaptureFailureRecovery: Equatable {
     /// end is treated as the same desync episode and escalates the next
     /// cooldown; a longer healthy stretch resets escalation to the base delay.
     nonisolated static let falsePermissionDenialEscalationResetInterval: TimeInterval = 300
+    nonisolated static let transientFailureMaximumDelay: TimeInterval = 8
 
     /// True when the error is ScreenCaptureKit's TCC denial signature,
     /// regardless of whether preflight considers the denial genuine.
@@ -236,10 +238,24 @@ enum CaptureFailureRecovery: Equatable {
             && nsError.code == -3801
     }
 
+    nonisolated static func isTransientCaptureFailure(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == "com.apple.ScreenCaptureKit.CoreGraphicsErrorDomain"
+            && nsError.code == 1004
+    }
+
+    nonisolated static func transientFailureDelay(attempt: Int) -> TimeInterval {
+        let boundedAttempt = min(max(attempt, 1), 4)
+        return min(pow(2, Double(boundedAttempt - 1)), transientFailureMaximumDelay)
+    }
+
     nonisolated static func disposition(
         for error: Error,
         hasScreenRecordingPermission: Bool
     ) -> CaptureFailureRecovery {
+        if isTransientCaptureFailure(error) {
+            return .adaptiveBackOff
+        }
         guard hasScreenRecordingPermission, isPermissionDenial(error) else {
             return .countTowardsStop
         }
@@ -295,6 +311,7 @@ class ScreenCaptureManager: NSObject {
     private var captureWakeTask: Task<Void, Never>?
     private var captureWakeContinuation: CheckedContinuation<Void, Never>?
     private var consecutiveCaptureFailures = 0
+    private var consecutiveTransientCaptureFailures = 0
 
     static func hasScreenRecordingPermission() -> Bool {
         CGPreflightScreenCaptureAccess()
@@ -390,6 +407,7 @@ class ScreenCaptureManager: NSObject {
         captureScheduleRevision += 1
         isCapturing = false
         consecutiveCaptureFailures = 0
+        consecutiveTransientCaptureFailures = 0
         nextCaptureAt = nil
         captureCooldownDeadline = nil
         captureLoopTask = nil
@@ -567,6 +585,7 @@ class ScreenCaptureManager: NSObject {
             )
             guard isCapturing, !Task.isCancelled, loopSerial == captureLoopSerial else { return }
             consecutiveCaptureFailures = 0
+            consecutiveTransientCaptureFailures = 0
             let timestamp = Date()
             delegate?.captureManager(self, didCaptureFrame: image, at: timestamp)
         } catch let error as CaptureRequestBrokerError {
@@ -598,8 +617,26 @@ class ScreenCaptureManager: NSObject {
             for: error,
             hasScreenRecordingPermission: Self.hasScreenRecordingPermission()
         )
+        if case .adaptiveBackOff = recovery {
+            consecutiveCaptureFailures = 0
+            consecutiveTransientCaptureFailures += 1
+            let attempt = consecutiveTransientCaptureFailures
+            let delay = CaptureFailureRecovery.transientFailureDelay(attempt: attempt)
+            captureScheduleRevision += 1
+            captureCooldownDeadline = Self.monotonicTime() + delay
+            nextCaptureAt = nil
+            captureLogger.warning(
+                "ScreenCaptureKit transient failure; retrying in \(delay, privacy: .public) seconds"
+            )
+            DiagnosticsLog.shared.log(
+                "Capture",
+                "Transient screenshot failure \(attempt); retrying in \(delay) seconds: \(detail)"
+            )
+            return
+        }
         if case .backOff(let delay) = recovery {
             consecutiveCaptureFailures = 0
+            consecutiveTransientCaptureFailures = 0
             captureScheduleRevision += 1
             captureCooldownDeadline = Self.monotonicTime() + delay
             nextCaptureAt = nil

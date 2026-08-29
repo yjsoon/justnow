@@ -51,7 +51,7 @@ final class CaptureFailureRecoveryTests: XCTestCase {
         XCTAssertFalse(CaptureFailureRecovery.isPermissionDenial(CaptureError.permissionDenied))
     }
 
-    func testCountsOtherScreenCaptureKitErrorsTowardsStop() {
+    func testAdaptivelyBacksOffForTransientCoreGraphicsFailure() {
         let error = NSError(
             domain: "com.apple.ScreenCaptureKit.CoreGraphicsErrorDomain",
             code: 1004
@@ -62,7 +62,23 @@ final class CaptureFailureRecoveryTests: XCTestCase {
                 for: error,
                 hasScreenRecordingPermission: true
             ),
-            .countTowardsStop
+            .adaptiveBackOff
         )
+        XCTAssertEqual(
+            CaptureFailureRecovery.disposition(
+                for: error,
+                hasScreenRecordingPermission: false
+            ),
+            .adaptiveBackOff
+        )
+        XCTAssertFalse(CaptureFailureRecovery.isPermissionDenial(error))
+    }
+
+    func testTransientFailureDelayEscalatesAndCapsAtEightSeconds() {
+        XCTAssertEqual(CaptureFailureRecovery.transientFailureDelay(attempt: 1), 1)
+        XCTAssertEqual(CaptureFailureRecovery.transientFailureDelay(attempt: 2), 2)
+        XCTAssertEqual(CaptureFailureRecovery.transientFailureDelay(attempt: 3), 4)
+        XCTAssertEqual(CaptureFailureRecovery.transientFailureDelay(attempt: 4), 8)
+        XCTAssertEqual(CaptureFailureRecovery.transientFailureDelay(attempt: 5), 8)
     }
 }
