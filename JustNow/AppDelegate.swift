@@ -122,6 +122,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     private var screenRecordingPermission = ScreenRecordingPermissionState()
     private var captureRecoveryNeedsAttention = false
     private var hasPresentedPersistentCaptureRecoveryAlert = false
+    private var lastExternalCapturePresence = ExternalCapturePresence(kinds: [])
     private let capturePolicyController = CapturePolicyController()
     private let captureStartController = CaptureStartController()
     private lazy var captureStopController = CaptureStopController(
@@ -346,6 +347,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         guard !Task.isCancelled else { return }
 
         configureCaptureStartupCoordinator()
+        refreshExternalCapturePresence()
 
         guard captureEventController.canStartCapture() else {
             replaceStartStatusWithBlockedStatus()
@@ -437,9 +439,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     private func startCaptureForLaunchState() async {
-        // Quitting during a false-denial cooldown used to wipe the in-memory
-        // circuit. A restored cooldown must start capture in Recovering, not
-        // through the permission alert, even if preflight is still flapping.
         if captureCoordinator.isCaptureCircuitCoolingDown {
             DiagnosticsLog.shared.log(
                 "Capture",
@@ -523,7 +522,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             )
             captureStartController.beginDeferredStart()
             updateCaptureStatus(
-                captureRecoveryNeedsAttention ? "Capture Help Needed" : "Recovering…"
+                captureRecoveryNeedsAttention ? "Capture Help Needed" : CaptureStatusCopy.screenInUse
             )
         } catch {
             DiagnosticsLog.shared.log(
@@ -662,6 +661,41 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             name: Notification.Name("com.apple.screenIsUnlocked"),
             object: nil
         )
+
+        workspace.addObserver(
+            self,
+            selector: #selector(handleRunningApplicationChanged),
+            name: NSWorkspace.didLaunchApplicationNotification,
+            object: nil
+        )
+        workspace.addObserver(
+            self,
+            selector: #selector(handleRunningApplicationChanged),
+            name: NSWorkspace.didTerminateApplicationNotification,
+            object: nil
+        )
+    }
+
+    @objc private func handleRunningApplicationChanged() {
+        refreshExternalCapturePresence()
+    }
+
+    private func refreshExternalCapturePresence() {
+        let apps = NSWorkspace.shared.runningApplications.map { application in
+            RunningAppDescriptor(bundleIdentifier: application.bundleIdentifier)
+        }
+        let presence = ExternalCaptureMatcher.presence(in: apps)
+        guard presence != lastExternalCapturePresence else { return }
+        lastExternalCapturePresence = presence
+
+        if presence.isPresent {
+            let kinds = presence.kinds.map(\.diagnosticsName).sorted().joined(separator: ", ")
+            DiagnosticsLog.shared.log("Capture", "Screen in use (\(kinds))")
+        } else {
+            DiagnosticsLog.shared.log("Capture", "Screen in use ended")
+        }
+
+        captureEventController.handleExternalCapturePresenceChanged(isPresent: presence.isPresent)
     }
 
     @objc private func handleSleep() {
@@ -775,7 +809,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 "\(failurePrefix): deferred while the shared ScreenCaptureKit circuit cools down"
             )
             updateCaptureStatus(
-                captureRecoveryNeedsAttention ? "Capture Help Needed" : "Recovering…"
+                captureRecoveryNeedsAttention ? "Capture Help Needed" : CaptureStatusCopy.screenInUse
             )
             if captureRecoveryNeedsAttention {
                 schedulePersistentCaptureRecoveryAlert()
@@ -895,7 +929,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             if captureEventController.blockedStatus() == nil {
                 captureStartController.beginDeferredStart()
                 updateCaptureStatus(
-                    captureRecoveryNeedsAttention ? "Capture Help Needed" : "Recovering…"
+                    captureRecoveryNeedsAttention ? "Capture Help Needed" : CaptureStatusCopy.screenInUse
                 )
             }
         case .needsAttention:

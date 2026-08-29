@@ -401,6 +401,233 @@ final class CaptureEventControllerTests: XCTestCase {
         )
         XCTAssertEqual(recorder.startRequests[0].attempt.successMessage, "Capture restarted successfully")
     }
+
+    func testExternalCaptureAppearCancelsPendingStartAndSchedulesStop() {
+        let recorder = CaptureEventControllerRecorder(
+            context: CaptureEventContext(
+                hasCaptureManager: true,
+                isCapturing: true,
+                isSetupCaptureInProgress: false,
+                hasPendingStart: true,
+                isOverlayVisible: false
+            )
+        )
+        let controller = recorder.makeController()
+
+        controller.handleExternalCapturePresenceChanged(isPresent: true)
+
+        XCTAssertEqual(
+            recorder.events,
+            [
+                "cancelPendingStart",
+                "stop:\(CaptureStatusCopy.screenInUse)"
+            ]
+        )
+        XCTAssertFalse(controller.canStartCapture())
+        XCTAssertEqual(controller.blockedStatus(), CaptureStatusCopy.screenInUse)
+        XCTAssertEqual(controller.blockedSessionEndReason(), .paused)
+    }
+
+    func testExternalCaptureAppearWhileIdleSetsBlockWithoutStopping() {
+        let recorder = CaptureEventControllerRecorder(
+            context: CaptureEventContext(
+                hasCaptureManager: true,
+                isCapturing: false,
+                isSetupCaptureInProgress: false,
+                hasPendingStart: false,
+                isOverlayVisible: false
+            )
+        )
+        let controller = recorder.makeController()
+
+        controller.handleExternalCapturePresenceChanged(isPresent: true)
+
+        XCTAssertEqual(recorder.events, ["cancelPendingStart"])
+        XCTAssertFalse(controller.canStartCapture())
+        XCTAssertEqual(controller.blockedStatus(), CaptureStatusCopy.screenInUse)
+    }
+
+    func testExternalCaptureDisappearSchedulesResumeAfterPriorPause() {
+        let recorder = CaptureEventControllerRecorder(
+            context: CaptureEventContext(
+                hasCaptureManager: true,
+                isCapturing: true,
+                isSetupCaptureInProgress: false,
+                hasPendingStart: false,
+                isOverlayVisible: false
+            )
+        )
+        let controller = recorder.makeController()
+
+        controller.handleExternalCapturePresenceChanged(isPresent: true)
+        recorder.clearEvents()
+        recorder.context = CaptureEventContext(
+            hasCaptureManager: true,
+            isCapturing: false,
+            isSetupCaptureInProgress: false,
+            hasPendingStart: false,
+            isOverlayVisible: false
+        )
+
+        controller.handleExternalCapturePresenceChanged(isPresent: false)
+
+        XCTAssertEqual(recorder.events, ["filter:5.0", "start:Resuming..."])
+        XCTAssertEqual(recorder.startRequests.count, 1)
+        XCTAssertEqual(
+            recorder.startRequests[0].attempt.successMessage,
+            "Capture resumed after screen in use ended"
+        )
+        XCTAssertTrue(controller.canStartCapture())
+    }
+
+    func testDuplicateExternalCaptureAppearDoesNotDoubleStop() {
+        let recorder = CaptureEventControllerRecorder(
+            context: CaptureEventContext(
+                hasCaptureManager: true,
+                isCapturing: true,
+                isSetupCaptureInProgress: false,
+                hasPendingStart: false,
+                isOverlayVisible: false
+            )
+        )
+        let controller = recorder.makeController()
+
+        controller.handleExternalCapturePresenceChanged(isPresent: true)
+        recorder.clearEvents()
+        recorder.context = CaptureEventContext(
+            hasCaptureManager: true,
+            isCapturing: false,
+            isSetupCaptureInProgress: false,
+            hasPendingStart: false,
+            isOverlayVisible: false
+        )
+
+        controller.handleExternalCapturePresenceChanged(isPresent: true)
+
+        XCTAssertEqual(recorder.events, [])
+        XCTAssertFalse(controller.canStartCapture())
+        XCTAssertEqual(controller.blockedStatus(), CaptureStatusCopy.screenInUse)
+    }
+
+    func testExternalCaptureThenOverlayStaysBlockedAfterOverlayCloses() {
+        let recorder = CaptureEventControllerRecorder(
+            context: CaptureEventContext(
+                hasCaptureManager: true,
+                isCapturing: true,
+                isSetupCaptureInProgress: false,
+                hasPendingStart: false,
+                isOverlayVisible: false
+            )
+        )
+        let controller = recorder.makeController()
+
+        controller.handleExternalCapturePresenceChanged(isPresent: true)
+        recorder.context = CaptureEventContext(
+            hasCaptureManager: true,
+            isCapturing: false,
+            isSetupCaptureInProgress: false,
+            hasPendingStart: false,
+            isOverlayVisible: true
+        )
+        controller.handleOverlayVisibilityChanged(isVisible: true)
+
+        XCTAssertFalse(controller.canStartCapture())
+        XCTAssertEqual(controller.blockedStatus(), "Paused (Overlay)")
+
+        recorder.clearEvents()
+        recorder.context = CaptureEventContext(
+            hasCaptureManager: true,
+            isCapturing: false,
+            isSetupCaptureInProgress: false,
+            hasPendingStart: false,
+            isOverlayVisible: false
+        )
+        controller.handleOverlayVisibilityChanged(isVisible: false)
+
+        XCTAssertFalse(controller.canStartCapture())
+        XCTAssertEqual(controller.blockedStatus(), CaptureStatusCopy.screenInUse)
+    }
+
+    func testExternalCaptureThenOverlayResumesWhenPresenceEndsAndOverlayCloses() {
+        let recorder = CaptureEventControllerRecorder(
+            context: CaptureEventContext(
+                hasCaptureManager: true,
+                isCapturing: true,
+                isSetupCaptureInProgress: false,
+                hasPendingStart: false,
+                isOverlayVisible: false
+            )
+        )
+        let controller = recorder.makeController()
+
+        controller.handleExternalCapturePresenceChanged(isPresent: true)
+        recorder.context = CaptureEventContext(
+            hasCaptureManager: true,
+            isCapturing: false,
+            isSetupCaptureInProgress: false,
+            hasPendingStart: false,
+            isOverlayVisible: true
+        )
+        controller.handleOverlayVisibilityChanged(isVisible: true)
+
+        recorder.clearEvents()
+        controller.handleExternalCapturePresenceChanged(isPresent: false)
+        XCTAssertFalse(controller.canStartCapture())
+        XCTAssertEqual(controller.blockedStatus(), "Paused (Overlay)")
+
+        recorder.clearEvents()
+        recorder.context = CaptureEventContext(
+            hasCaptureManager: true,
+            isCapturing: false,
+            isSetupCaptureInProgress: false,
+            hasPendingStart: false,
+            isOverlayVisible: false
+        )
+        controller.handleOverlayVisibilityChanged(isVisible: false)
+
+        XCTAssertEqual(recorder.events, ["start:Resuming..."])
+        XCTAssertEqual(
+            recorder.startRequests.last?.attempt.successMessage,
+            "Capture resumed after overlay"
+        )
+    }
+
+    func testExternalCaptureWhileUserPausedDoesNotResumeWhenPresenceEnds() {
+        let recorder = CaptureEventControllerRecorder(
+            context: CaptureEventContext(
+                hasCaptureManager: true,
+                isCapturing: true,
+                isSetupCaptureInProgress: false,
+                hasPendingStart: false,
+                isOverlayVisible: false
+            )
+        )
+        let controller = recorder.makeController()
+
+        controller.toggleCapturePause()
+        XCTAssertEqual(controller.blockedStatus(), "Paused (User)")
+
+        recorder.clearEvents()
+        recorder.context = CaptureEventContext(
+            hasCaptureManager: true,
+            isCapturing: false,
+            isSetupCaptureInProgress: false,
+            hasPendingStart: false,
+            isOverlayVisible: false
+        )
+        controller.handleExternalCapturePresenceChanged(isPresent: true)
+
+        XCTAssertEqual(recorder.events, ["cancelPendingStart"])
+        XCTAssertFalse(controller.canStartCapture())
+        XCTAssertEqual(controller.blockedStatus(), "Paused (User)")
+
+        recorder.clearEvents()
+        controller.handleExternalCapturePresenceChanged(isPresent: false)
+
+        XCTAssertEqual(recorder.events, [])
+        XCTAssertFalse(controller.canStartCapture())
+        XCTAssertEqual(controller.blockedStatus(), "Paused (User)")
+    }
 }
 
 @MainActor
