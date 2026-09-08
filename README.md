@@ -70,22 +70,30 @@ The only network requests JustNow makes are update checks via Sparkle.
 
 ## Building From Source
 
-For a normal local install:
+See [Local Development](Docs/local-development.md) for focused tests, signing checks, safe replacement, and Screen Recording troubleshooting.
+
+For a local install, first gracefully quit any running JustNow and wait for it to exit. This helper rebuilds, replaces, and attempts to launch `/Applications/JustNow.app`; it may use Developer ID signing. Restarting clears memory-only recent detail, so this is not a build-only check:
 
 ```bash
 ./Scripts/local-install-app.sh
 ```
 
-To build without installing:
+To build without signing or installing:
 
 ```bash
-xcodebuild -scheme JustNow -configuration Release -derivedDataPath build
+xcodebuild build -project JustNow.xcodeproj -scheme JustNow \
+  -configuration Release -derivedDataPath build \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM=""
 ```
 
-To run the test suite:
+To run the app-hosted test suite without replacing the installed app:
 
 ```bash
-xcodebuild test -project JustNow.xcodeproj -scheme JustNow -destination 'platform=macOS'
+xcodebuild test -project JustNow.xcodeproj -scheme JustNow \
+  -destination 'platform=macOS' -derivedDataPath build-tests-unsigned \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM=""
 ```
 
 ## Licence

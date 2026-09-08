@@ -1,135 +1,47 @@
 # AGENTS.md
 
-## Overview
+## Project
 
-JustNow is a macOS menu bar app that captures screenshots and lets you scroll back through recent screen history in a fullscreen overlay.
+JustNow is a released macOS 15+ menu bar app for rewinding recent screen history, built with Swift, SwiftUI, and AppKit. Bundle ID: `sg.tk.JustNow`; default overlay hotkey: `⌘⌥J`.
 
-- Target: macOS 15+, Swift 6.2, SwiftUI
-- Bundle ID: `sg.tk.JustNow`
-- Storage: `~/Library/Application Support/JustNow/`
-- Hotkey: configurable, default `⌘⌥J`
+Prefer simple, forward-moving implementations while preserving users' settings and stored history. Do not add speculative compatibility layers; raise intentional breaking changes or migration removal for approval.
 
-## Release Stage
+## Autonomy and authorization
 
-This app is pre-release. Prefer forward progress over backwards compatibility unless a task explicitly calls for migration support.
-Do not create or move tags or publish releases unless explicitly requested by the user.
+- Within the requested task, investigate, make safe local fixes, run relevant checks, and fix/rerun failures caused by the change without asking at each step. Preserve unrelated work.
+- On a Mac, useful day-to-day app fixes and improvements should normally end with a verified install and launch from `/Applications/JustNow.app`. Announce the restart; a graceful interruption of the running app is authorized. Ask before force-killing if graceful shutdown fails. Follow [local development](Docs/local-development.md) before replacement.
+- Routine local signing with the existing matching Developer ID identity is authorized. If the identity is missing or would change, ask rather than silently falling back. Keep the stable app path and signing identity to minimize TCC permission churn.
+- Cloud environments, documentation/site-only tasks, and intermediate builds do not require app installation. Do not interrupt the app merely because a build succeeded.
+- Official distribution preparation, notarisation, and publication require explicit authorization for those actions; local-install permission does not grant it. A request to publish a stable release includes updating and deploying its website version metadata, release notes, and appcast unless the user excludes them.
+- Unrelated website changes/deployment, account/project/domain provisioning, and signing-identity changes need their own authorization. Do not infer permission to push, merge, create/move tags, or overwrite existing release assets; confirm that these are within the requested scope.
 
-## Build And Run
+## Privacy and data
 
-```bash
-./Scripts/local-install-app.sh
-```
+- Screen history and OCR data live under `~/Library/Application Support/JustNow/`. Treat images, recognised text, databases and WAL/SHM/journal sidecars, recovery copies, exports, logs, and credentials as sensitive. Do not expose them in commits, uploads, screenshots, or tool output.
+- Use synthetic images and injected temporary storage for tests. Never delete, migrate, or reset live user data or TCC to make a check pass; obtain specific authorization for live-data operations.
+- Preserve owner-only storage, backup exclusion, no-content diagnostics, and first-launch permission behavior. TCC recovery is conditional and user-assisted, not routine cleanup.
+- Keep credentials out of git and logs. Credential-file presence is not permission to execute/source its contents or use signing services outside the authorized task.
 
-Use the helper above for routine local reinstalls. It keeps the app at `/Applications/JustNow.app` and prefers the same Developer ID signing identity, which avoids Screen Recording permission churn when this machine has the local release credentials configured.
+## Verification
 
-If you only need a build artefact without installing it, you can still run:
+- Scale checks to the change: accuracy/links for docs; focused tests and a build for localized app work; broader regression coverage for shared capture, storage, privacy, or lifecycle changes.
+- For visual changes, inspect rendered affected states, including changed non-default states; compilation alone is not visual verification. Use synthetic or non-sensitive content.
+- Verify actual launch and the affected behavior after a local reinstall. Hosted unit tests are not an installed-app smoke test.
+- If the environment or authorization blocks a required check, complete independent safe checks and report the remaining gap. Do not claim unexecuted tests or app behavior passed.
 
-```bash
-xcodebuild -scheme JustNow -configuration Release -derivedDataPath build
-```
+## Task references
 
-For local release packaging:
+Read the reference relevant to the task, not every document or the whole repository:
 
-```bash
-chmod +x Scripts/local-release-build.sh
-./Scripts/local-release-build.sh [version]
-```
+- App behavior and UI: [JustNow/AGENTS.md](JustNow/AGENTS.md).
+- Build, test, install, and TCC troubleshooting: [local development](Docs/local-development.md).
+- Official artifacts and publication: [release and distribution](Docs/release-and-distribution.md).
+- Static site generation and preview: [site and updates](Docs/site-and-updates.md).
+- Website deployment and target checks: [Cloudflare Pages](Docs/cloudflare-pages.md).
 
-To build distribution-ready artifacts (Developer ID signing) locally:
+## Ownership entry points
 
-```bash
-./Scripts/local-release-build.sh [version] --distribution --identity "Developer ID Application: Team Name (TEAMID)" --team TEAMID
-```
-
-To build a locally notarised and stapled DMG:
-
-```bash
-./Scripts/local-release-build.sh [version] \
-  --distribution \
-  --notarize \
-  --identity "Developer ID Application: Team Name (TEAMID)" \
-  --team TEAMID \
-  --api-key /path/to/AuthKey_KEYID.p8 \
-  --api-key-id KEYID \
-  --api-issuer ISSUER-UUID
-```
-
-If the App Store Connect key is an Individual key, omit `--api-issuer`.
-
-Artifacts are written to `dist/` and can be uploaded directly to GitHub Releases.
-
-To build and upload a GitHub release from this machine:
-
-```bash
-./Scripts/local-release-publish.sh vX.Y.Z \
-  --title "JustNow vX.Y.Z" \
-  --identity "Developer ID Application: Team Name (TEAMID)" \
-  --team TEAMID \
-  --api-key /path/to/AuthKey_KEYID.p8 \
-  --api-key-id KEYID \
-  --api-issuer ISSUER-UUID
-```
-
-This repo no longer uses GitHub Actions for release artefacts or public-site deployment. Archived workflows live under `.github/archived-workflows/`.
-
-Local release credentials live in `.env.release.local` (gitignored). The local release scripts auto-load it if present, so future agents should check there first for `APPLE_SIGNING_IDENTITY`, `APPLE_TEAM_ID`, `APPLE_API_KEY_PATH`, `APPLE_API_KEY_ID`, and `APPLE_API_KEY_ISSUER_ID`.
-
-After every successful build, always install and launch from `/Applications/` before reporting completion. Screen Recording permission is tied to the app location.
-
-Prefer `./Scripts/local-install-app.sh` over manually copying a raw Xcode build whenever you are reinstalling the app locally. The helper refuses to replace an existing Developer ID-signed install with a differently signed build unless you explicitly reconfigure the signing inputs.
-
-If you switch a machine from older dev-signed/Xcode builds to Developer ID or notarised builds, macOS may keep a stale Screen Recording entry that still appears enabled. If capture fails in that state, remove the `JustNow` entry from **System Settings → Privacy & Security → Screen Recording** once and relaunch so TCC can recreate it for the new signing identity.
-
-```bash
-pkill -x JustNow 2>/dev/null || true
-if [ -e /Applications/JustNow.app ]; then
-  trash /Applications/JustNow.app
-fi
-cp -R build/Build/Products/Release/JustNow.app /Applications/
-open /Applications/JustNow.app
-```
-
-If `open` fails in CLI contexts, use `xcodebuildmcp macos launch --app-path "/Applications/JustNow.app"`.
-
-Release process and signing/deployment details are documented in:
-
-- `Docs/release-and-distribution.md`
-- `Docs/site-and-updates.md`
-- `Docs/cloudflare-pages.md`
-
-## Key Files
-
-- `JustNow/AppDelegate.swift`: app lifecycle, menu bar, hotkey, capture policy
-- `JustNow/Capture/FrameBuffer.swift`: frame dedupe, retention handoff, OCR queueing
-- `JustNow/UI/OverlayWindowController.swift`: overlay window and keyboard handling
-- `JustNow/UI/TextGrabSelectionOverlay.swift`: drag-to-grab text overlay, clipboard copy feedback
-- `JustNow/Utilities/TextRecognitionManager.swift`: background OCR and higher-accuracy selection OCR cleanup
-- `JustNow/Storage/FrameStore.swift`: manifest and image persistence
-- `JustNow/Storage/RetentionManager.swift`: time-based pruning
-- `site/index.html`: public product page
-- `site/releases.json`: source-of-truth public release metadata
-- `site/appcast.xml`: Sparkle appcast published at the site root
-- `wrangler.jsonc`: Cloudflare Pages project configuration for the public site
-- `Scripts/deploy-public-site.sh`: Cloudflare Pages deployment helper for the public site
-
-## Notes
-
-- Use `ScreenCaptureKit`; `CGWindowListCreateImage` is deprecated.
-- Pruning is paused while the overlay is open.
-- Frames persist across restarts via the on-disk manifest.
-- Keep GitHub Releases as the canonical home for signed app artefacts; the public site under `site/` should link to those assets rather than duplicating release binaries.
-- The public site is intended for a root-mounted custom domain; root-absolute paths in `site/` are intentional unless deployment assumptions change.
-- Sparkle is integrated in-app; stable release publishing should refresh `site/releases.json`, regenerate `site/releases/`, and rebuild `site/appcast.xml` from the uploaded archive.
-- Stable release publishing should also deploy `site/` to Cloudflare Pages unless `--skip-site-deploy` is explicitly requested.
-- After a stable release publish, commit the generated `site/releases.json`, `site/releases/`, and `site/appcast.xml` updates, then redeploy `site/` from that committed hash so Cloudflare deployment metadata matches `main`.
-- Cloudflare Pages is the intended host for `justnow.tk.sg`; use `wrangler.jsonc` and `Docs/cloudflare-pages.md` as the source of truth for site deployment.
-- Keep menu bar recording controls visually in sync: when pause/resume state changes, update both the menu item and the status item icon.
-- In Settings, prefer native macOS patterns when aiming for system look and feel; use `Form` semantics and `LabeledContent` for label/control rows where appropriate.
-- Settings rows should usually control real persisted behaviour rather than restating a fixed implementation detail.
-- Product-facing settings copy should describe user outcomes rather than internal engine details such as retention compaction mechanics.
-- Keep click-outside overlay dismissal; if keyboard dismissal becomes configurable, preserve `Escape` as the simple default.
-- Text grab in the overlay is a direct drag gesture on the frame preview; keep it discoverable with a lightweight in-frame hint rather than a deep settings dependency.
-- In the timeline UI, keep the recent-detail boundary and label priority aligned with the configured recent window rather than a hard-coded cutoff.
-- If UI copy mentions a nominal capture interval, sanity-check it against adaptive throttling and deduplicated browsing so the user-facing wording still matches observed behaviour.
-- Avoid stacking a custom permission alert on top of a macOS TCC prompt during first-launch flows; if the system dialog is already doing the ask, defer app guidance until after the user responds.
-- When a SwiftUI view is exposed through both a `Settings` scene and an AppKit-hosted window, centralise construction and shared dependencies so both entry points stay in sync.
+- `JustNow/AppDelegate.swift` and `JustNow/Capture/`: lifecycle, capture coordination, frame buffering, retention handoff, and OCR queueing.
+- `JustNow/Storage/FrameStore.swift`, `FrameDatabase.swift`, `HybridFrameRepository.swift`, and `TextCache.swift`: durable images/SQLite, memory-resident recent history, and OCR/search data.
+- `JustNow/UI/`: overlay presentation, timeline/search, drag actions, Settings, and menu bar controls.
+- `.github/workflows/unit-tests.yml`: macOS test command. Release/site workflows are archived under `.github/archived-workflows/`; they are not active publishing paths.
