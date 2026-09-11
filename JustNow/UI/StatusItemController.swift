@@ -9,6 +9,50 @@ enum StatusMenuItemTag: Int {
     case showTimeline = 104
 }
 
+/// Menu bar icon state derived from the capture status funnel. Manual pause
+/// wins over everything; statuses that mean capture is parked for a system
+/// reason (cooldown, lock, session, sleep, failure) flip the glyph so a
+/// silently non-recording app is visible at a glance.
+enum StatusItemCaptureState: Equatable {
+    case recording
+    case pausedManually
+    case pausedForSystemReason
+
+    /// Status-line texts that mean capture is down for a non-manual reason.
+    /// Transitional states ("Starting...", "Resuming...", "Restarting...")
+    /// and permission states stay on the recording glyph; permission problems
+    /// surface through their own alert and help menu item.
+    static let systemPausedStatusTexts: Set<String> = [
+        "Sleeping...",
+        "Screen Off",
+        "Recovering…",
+        "Recovering",
+        "Error",
+        "Failed",
+        "Stopped",
+        "Capture Help Needed",
+    ]
+
+    static func resolve(
+        statusText: String,
+        isUserPaused: Bool,
+        blockedStatus: String?
+    ) -> StatusItemCaptureState {
+        if isUserPaused {
+            return .pausedManually
+        }
+        // A non-nil blocked status here is a system reason: user pause is
+        // handled above, so the remainder are overlay/session/lock.
+        if blockedStatus != nil {
+            return .pausedForSystemReason
+        }
+        if systemPausedStatusTexts.contains(statusText) {
+            return .pausedForSystemReason
+        }
+        return .recording
+    }
+}
+
 struct StatusItemControllerActions {
     let showTimeline: () -> Void
     let toggleCapturePause: () -> Void
@@ -194,7 +238,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
         super.init()
         setupMenu()
-        updateStatusItemButtonAppearance(isPaused: false)
+        updateStatusItemButtonAppearance(state: .recording)
         setPaused(false)
         setFrameCount(0)
         setCaptureStatus("Starting...")
@@ -217,6 +261,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         captureStatusItem.title = "Capture: \(status)"
     }
 
+    /// Drives the menu bar glyph: recording, paused manually, or parked for a
+    /// system reason. The menu row below stays keyed to manual pause only,
+    /// because the toggle acts on the user's pause intent.
+    func setCaptureState(_ state: StatusItemCaptureState) {
+        updateStatusItemButtonAppearance(state: state)
+    }
+
     func setPaused(_ isPaused: Bool) {
         pauseItem.title = isPaused ? "Resume Recording" : "Pause Recording"
         pauseItem.state = .off
@@ -225,7 +276,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             title: pauseItem.title,
             accessorySystemImageName: isPaused ? "play.fill" : "pause.fill"
         )
-        updateStatusItemButtonAppearance(isPaused: isPaused)
     }
 
     func setPermissionHelpVisible(_ isVisible: Bool) {
@@ -236,6 +286,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     func item(for tag: StatusMenuItemTag) -> NSMenuItem? {
         menu.item(withTag: tag.rawValue)
     }
+
+#if DEBUG
+    var statusItemButtonDescriptionForTesting: String? {
+        statusItem.button?.image?.accessibilityDescription
+    }
+#endif
 
     func menuWillOpen(_ menu: NSMenu) {
         actions.menuWillOpen()
@@ -300,10 +356,21 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         return view
     }
 
-    private func updateStatusItemButtonAppearance(isPaused: Bool) {
+    private func updateStatusItemButtonAppearance(state: StatusItemCaptureState) {
         guard let button = statusItem.button else { return }
-        let accessibilityDescription = isPaused ? "JustNow (Paused)" : "JustNow"
-        let assetName = isPaused ? "StatusBarIdle" : "StatusBarRecording"
+        let accessibilityDescription: String
+        let assetName: String
+        switch state {
+        case .recording:
+            accessibilityDescription = "JustNow"
+            assetName = "StatusBarRecording"
+        case .pausedManually:
+            accessibilityDescription = "JustNow (Paused)"
+            assetName = "StatusBarIdle"
+        case .pausedForSystemReason:
+            accessibilityDescription = "JustNow (Paused by macOS)"
+            assetName = "StatusBarSystemPause"
+        }
 
         if let image = NSImage(named: assetName)?.copy() as? NSImage {
             image.isTemplate = true

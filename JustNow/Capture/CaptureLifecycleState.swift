@@ -6,15 +6,12 @@ struct CaptureLifecycleState {
     private(set) var isPausedForSession = false
     private(set) var wasCapturingBeforeLock = false
     private(set) var isPausedForLock = false
-    private(set) var wasCapturingBeforeExternalCapture = false
-    private(set) var isPausedForExternalCapture = false
 
     func canStartCapture(isOverlayVisible: Bool) -> Bool {
         !isUserPaused
             && !isPausedForOverlay
             && !isPausedForSession
             && !isPausedForLock
-            && !isPausedForExternalCapture
             && !isOverlayVisible
     }
 
@@ -31,9 +28,6 @@ struct CaptureLifecycleState {
         if isPausedForLock {
             return "Screen Locked"
         }
-        if isPausedForExternalCapture {
-            return CaptureStatusCopy.screenInUse
-        }
         return nil
     }
 
@@ -42,7 +36,6 @@ struct CaptureLifecycleState {
             && !isPausedForOverlay
             && !isPausedForSession
             && !isPausedForLock
-            && !isPausedForExternalCapture
             && !isUserPaused
     }
 
@@ -93,21 +86,6 @@ struct CaptureLifecycleState {
         isPausedForLock = false
         let shouldResumeCapture = wasCapturingBeforeLock
         wasCapturingBeforeLock = false
-        return shouldResumeCapture
-    }
-
-    mutating func pauseForExternalCapture(captureWasActive: Bool, shouldResumeCapture: Bool) -> Bool {
-        guard !isPausedForExternalCapture else { return false }
-        isPausedForExternalCapture = true
-        wasCapturingBeforeExternalCapture = shouldResumeCapture
-        return captureWasActive
-    }
-
-    mutating func resumeAfterExternalCapture() -> Bool {
-        guard isPausedForExternalCapture else { return false }
-        isPausedForExternalCapture = false
-        let shouldResumeCapture = wasCapturingBeforeExternalCapture
-        wasCapturingBeforeExternalCapture = false
         return shouldResumeCapture
     }
 }

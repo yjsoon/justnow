@@ -9,9 +9,6 @@ final class CaptureLifecycleStateTests: XCTestCase {
         XCTAssertFalse(state.pauseForOverlay(captureWasActive: false, shouldResumeCapture: true))
         XCTAssertFalse(state.pauseForSession(captureWasActive: false, shouldResumeCapture: true))
         XCTAssertFalse(state.pauseForLock(captureWasActive: false, shouldResumeCapture: true))
-        XCTAssertFalse(
-            state.pauseForExternalCapture(captureWasActive: false, shouldResumeCapture: true)
-        )
 
         XCTAssertEqual(
             state.blockedStatus(isOverlayVisible: true),
@@ -121,7 +118,6 @@ final class CaptureLifecycleStateTests: XCTestCase {
         XCTAssertFalse(state.resumeAfterSession())
         XCTAssertFalse(state.resumeAfterOverlay())
         XCTAssertFalse(state.resumeAfterLock())
-        XCTAssertFalse(state.resumeAfterExternalCapture())
         XCTAssertTrue(state.canStartCapture(isOverlayVisible: false))
     }
 
@@ -143,10 +139,6 @@ final class CaptureLifecycleStateTests: XCTestCase {
         XCTAssertFalse(state.shouldRestartAfterUnexpectedStop(isOverlayVisible: false))
         _ = state.resumeAfterLock()
 
-        _ = state.pauseForExternalCapture(captureWasActive: true, shouldResumeCapture: true)
-        XCTAssertFalse(state.shouldRestartAfterUnexpectedStop(isOverlayVisible: false))
-        _ = state.resumeAfterExternalCapture()
-
         XCTAssertTrue(state.shouldRestartAfterUnexpectedStop(isOverlayVisible: false))
     }
 
@@ -162,54 +154,5 @@ final class CaptureLifecycleStateTests: XCTestCase {
             state.blockedStatus(isOverlayVisible: false),
             "Paused (Overlay)"
         )
-    }
-
-    func testPauseAndResumeForExternalCapturePreservesResumeIntent() {
-        var state = CaptureLifecycleState()
-
-        XCTAssertTrue(
-            state.pauseForExternalCapture(captureWasActive: true, shouldResumeCapture: true)
-        )
-        XCTAssertTrue(state.isPausedForExternalCapture)
-        XCTAssertTrue(state.wasCapturingBeforeExternalCapture)
-        XCTAssertFalse(state.canStartCapture(isOverlayVisible: false))
-        XCTAssertEqual(
-            state.blockedStatus(isOverlayVisible: false),
-            CaptureStatusCopy.screenInUse
-        )
-
-        XCTAssertTrue(state.resumeAfterExternalCapture())
-        XCTAssertFalse(state.isPausedForExternalCapture)
-        XCTAssertFalse(state.wasCapturingBeforeExternalCapture)
-        XCTAssertTrue(state.canStartCapture(isOverlayVisible: false))
-    }
-
-    func testDuplicateExternalCapturePauseDoesNotClobberResumeIntent() {
-        var state = CaptureLifecycleState()
-
-        XCTAssertTrue(
-            state.pauseForExternalCapture(captureWasActive: true, shouldResumeCapture: true)
-        )
-        XCTAssertFalse(
-            state.pauseForExternalCapture(captureWasActive: false, shouldResumeCapture: false),
-            "Second pause while already paused must be a no-op"
-        )
-
-        XCTAssertTrue(state.resumeAfterExternalCapture(), "Original resume intent must survive")
-    }
-
-    func testUserPauseWinsOverExternalCaptureBlockedStatus() {
-        var state = CaptureLifecycleState()
-
-        XCTAssertTrue(
-            state.pauseForExternalCapture(captureWasActive: true, shouldResumeCapture: true)
-        )
-        XCTAssertTrue(state.toggleUserPause())
-
-        XCTAssertEqual(
-            state.blockedStatus(isOverlayVisible: false),
-            "Paused (User)"
-        )
-        XCTAssertFalse(state.canStartCapture(isOverlayVisible: false))
     }
 }

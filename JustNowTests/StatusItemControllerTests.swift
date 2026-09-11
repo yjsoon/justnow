@@ -63,6 +63,32 @@ final class StatusItemControllerTests: XCTestCase {
         XCTAssertEqual(callbackCount, 1)
     }
 
+    func testSetCaptureStateDrivesButtonGlyph() {
+        let controller = makeController()
+
+        controller.setCaptureState(.recording)
+        XCTAssertEqual(controller.statusItemButtonDescriptionForTesting, "JustNow")
+
+        controller.setCaptureState(.pausedManually)
+        XCTAssertEqual(controller.statusItemButtonDescriptionForTesting, "JustNow (Paused)")
+
+        controller.setCaptureState(.pausedForSystemReason)
+        XCTAssertEqual(controller.statusItemButtonDescriptionForTesting, "JustNow (Paused by macOS)")
+    }
+
+    func testSetPausedOnlyUpdatesMenuRowNotButtonGlyph() {
+        let controller = makeController()
+
+        controller.setCaptureState(.recording)
+        controller.setPaused(true)
+
+        XCTAssertEqual(controller.statusItemButtonDescriptionForTesting, "JustNow")
+        XCTAssertEqual(
+            controller.item(for: .pauseToggle)?.title,
+            "Resume Recording"
+        )
+    }
+
     private func makeController(menuWillOpen: @escaping () -> Void = {}) -> StatusItemController {
         let controller = StatusItemController(
             actions: StatusItemControllerActions(
