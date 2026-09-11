@@ -72,7 +72,6 @@ final class CaptureEventController {
         }
         if lifecycle.isPausedForSession { return .sessionInactive }
         if lifecycle.isPausedForLock { return .screenLock }
-        if lifecycle.isPausedForExternalCapture { return .paused }
         return .paused
     }
 
@@ -116,7 +115,6 @@ final class CaptureEventController {
             || current.hasPendingStart
             || (lifecycle.isPausedForOverlay && lifecycle.wasCapturingBeforeOverlay)
             || (lifecycle.isPausedForSession && lifecycle.wasCapturingBeforeSession)
-            || hasExternalCaptureResumeIntent
         _ = lifecycle.pauseForLock(
             captureWasActive: current.isCapturing
                 || current.isSetupCaptureInProgress
@@ -170,7 +168,6 @@ final class CaptureEventController {
             || current.hasPendingStart
             || (lifecycle.isPausedForOverlay && lifecycle.wasCapturingBeforeOverlay)
             || hasLockResumeIntent
-            || hasExternalCaptureResumeIntent
         let shouldStopCapture = lifecycle.pauseForSession(
             captureWasActive: current.isCapturing
                 || current.isSetupCaptureInProgress
@@ -258,14 +255,6 @@ final class CaptureEventController {
         }
     }
 
-    func handleExternalCapturePresenceChanged(isPresent: Bool) {
-        if isPresent {
-            pauseCaptureForExternalCapture()
-        } else {
-            resumeCaptureAfterExternalCapture()
-        }
-    }
-
     private func pauseCaptureForOverlay() {
         let current = context()
         let shouldResumeCaptureAfterOverlay =
@@ -274,7 +263,6 @@ final class CaptureEventController {
             || current.hasPendingStart
             || (lifecycle.isPausedForSession && lifecycle.wasCapturingBeforeSession)
             || hasLockResumeIntent
-            || hasExternalCaptureResumeIntent
         let shouldStopCapture = lifecycle.pauseForOverlay(
             captureWasActive: current.isCapturing
                 || current.isSetupCaptureInProgress
@@ -309,48 +297,8 @@ final class CaptureEventController {
         )
     }
 
-    private func pauseCaptureForExternalCapture() {
-        guard !lifecycle.isPausedForExternalCapture else { return }
-
-        let current = context()
-        let shouldResumeCaptureAfterExternalCapture =
-            current.isCapturing
-            || current.isSetupCaptureInProgress
-            || current.hasPendingStart
-            || (lifecycle.isPausedForOverlay && lifecycle.wasCapturingBeforeOverlay)
-            || (lifecycle.isPausedForSession && lifecycle.wasCapturingBeforeSession)
-            || hasLockResumeIntent
-        let shouldStopCapture = lifecycle.pauseForExternalCapture(
-            captureWasActive: current.isCapturing
-                || current.isSetupCaptureInProgress
-                || current.hasPendingStart,
-            shouldResumeCapture: shouldResumeCaptureAfterExternalCapture
-        )
-        cancelPendingStart()
-
-        guard shouldStopCapture else { return }
-        scheduleStop(
-            CaptureStopRequest(
-                status: CaptureStatusCopy.screenInUse,
-                logMessage: "Capture paused because Simulator is using the screen",
-                sessionEndReason: .paused
-            )
-        )
-    }
-
-    private func resumeCaptureAfterExternalCapture() {
-        guard lifecycle.resumeAfterExternalCapture() else { return }
-
-        enableBlackFrameFilter(5)
-        scheduleResume(reason: "screen in use ended")
-    }
-
     private var hasLockResumeIntent: Bool {
         lifecycle.isPausedForLock && lifecycle.wasCapturingBeforeLock
-    }
-
-    private var hasExternalCaptureResumeIntent: Bool {
-        lifecycle.isPausedForExternalCapture && lifecycle.wasCapturingBeforeExternalCapture
     }
 
     private func scheduleResume(reason: String) {
