@@ -11,10 +11,21 @@
   },
   "releases": [
     {
+      "tag": "v1.5.2",
+      "version": "1.5.2",
+      "published_at": "2026-09-11",
+      "status": "Current public build",
+      "notes": [
+        "JustNow now keeps recording while iOS Simulator is running, instead of pausing whenever Simulator was open.",
+        "If macOS briefly interrupts screen capture, JustNow recovers automatically and the menu shows “Recovering…” instead of looking like a recording permission problem.",
+        "The menu bar icon now changes whenever capture pauses for a reason other than your own pause — such as a locked screen, system recovery, or an error — so you can see at a glance that history isn’t being recorded."
+      ]
+    },
+    {
       "tag": "v1.5.1",
       "version": "1.5.1",
       "published_at": "2026-08-10",
-      "status": "Current public build",
+      "status": "Previous release",
       "notes": [
         "Recent-history settings that need a relaunch now offer a Relaunch JustNow button beside the relevant setting.",
         "JustNow confirms before relaunching, closes cleanly, saves the latest frame from each display, and then reopens automatically.",
