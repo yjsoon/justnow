@@ -31,16 +31,23 @@ final class StatusItemCaptureStateTests: XCTestCase {
         }
     }
 
-    func testSystemParkedStatusTextsResolveToSystemPause() {
-        let statuses = StatusItemCaptureState.systemPausedStatusTexts
+    func testRecordingStatusTextsIsExactlyTheAllowlist() {
         XCTAssertEqual(
-            statuses,
+            StatusItemCaptureState.recordingStatusTexts,
             [
-                "Sleeping...", "Screen Off", "Recovering…", "Recovering",
-                "Error", "Failed", "Stopped", "Capture Help Needed",
+                "Active",
+                "Starting...",
+                "Resuming...",
+                "Restarting...",
+                "Awaiting Permission",
+                "No Permission",
+                "Restart Required",
             ]
         )
-        for status in statuses {
+    }
+
+    func testSystemParkedStatusTextsResolveToSystemPause() {
+        for status in ["Sleeping...", "Screen Off", "Recovering…", "Error", "Failed", "Stopped", "Capture Help Needed"] {
             XCTAssertEqual(
                 StatusItemCaptureState.resolve(
                     statusText: status,
@@ -51,6 +58,34 @@ final class StatusItemCaptureStateTests: XCTestCase {
                 "Status \"\(status)\" should show the system-pause glyph"
             )
         }
+    }
+
+    func testLifecycleStatusTextsWithoutFlagResolveToSystemPause() {
+        // Launch-while-locked and the unlock-retry path publish "Screen Locked"
+        // without setting the lifecycle lock flag; "Session Inactive" and
+        // "Paused (Overlay)" are similarly plain status text, not the blocked
+        // flag. All three must still fail safe to the system-pause glyph.
+        for status in ["Screen Locked", "Session Inactive", "Paused (Overlay)"] {
+            XCTAssertEqual(
+                StatusItemCaptureState.resolve(
+                    statusText: status,
+                    isUserPaused: false,
+                    blockedStatus: nil
+                ),
+                .pausedForSystemReason
+            )
+        }
+    }
+
+    func testUnknownStatusFailsSafeToSystemPause() {
+        XCTAssertEqual(
+            StatusItemCaptureState.resolve(
+                statusText: "Some Future Status",
+                isUserPaused: false,
+                blockedStatus: nil
+            ),
+            .pausedForSystemReason
+        )
     }
 
     func testLifecycleBlockedStatusesResolveToSystemPause() {
@@ -77,18 +112,17 @@ final class StatusItemCaptureStateTests: XCTestCase {
         )
     }
 
-    func testUserBlockedStatusAloneDoesNotImplyManualWithoutFlag() {
+    func testUserPausedTextWithoutFlagIsNotManual() {
         // The funnel passes isUserPaused separately; a "Paused (User)" string
         // reaching the resolver without the flag must not silently read as
-        // manual — it falls through to the recording glyph only when nothing
-        // else indicates a pause.
+        // manual — it is a pause, just not one the toggle row should claim.
         XCTAssertEqual(
             StatusItemCaptureState.resolve(
                 statusText: "Paused (User)",
                 isUserPaused: false,
                 blockedStatus: nil
             ),
-            .recording
+            .pausedForSystemReason
         )
     }
 }

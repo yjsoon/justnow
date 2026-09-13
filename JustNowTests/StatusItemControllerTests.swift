@@ -73,7 +73,7 @@ final class StatusItemControllerTests: XCTestCase {
         XCTAssertEqual(controller.statusItemButtonDescriptionForTesting, "JustNow (Paused)")
 
         controller.setCaptureState(.pausedForSystemReason)
-        XCTAssertEqual(controller.statusItemButtonDescriptionForTesting, "JustNow (Paused by macOS)")
+        XCTAssertEqual(controller.statusItemButtonDescriptionForTesting, "JustNow (Not Recording)")
     }
 
     func testSetPausedOnlyUpdatesMenuRowNotButtonGlyph() {

@@ -171,7 +171,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         updateStatus: { [weak self] in self?.updateCaptureStatus($0) },
         enableBlackFrameFilter: { [weak self] in self?.frameBuffer?.enableBlackFrameFilter(for: $0) },
         endForegroundActivity: { [weak self] in self?.appNapPreventer.stopActivity() },
-        updatePauseMenu: { [weak self] isPaused in self?.statusItemController?.setPaused(isPaused) }
+        updatePauseMenu: { [weak self] isPaused in
+            guard let self else { return }
+            self.statusItemController?.setPaused(isPaused)
+            // Pausing flips the glyph now rather than waiting for the async stop
+            // to publish "Paused (User)". Resume is left to the start task: the
+            // last status text is still "Paused (User)" at this point and would
+            // resolve to the system glyph for one hop.
+            if isPaused {
+                self.refreshStatusItemCaptureState()
+            }
+        }
     )
 
     func applicationDidFinishLaunching(_ notification: Notification) {

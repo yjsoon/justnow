@@ -9,50 +9,6 @@ enum StatusMenuItemTag: Int {
     case showTimeline = 104
 }
 
-/// Menu bar icon state derived from the capture status funnel. Manual pause
-/// wins over everything; statuses that mean capture is parked for a system
-/// reason (cooldown, lock, session, sleep, failure) flip the glyph so a
-/// silently non-recording app is visible at a glance.
-enum StatusItemCaptureState: Equatable {
-    case recording
-    case pausedManually
-    case pausedForSystemReason
-
-    /// Status-line texts that mean capture is down for a non-manual reason.
-    /// Transitional states ("Starting...", "Resuming...", "Restarting...")
-    /// and permission states stay on the recording glyph; permission problems
-    /// surface through their own alert and help menu item.
-    static let systemPausedStatusTexts: Set<String> = [
-        "Sleeping...",
-        "Screen Off",
-        "Recovering…",
-        "Recovering",
-        "Error",
-        "Failed",
-        "Stopped",
-        "Capture Help Needed",
-    ]
-
-    static func resolve(
-        statusText: String,
-        isUserPaused: Bool,
-        blockedStatus: String?
-    ) -> StatusItemCaptureState {
-        if isUserPaused {
-            return .pausedManually
-        }
-        // A non-nil blocked status here is a system reason: user pause is
-        // handled above, so the remainder are overlay/session/lock.
-        if blockedStatus != nil {
-            return .pausedForSystemReason
-        }
-        if systemPausedStatusTexts.contains(statusText) {
-            return .pausedForSystemReason
-        }
-        return .recording
-    }
-}
-
 struct StatusItemControllerActions {
     let showTimeline: () -> Void
     let toggleCapturePause: () -> Void
@@ -368,7 +324,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             accessibilityDescription = "JustNow (Paused)"
             assetName = "StatusBarIdle"
         case .pausedForSystemReason:
-            accessibilityDescription = "JustNow (Paused by macOS)"
+            accessibilityDescription = "JustNow (Not Recording)"
             assetName = "StatusBarSystemPause"
         }
 
