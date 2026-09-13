@@ -193,7 +193,7 @@ final class CaptureStartControllerTests: XCTestCase {
                 attempt: CaptureStartAttempt(
                     successMessage: "first",
                     failurePrefix: "first deferred",
-                    failureStatus: "Recovering"
+                    failureStatus: "Recovering…"
                 ),
                 retry: CaptureStartRetryPolicy(
                     delay: .seconds(3),
@@ -246,7 +246,7 @@ final class CaptureStartControllerTests: XCTestCase {
                     attempt: CaptureStartAttempt(
                         successMessage: "second",
                         failurePrefix: "second deferred",
-                        failureStatus: "Recovering"
+                        failureStatus: "Recovering…"
                     )
                 )
             ),
@@ -277,7 +277,7 @@ final class CaptureStartControllerTests: XCTestCase {
                 attempt: CaptureStartAttempt(
                     successMessage: "first",
                     failurePrefix: "first deferred",
-                    failureStatus: "Recovering"
+                    failureStatus: "Recovering…"
                 )
             ),
             canStartCapture: { true },
@@ -303,7 +303,7 @@ final class CaptureStartControllerTests: XCTestCase {
                 attempt: CaptureStartAttempt(
                     successMessage: "first",
                     failurePrefix: "first deferred",
-                    failureStatus: "Recovering"
+                    failureStatus: "Recovering…"
                 )
             ),
             canStartCapture: { true },
