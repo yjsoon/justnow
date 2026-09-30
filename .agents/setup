@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+SECONDS=0
+
+# Amp's Debian base supplies Python and Node; there is no Linux Xcode toolchain.
+python3 -c 'import sys; assert sys.version_info >= (3, 10), "Python 3.10+ required"'
+node -e 'if (Number(process.versions.node.split(".")[0]) < 22) throw new Error("Node 22+ required")'
+
+VENV="$REPO_ROOT/.agents/venv"
+echo "[setup ${SECONDS}s] Preparing Python image tooling"
+if [[ ! -x "$VENV/bin/python3" ]]; then
+  python3 -m venv "$VENV"
+fi
+"$VENV/bin/python3" -m pip install --disable-pip-version-check 'Pillow==12.3.0'
+
+echo "[setup ${SECONDS}s] Preparing local Wrangler (no authentication or deployment)"
+# Local installation makes the existing `npx wrangler` commands work offline.
+npm install --no-save --package-lock=false --no-audit --no-fund wrangler@4.144.0
+
+# Amp and supervised services start in separate login shells. Activate the venv
+# only in this checkout, without changing other projects' Python environments.
+PROFILE_MARKER="# JustNow orb Python: $REPO_ROOT"
+if ! grep -Fqx "$PROFILE_MARKER" "$HOME/.bash_profile" 2>/dev/null; then
+  cat >> "$HOME/.bash_profile" <<EOF
+
+$PROFILE_MARKER
+case "\$PWD" in
+  "$REPO_ROOT"|"$REPO_ROOT"/*)
+    if [[ "\${VIRTUAL_ENV:-}" != "$VENV" && -f "$VENV/bin/activate" ]]; then
+      source "$VENV/bin/activate"
+    fi
+    ;;
+esac
+EOF
+fi
+
+echo "[setup ${SECONDS}s] Ready for source work and static-site tooling; app builds/tests require macOS/Xcode."

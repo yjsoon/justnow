@@ -49,7 +49,11 @@ dist/
 .wrangler/
 
 # Agent tooling state (local-only)
-.agents/
+.agents/*
+!.agents/setup
+!.agents/resume
+.amp/portals/*
+node_modules/
 .claude/
 skills-lock.json
 

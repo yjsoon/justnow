@@ -2,6 +2,14 @@
 
 Use this reference for build/test work and local app validation. Official distribution and publication are covered in [release and distribution](release-and-distribution.md).
 
+## Amp orbs (Linux)
+
+The executable `.agents/setup` prepares Pillow 12.3.0 in an isolated Python environment and installs Wrangler 4.144.0 locally for the existing `npx wrangler` commands. It uses Python 3.10+ and Node 22+ from Amp's base image; no app compiler version is pinned for Linux. Amp snapshots these dependencies for reuse by fresh orbs. Repeated setup checks the installed dependencies, while `.agents/resume` only checks their presence without installing or authenticating anything.
+
+New non-interactive login shells in this checkout automatically activate `.agents/venv`, so the documented `python3 Scripts/...` commands also have Pillow available. Setup does not generate site content, start servers, access signing credentials, or deploy. For static-site generation and supervised preview, follow [site and updates](site-and-updates.md#local-generation-and-preview).
+
+The app uses macOS-only frameworks and app-hosted Xcode tests. Linux Swift cannot replace that toolchain: use a Mac with Xcode or the macOS CI workflow for app builds/tests, signing, installation, and real capture validation. No Apple or Cloudflare secrets are required for orb source work or site preview; publication remains separately authorized.
+
 ## Build and test without replacing the app
 
 Run from the repository root on a Mac with Xcode. The deployment target is macOS 15; `JustNow.xcodeproj/project.pbxproj` currently uses Swift 5 language mode. Do not confuse that with the compiler version. Check `xcodebuild -version` and `xcrun swift --version` on the build machine; the active test workflow uses a `macos-26` runner, not a pinned compiler version.

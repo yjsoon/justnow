@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# No backing services or user authentication are required. Do not reinstall on wake.
+"$REPO_ROOT/.agents/venv/bin/python3" -c 'from PIL import Image'
+test -x "$REPO_ROOT/node_modules/.bin/wrangler"
+echo "JustNow orb tools ready. App builds/tests require macOS/Xcode."
