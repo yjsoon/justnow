@@ -33,23 +33,23 @@ final class TextCacheTests: XCTestCase {
         XCTAssertEqual(count, 1)
     }
 
-    func testSearchMatchesTokenPrefixes() async {
+    func testSearchMatchesTokenPrefixes() async throws {
         let cache = TextCache(directory: directory)
         let frameID = UUID()
         await cache.setText("Kubernetes deployment failed", for: frameID)
 
-        let hits = await cache.searchFrameIDs(matching: "kuber", limit: 10)
+        let hits = try await cache.searchFrameIDs(matching: "kuber", limit: 10)
 
         XCTAssertEqual(hits, [frameID])
     }
 
-    func testSearchRequiresAllQueryTokens() async {
+    func testSearchRequiresAllQueryTokens() async throws {
         let cache = TextCache(directory: directory)
         let frameID = UUID()
         await cache.setText("alpha bravo", for: frameID)
 
-        let allTokensHit = await cache.searchFrameIDs(matching: "alpha bravo", limit: 10)
-        let missingTokenMiss = await cache.searchFrameIDs(matching: "alpha zulu", limit: 10)
+        let allTokensHit = try await cache.searchFrameIDs(matching: "alpha bravo", limit: 10)
+        let missingTokenMiss = try await cache.searchFrameIDs(matching: "alpha zulu", limit: 10)
 
         XCTAssertEqual(allTokensHit, [frameID])
         XCTAssertTrue(missingTokenMiss.isEmpty)
@@ -58,22 +58,22 @@ final class TextCacheTests: XCTestCase {
     /// Overwriting a frame's text must replace its FTS entry, not stack a
     /// stale one alongside it — otherwise search keeps matching text the
     /// frame no longer shows.
-    func testOverwritingTextReplacesSearchIndexEntry() async {
+    func testOverwritingTextReplacesSearchIndexEntry() async throws {
         let cache = TextCache(directory: directory)
         let frameID = UUID()
 
         await cache.setText("original secret", for: frameID)
         await cache.setText("replacement contents", for: frameID)
 
-        let staleHits = await cache.searchFrameIDs(matching: "original", limit: 10)
-        let freshHits = await cache.searchFrameIDs(matching: "replacement", limit: 10)
+        let staleHits = try await cache.searchFrameIDs(matching: "original", limit: 10)
+        let freshHits = try await cache.searchFrameIDs(matching: "replacement", limit: 10)
         XCTAssertTrue(staleHits.isEmpty)
         XCTAssertEqual(freshHits, [frameID])
         let count = await cache.count
         XCTAssertEqual(count, 1)
     }
 
-    func testSearchOrdersByRecencyAndHonoursLimit() async {
+    func testSearchOrdersByRecencyAndHonoursLimit() async throws {
         let cache = TextCache(directory: directory)
         let oldest = UUID()
         let middle = UUID()
@@ -82,19 +82,19 @@ final class TextCacheTests: XCTestCase {
         await cache.setText("meeting notes", for: middle, timestamp: Date(timeIntervalSince1970: 200))
         await cache.setText("meeting notes", for: newest, timestamp: Date(timeIntervalSince1970: 300))
 
-        let hits = await cache.searchFrameIDs(matching: "meeting", limit: 2)
+        let hits = try await cache.searchFrameIDs(matching: "meeting", limit: 2)
 
         XCTAssertEqual(hits, [newest, middle])
     }
 
-    func testSearchSinceFilterExcludesOlderFrames() async {
+    func testSearchSinceFilterExcludesOlderFrames() async throws {
         let cache = TextCache(directory: directory)
         let old = UUID()
         let recent = UUID()
         await cache.setText("status report", for: old, timestamp: Date(timeIntervalSince1970: 100))
         await cache.setText("status report", for: recent, timestamp: Date(timeIntervalSince1970: 500))
 
-        let hits = await cache.searchFrameIDs(
+        let hits = try await cache.searchFrameIDs(
             matching: "status",
             limit: 10,
             since: Date(timeIntervalSince1970: 200)
@@ -120,7 +120,7 @@ final class TextCacheTests: XCTestCase {
         await cache.setText("late OCR", for: frameID, timestamp: lateOCRTimestamp)
         await cache.setSearchLayout(layout, for: frameID, timestamp: lateOCRTimestamp)
 
-        let recentHits = await cache.searchFrameIDs(
+        let recentHits = try await cache.searchFrameIDs(
             matching: "late OCR",
             limit: 10,
             since: Date(timeIntervalSince1970: 400)
@@ -131,12 +131,12 @@ final class TextCacheTests: XCTestCase {
         XCTAssertEqual(timestamps.layout, extensionTimestamp.timeIntervalSince1970, accuracy: 0.000_001)
     }
 
-    func testSearchWithNonPositiveLimitReturnsNothing() async {
+    func testSearchWithNonPositiveLimitReturnsNothing() async throws {
         let cache = TextCache(directory: directory)
         await cache.setText("anything", for: UUID())
 
-        let zeroLimit = await cache.searchFrameIDs(matching: "anything", limit: 0)
-        let negativeLimit = await cache.searchFrameIDs(matching: "anything", limit: -3)
+        let zeroLimit = try await cache.searchFrameIDs(matching: "anything", limit: 0)
+        let negativeLimit = try await cache.searchFrameIDs(matching: "anything", limit: -3)
 
         XCTAssertTrue(zeroLimit.isEmpty)
         XCTAssertTrue(negativeLimit.isEmpty)
@@ -145,53 +145,53 @@ final class TextCacheTests: XCTestCase {
     /// Queries are user-controlled input that reaches SQL; quoting and
     /// injection-shaped strings must neither throw, corrupt the store, nor
     /// match unrelated frames.
-    func testHostileQueriesAreHarmless() async {
+    func testHostileQueriesAreHarmless() async throws {
         let cache = TextCache(directory: directory)
         let frameID = UUID()
         await cache.setText("ordinary contents", for: frameID)
 
-        let injection = await cache.searchFrameIDs(
+        let injection = try await cache.searchFrameIDs(
             matching: "'; DROP TABLE frame_text;--",
             limit: 10
         )
-        let quotes = await cache.searchFrameIDs(matching: "\"quoted\" phrase\"", limit: 10)
+        let quotes = try await cache.searchFrameIDs(matching: "\"quoted\" phrase\"", limit: 10)
         XCTAssertTrue(injection.isEmpty)
         XCTAssertTrue(quotes.isEmpty)
 
         // The table must still exist and be writable/searchable afterwards.
         await cache.setText("still alive", for: UUID())
-        let hits = await cache.searchFrameIDs(matching: "ordinary", limit: 10)
+        let hits = try await cache.searchFrameIDs(matching: "ordinary", limit: 10)
         XCTAssertEqual(hits, [frameID])
         let count = await cache.count
         XCTAssertEqual(count, 2)
     }
 
-    func testPunctuationOnlyQueryFallsBackToSubstringMatch() async {
+    func testPunctuationOnlyQueryFallsBackToSubstringMatch() async throws {
         let cache = TextCache(directory: directory)
         let frameID = UUID()
         await cache.setText("Loading...", for: frameID)
 
-        let hits = await cache.searchFrameIDs(matching: "...", limit: 10)
+        let hits = try await cache.searchFrameIDs(matching: "...", limit: 10)
 
         XCTAssertEqual(hits, [frameID])
     }
 
-    func testTokenQueryDoesNotFallBackToMidTokenSubstring() async {
+    func testTokenQueryDoesNotFallBackToMidTokenSubstring() async throws {
         let cache = TextCache(directory: directory)
         let frameID = UUID()
         await cache.setText("Kubernetes deployment failed", for: frameID)
 
-        let midTokenHits = await cache.searchFrameIDs(matching: "ploy", limit: 10)
+        let midTokenHits = try await cache.searchFrameIDs(matching: "ploy", limit: 10)
 
         XCTAssertTrue(midTokenHits.isEmpty)
     }
 
-    func testUnsegmentedScriptQueryFallsBackToSubstring() async {
+    func testUnsegmentedScriptQueryFallsBackToSubstring() async throws {
         let cache = TextCache(directory: directory)
         let frameID = UUID()
         await cache.setText("東京都庁", for: frameID)
 
-        let hits = await cache.searchFrameIDs(matching: "京都", limit: 10)
+        let hits = try await cache.searchFrameIDs(matching: "京都", limit: 10)
 
         XCTAssertEqual(hits, [frameID])
     }
@@ -217,17 +217,17 @@ final class TextCacheTests: XCTestCase {
         XCTAssertEqual(count, 0)
     }
 
-    func testDiacriticInsensitiveSearch() async {
+    func testDiacriticInsensitiveSearch() async throws {
         let cache = TextCache(directory: directory)
         let frameID = UUID()
         await cache.setText("café menu", for: frameID)
 
-        let hits = await cache.searchFrameIDs(matching: "cafe", limit: 10)
+        let hits = try await cache.searchFrameIDs(matching: "cafe", limit: 10)
 
         XCTAssertEqual(hits, [frameID])
     }
 
-    func testPruneKeepsOnlyValidFrameIDs() async {
+    func testPruneKeepsOnlyValidFrameIDs() async throws {
         let cache = TextCache(directory: directory)
         let keep = UUID()
         let drop = UUID()
@@ -240,7 +240,7 @@ final class TextCacheTests: XCTestCase {
         let droppedHasText = await cache.hasCachedText(for: drop)
         XCTAssertTrue(keptHasText)
         XCTAssertFalse(droppedHasText)
-        let staleHits = await cache.searchFrameIDs(matching: "drop", limit: 10)
+        let staleHits = try await cache.searchFrameIDs(matching: "drop", limit: 10)
         XCTAssertTrue(staleHits.isEmpty)
     }
 
@@ -254,7 +254,7 @@ final class TextCacheTests: XCTestCase {
 
         let count = await cache.count
         XCTAssertEqual(count, 0)
-        let hits = await cache.searchFrameIDs(matching: "something", limit: 10)
+        let hits = try await cache.searchFrameIDs(matching: "something", limit: 10)
         XCTAssertTrue(hits.isEmpty)
         let layout = await cache.getSearchLayout(for: frameID)
         XCTAssertNil(layout)
@@ -293,7 +293,7 @@ final class TextCacheTests: XCTestCase {
         try await cache.clear()
 
         let countAfterRetry = await cache.count
-        let hitsAfterRetry = await cache.searchFrameIDs(matching: "eventually", limit: 10)
+        let hitsAfterRetry = try await cache.searchFrameIDs(matching: "eventually", limit: 10)
         let layoutAfterRetry = await cache.getSearchLayout(for: frameID)
         XCTAssertEqual(countAfterRetry, 0)
         XCTAssertTrue(hitsAfterRetry.isEmpty)
@@ -317,7 +317,7 @@ final class TextCacheTests: XCTestCase {
         )
     }
 
-    func testTextPersistsAcrossReopen() async {
+    func testTextPersistsAcrossReopen() async throws {
         let frameID = UUID()
         do {
             let cache = TextCache(directory: directory)
@@ -325,9 +325,236 @@ final class TextCacheTests: XCTestCase {
         }
 
         let reopened = TextCache(directory: directory)
-        let hits = await reopened.searchFrameIDs(matching: "persisted", limit: 10)
+        let hits = try await reopened.searchFrameIDs(matching: "persisted", limit: 10)
 
         XCTAssertEqual(hits, [frameID])
+    }
+
+    // MARK: - Unavailable store and recovery
+
+    /// A store that failed to open must not look like a search with zero
+    /// matches: the search reports an error instead of returning [].
+    func testSearchOnUnavailableStoreThrowsInsteadOfReturningEmpty() async throws {
+        let externalURL = try symlinkedTextCacheDatabase(in: directory)
+        defer { try? FileManager.default.removeItem(at: externalURL) }
+        let cache = TextCache(directory: directory)
+
+        do {
+            _ = try await cache.searchFrameIDs(matching: "anything", limit: 10)
+            XCTFail("Search against an unavailable store must throw")
+        } catch {}
+    }
+
+    /// Once the trigger is gone (here a symlinked database swapped back for
+    /// the real file), the SAME actor must reopen the store and keep serving
+    /// the rows that were indexed before the failure.
+    func testSameActorRecoversAfterTriggerRemovedWithRowsIntact() async throws {
+        let frameID = UUID()
+        do {
+            let seed = TextCache(directory: directory)
+            await seed.setText("recoverable needle", for: frameID)
+        }
+
+        let databaseURL = directory.appendingPathComponent("text_cache.sqlite")
+        let quarantine = try quarantineTextCacheStore(in: directory, databaseURL: databaseURL)
+        let externalURL = try symlinkTextCache(at: databaseURL)
+        defer { try? FileManager.default.removeItem(at: externalURL) }
+
+        let cache = TextCache(directory: directory)
+        do {
+            _ = try await cache.searchFrameIDs(matching: "needle", limit: 10)
+            XCTFail("Search must keep failing while the trigger is present")
+        } catch {}
+
+        try FileManager.default.removeItem(at: databaseURL)
+        try restoreTextCacheStore(from: quarantine)
+
+        // Just over the actor-local reconnect interval, then a deliberate
+        // search retries the open/schema/repair sequence on the same actor.
+        try await Task.sleep(for: .milliseconds(1_200))
+        let hits = try await cache.searchFrameIDs(matching: "needle", limit: 10)
+
+        XCTAssertEqual(hits, [frameID])
+        let count = await cache.count
+        XCTAssertEqual(count, 1)
+    }
+
+    /// If the cache directory itself cannot be created (a regular file
+    /// sits at its path), removing the file must let the SAME actor re-run
+    /// the whole directory-create/open/schema/repair sequence and start
+    /// accepting and searching new rows.
+    func testSameActorRecoversAfterBlockedDirectoryRemoved() async throws {
+        let blockedDir = directory.appendingPathComponent("blocked-cache", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("blocker".utf8).write(to: blockedDir)
+
+        let cache = TextCache(directory: blockedDir)
+        do {
+            _ = try await cache.searchFrameIDs(matching: "needle", limit: 10)
+            XCTFail("Search must fail while the directory path is blocked")
+        } catch {}
+
+        try FileManager.default.removeItem(at: blockedDir)
+
+        // Just over the actor-local reconnect interval, then a deliberate
+        // search re-runs the full open sequence on the same actor.
+        try await Task.sleep(for: .milliseconds(1_200))
+        let recovered = try await cache.searchFrameIDs(matching: "needle", limit: 10)
+        XCTAssertEqual(recovered, [])
+
+        let frameID = UUID()
+        await cache.setText("post-recovery needle", for: frameID)
+        let hits = try await cache.searchFrameIDs(matching: "needle", limit: 10)
+        XCTAssertEqual(hits, [frameID])
+    }
+
+    /// A persistently broken store gets a bounded number of reconnect
+    /// attempts, not one schema/open sequence per search call.
+    func testPersistentFailureBoundsReconnectAttempts() async throws {
+        let externalURL = try symlinkedTextCacheDatabase(in: directory)
+        defer { try? FileManager.default.removeItem(at: externalURL) }
+        let cache = TextCache(directory: directory)
+
+        for _ in 0..<5 {
+            do {
+                _ = try await cache.searchFrameIDs(matching: "x", limit: 10)
+                XCTFail("Unavailable store must keep throwing")
+            } catch {}
+        }
+
+        let attempts = await cache.reconnectAttemptCountForTesting()
+        XCTAssertEqual(attempts, 1)
+    }
+
+    /// Non-search calls must stay quiet while the store is down; they are
+    /// polled per frame and per status refresh and must not each pay for a
+    /// reconnect attempt.
+    func testNonSearchCallsDoNotTriggerReconnect() async throws {
+        let externalURL = try symlinkedTextCacheDatabase(in: directory)
+        defer { try? FileManager.default.removeItem(at: externalURL) }
+        let cache = TextCache(directory: directory)
+
+        await cache.setText("dropped", for: UUID())
+        _ = await cache.hasCachedText(for: UUID())
+        _ = await cache.hasCachedRecord(for: UUID())
+        _ = await cache.count
+
+        let attempts = await cache.reconnectAttemptCountForTesting()
+        XCTAssertEqual(attempts, 0)
+    }
+
+    /// A real query that simply matches nothing is a successful empty
+    /// result, not an error.
+    func testHealthySearchWithNoMatchReturnsEmptySuccess() async throws {
+        let cache = TextCache(directory: directory)
+        await cache.setText("real content", for: UUID())
+
+        let hits = try await cache.searchFrameIDs(matching: "absent term", limit: 10)
+
+        XCTAssertEqual(hits, [])
+    }
+
+    /// Dropping the primary frame_text table makes the JOIN-based FTS
+    /// MATCH query fail at prepare time (no such table); that error must
+    /// surface instead of being reported as a successful empty (or partial)
+    /// search. A true sqlite3_step failure mid-iteration is not
+    /// deterministically injectable here — that path is code-reviewed only.
+    func testQueryFailureSurfacesAsError() async throws {
+        let cache = TextCache(directory: directory)
+        let frameID = UUID()
+        await cache.setText("hello needle", for: frameID)
+
+        let databaseURL = directory.appendingPathComponent("text_cache.sqlite")
+        var connection: OpaquePointer?
+        guard sqlite3_open_v2(databaseURL.path, &connection, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK,
+              let connection else {
+            XCTFail("Failed to open test cache for corruption")
+            return
+        }
+        XCTAssertEqual(
+            sqlite3_exec(connection, "DROP TABLE frame_text;", nil, nil, nil),
+            SQLITE_OK
+        )
+        sqlite3_close(connection)
+
+        do {
+            _ = try await cache.searchFrameIDs(matching: "hello", limit: 10)
+            XCTFail("A query failure must surface, not return empty")
+        } catch {}
+    }
+
+    /// For unsegmented scripts the substring fallback is still allowed to
+    /// answer when the FTS index is missing entries (the source rows
+    /// remain, so LIKE matching still finds them).
+    func testUnsegmentedFallbackStillAnswersWithMissingFTSIndexEntries() async throws {
+        let cache = TextCache(directory: directory)
+        let frameID = UUID()
+        await cache.setText("東京都庁", for: frameID)
+
+        let databaseURL = directory.appendingPathComponent("text_cache.sqlite")
+        var connection: OpaquePointer?
+        guard sqlite3_open_v2(databaseURL.path, &connection, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK,
+              let connection else {
+            XCTFail("Failed to open test cache for corruption")
+            return
+        }
+        XCTAssertEqual(
+            sqlite3_exec(connection, "DELETE FROM frame_text_fts;", nil, nil, nil),
+            SQLITE_OK
+        )
+        sqlite3_close(connection)
+
+        let hits = try await cache.searchFrameIDs(matching: "京都", limit: 10)
+
+        XCTAssertEqual(hits, [frameID])
+    }
+
+    private func symlinkedTextCacheDatabase(in directory: URL) throws -> URL {
+        let databaseURL = directory.appendingPathComponent("text_cache.sqlite")
+        return try symlinkTextCache(at: databaseURL)
+    }
+
+    private func symlinkTextCache(at databaseURL: URL) throws -> URL {
+        try FileManager.default.createDirectory(
+            at: databaseURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let externalURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TextCacheExternal-\(UUID().uuidString).sqlite")
+        try Data("external text cache sentinel".utf8).write(to: externalURL)
+        try FileManager.default.createSymbolicLink(at: databaseURL, withDestinationURL: externalURL)
+        return externalURL
+    }
+
+    /// Moves the real database plus any WAL/SHM sidecars aside so a symlink
+    /// can sit at the expected path; `restoreTextCacheStore` puts them back.
+    @discardableResult
+    private func quarantineTextCacheStore(in directory: URL, databaseURL: URL) throws -> URL {
+        let quarantine = directory
+            .appendingPathComponent("quarantine-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
+        for url in [
+            databaseURL,
+            URL(fileURLWithPath: databaseURL.path + "-wal"),
+            URL(fileURLWithPath: databaseURL.path + "-shm")
+        ] {
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            try FileManager.default.moveItem(at: url, to: quarantine.appendingPathComponent(url.lastPathComponent))
+        }
+        return quarantine
+    }
+
+    private func restoreTextCacheStore(from quarantine: URL) throws {
+        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: quarantine.path) else {
+            return
+        }
+        for name in contents {
+            try FileManager.default.moveItem(
+                at: quarantine.appendingPathComponent(name),
+                to: quarantine.deletingLastPathComponent().appendingPathComponent(name)
+            )
+        }
+        try FileManager.default.removeItem(at: quarantine)
     }
 
     private func makeLayout() -> SearchTextLayout {

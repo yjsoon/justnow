@@ -1440,6 +1440,12 @@ class FrameBuffer {
         work.syncContinuation?.resume(returning: result)
     }
 
+    /// Persistent, content-free search outcome reporting: a diagnostic export
+    /// must be able to distinguish a failed search from a true no-match.
+    func logSearchDiagnostics(_ message: String) {
+        diagnosticsLog?.log("Search", message)
+    }
+
     private func maybeLogCaptureInstrumentation(force: Bool = false) {
         guard let diagnosticsLog else { return }
 

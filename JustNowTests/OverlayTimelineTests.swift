@@ -1044,6 +1044,254 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertEqual(formatRelativeTime(now.addingTimeInterval(-3_600), now: now), "1h 0m 0s ago")
     }
 
+    // MARK: - Search failure state
+
+    /// A cache-level search failure must not read as "no matches": the error
+    /// state shows, no-results stays hidden, and the diagnostics sink gets a
+    /// content-free failure line so reports can tell failure from a true
+    /// empty match.
+    func testSearchStoreFailureShowsErrorInsteadOfNoResults() async throws {
+        let base = Date(timeIntervalSinceReferenceDate: 10_000)
+        let entry = makeEntry(start: base, end: base.addingTimeInterval(30))
+        let diagnostics = InMemoryDiagnosticsLog()
+        let buffer = try await makeBufferWithSymlinkedTextCache(
+            repository: OverlayTimelineRepositoryProbe(
+                entries: [entry],
+                image: try XCTUnwrap(TestImageFactory.makeSolidImage(width: 8, height: 8, level: 93))
+            ),
+            diagnosticsLog: diagnostics
+        )
+        let viewModel = makeViewModel(
+            entries: [entry],
+            buffer: buffer,
+            referenceDate: base.addingTimeInterval(40)
+        )
+
+        viewModel.isSearching = true
+        viewModel.searchQuery = "needle"
+        viewModel.performSearch(immediately: true)
+        try await waitUntil { !viewModel.isSearchLoading }
+
+        XCTAssertTrue(viewModel.shouldShowSearchFailure)
+        XCTAssertFalse(viewModel.shouldShowNoSearchResults)
+        XCTAssertTrue(viewModel.searchResults.isEmpty)
+
+        let failureLines = diagnostics.entries.filter {
+            $0.category == "Search" && $0.message.contains("outcome=failed")
+        }
+        XCTAssertEqual(failureLines.count, 1)
+        XCTAssertFalse(failureLines[0].message.contains("needle"))
+    }
+
+    /// After the trigger is removed, a deliberate retry on the same view
+    /// model clears the error and returns the previously indexed rows.
+    func testSearchRetryAfterTriggerRemovedShowsResults() async throws {
+        let base = Date(timeIntervalSinceReferenceDate: 10_000)
+        let frameID = UUID()
+        let entry = makeEntry(frameID: frameID, start: base, end: base.addingTimeInterval(30))
+        let repository = OverlayTimelineRepositoryProbe(
+            entries: [entry],
+            image: try XCTUnwrap(TestImageFactory.makeSolidImage(width: 8, height: 8, level: 94))
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OverlayTimelineTests-\(UUID().uuidString)", isDirectory: true)
+        temporaryDirectories.append(directory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        do {
+            let seed = TextCache(directory: directory)
+            await seed.setText("recovery needle", for: frameID, timestamp: base)
+        }
+
+        let databaseURL = directory.appendingPathComponent("text_cache.sqlite")
+        let quarantine = directory.appendingPathComponent("quarantine", isDirectory: true)
+        try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
+        for url in [
+            databaseURL,
+            URL(fileURLWithPath: databaseURL.path + "-wal"),
+            URL(fileURLWithPath: databaseURL.path + "-shm")
+        ] {
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            try FileManager.default.moveItem(at: url, to: quarantine.appendingPathComponent(url.lastPathComponent))
+        }
+        let externalURL = directory.appendingPathComponent("external.sqlite")
+        try Data("sentinel".utf8).write(to: externalURL)
+        try FileManager.default.createSymbolicLink(at: databaseURL, withDestinationURL: externalURL)
+
+        let buffer = try await FrameBuffer(
+            retentionPolicy: .default24Hours,
+            storageDirectory: directory,
+            diagnosticsLog: nil,
+            frameRepository: repository
+        )
+        let viewModel = makeViewModel(
+            entries: [entry],
+            buffer: buffer,
+            referenceDate: base.addingTimeInterval(40)
+        )
+
+        viewModel.isSearching = true
+        viewModel.searchQuery = "recovery"
+        viewModel.performSearch(immediately: true)
+        try await waitUntil { !viewModel.isSearchLoading }
+        XCTAssertTrue(viewModel.shouldShowSearchFailure)
+
+        try FileManager.default.removeItem(at: databaseURL)
+        for name in try FileManager.default.contentsOfDirectory(atPath: quarantine.path) {
+            try FileManager.default.moveItem(
+                at: quarantine.appendingPathComponent(name),
+                to: directory.appendingPathComponent(name)
+            )
+        }
+
+        // Just over the cache's actor-local reconnect interval.
+        try await Task.sleep(for: .milliseconds(1_200))
+        viewModel.retrySearch()
+        try await waitUntil { !viewModel.isSearchLoading }
+
+        XCTAssertFalse(viewModel.shouldShowSearchFailure)
+        XCTAssertEqual(viewModel.searchResults.map(\.span.id), [entry.span.id])
+    }
+
+    /// The failure marker belongs to the request that produced it: changing
+    /// the query or clearing search must never show a stale error.
+    func testSearchErrorDoesNotLeakAcrossRequestChanges() async throws {
+        let base = Date(timeIntervalSinceReferenceDate: 10_000)
+        let entry = makeEntry(start: base, end: base.addingTimeInterval(30))
+        let buffer = try await makeBufferWithSymlinkedTextCache(
+            repository: OverlayTimelineRepositoryProbe(
+                entries: [entry],
+                image: try XCTUnwrap(TestImageFactory.makeSolidImage(width: 8, height: 8, level: 95))
+            )
+        )
+        let viewModel = makeViewModel(
+            entries: [entry],
+            buffer: buffer,
+            referenceDate: base.addingTimeInterval(40)
+        )
+
+        viewModel.isSearching = true
+        viewModel.searchQuery = "first"
+        viewModel.performSearch(immediately: true)
+        try await waitUntil { !viewModel.isSearchLoading }
+        XCTAssertTrue(viewModel.shouldShowSearchFailure)
+
+        viewModel.searchQuery = "second"
+        XCTAssertFalse(viewModel.shouldShowSearchFailure)
+
+        viewModel.searchTimeScope = .fiveMinutes
+        viewModel.performSearch(immediately: true)
+        try await waitUntil { !viewModel.isSearchLoading }
+        XCTAssertTrue(viewModel.shouldShowSearchFailure)
+
+        viewModel.clearSearch()
+        XCTAssertFalse(viewModel.shouldShowSearchFailure)
+    }
+
+    /// A healthy store with a genuine empty match still shows "no matches"
+    /// and must not be reported as a failure.
+    func testHealthyNoMatchShowsNoResultsNotError() async throws {
+        let base = Date(timeIntervalSinceReferenceDate: 10_000)
+        let entry = makeEntry(start: base, end: base.addingTimeInterval(30))
+        let repository = OverlayTimelineRepositoryProbe(
+            entries: [entry],
+            image: try XCTUnwrap(TestImageFactory.makeSolidImage(width: 8, height: 8, level: 96))
+        )
+        let buffer = try await makeBuffer(repository: repository)
+        let viewModel = makeViewModel(
+            entries: [entry],
+            buffer: buffer,
+            referenceDate: base.addingTimeInterval(40)
+        )
+
+        viewModel.isSearching = true
+        viewModel.searchQuery = "absent"
+        viewModel.performSearch(immediately: true)
+        try await waitUntil { !viewModel.isSearchLoading }
+
+        XCTAssertTrue(viewModel.shouldShowNoSearchResults)
+        XCTAssertFalse(viewModel.shouldShowSearchFailure)
+    }
+
+    /// Each completed search writes one no-content diagnostics line with the
+    /// boundary counts a report needs: index hits, matches inside the leased
+    /// timeline, and matches after the scope/display filters.
+    func testCompletedSearchLogsBoundaryCounts() async throws {
+        let base = Date(timeIntervalSinceReferenceDate: 10_000)
+        let matching = makeEntry(start: base, end: base.addingTimeInterval(30))
+        // Recent OCR text on a span that ends before the search cutoff:
+        // hits the index and the leased set but is dropped by the scope filter.
+        let stale = makeEntry(
+            start: base.addingTimeInterval(-500),
+            end: base.addingTimeInterval(-400)
+        )
+        let ghostFrameID = UUID()
+        let diagnostics = InMemoryDiagnosticsLog()
+        let repository = OverlayTimelineRepositoryProbe(
+            entries: [stale, matching],
+            image: try XCTUnwrap(TestImageFactory.makeSolidImage(width: 8, height: 8, level: 97))
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OverlayTimelineTests-\(UUID().uuidString)", isDirectory: true)
+        temporaryDirectories.append(directory)
+        let buffer = try await FrameBuffer(
+            retentionPolicy: .default24Hours,
+            storageDirectory: directory,
+            diagnosticsLog: diagnostics,
+            frameRepository: repository
+        )
+        await buffer.textCache.setText("alpha needle", for: matching.frame.id, timestamp: base)
+        await buffer.textCache.setText("stale needle", for: stale.frame.id, timestamp: base)
+        await buffer.textCache.setText("ghost needle", for: ghostFrameID, timestamp: base)
+        let viewModel = makeViewModel(
+            entries: [stale, matching],
+            buffer: buffer,
+            referenceDate: base.addingTimeInterval(80)
+        )
+
+        viewModel.isSearching = true
+        viewModel.searchTimeScope = .fiveMinutes
+        viewModel.searchQuery = "needle"
+        viewModel.performSearch(immediately: true)
+        try await waitUntil { !viewModel.isSearchLoading }
+
+        XCTAssertFalse(viewModel.shouldShowSearchFailure)
+        XCTAssertEqual(viewModel.searchResults.map(\.span.id), [matching.span.id])
+
+        let searchLines = diagnostics.entries.filter { $0.category == "Search" }
+        XCTAssertEqual(searchLines.count, 1)
+        let message = searchLines[0].message
+        XCTAssertTrue(message.contains("outcome=ok"))
+        XCTAssertTrue(message.contains("scope=fiveMinutes"))
+        XCTAssertTrue(message.contains("activeDisplay=false"))
+        XCTAssertTrue(message.contains("indexHits=3"))
+        XCTAssertTrue(message.contains("leasedMatches=2"))
+        XCTAssertTrue(message.contains("filteredMatches=1"))
+        XCTAssertFalse(message.contains("needle"))
+    }
+
+    private func makeBufferWithSymlinkedTextCache(
+        repository: any FrameRepository,
+        diagnosticsLog: CaptureInstrumentationLogSink? = nil
+    ) async throws -> FrameBuffer {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OverlayTimelineTests-\(UUID().uuidString)", isDirectory: true)
+        temporaryDirectories.append(directory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let externalURL = directory.appendingPathComponent("external.sqlite")
+        try Data("sentinel".utf8).write(to: externalURL)
+        try FileManager.default.createSymbolicLink(
+            at: directory.appendingPathComponent("text_cache.sqlite"),
+            withDestinationURL: externalURL
+        )
+        return try await FrameBuffer(
+            retentionPolicy: .default24Hours,
+            storageDirectory: directory,
+            diagnosticsLog: diagnosticsLog,
+            frameRepository: repository
+        )
+    }
+
     private func makeViewModel(
         entries: [TimelineEntry],
         referenceDate: Date
@@ -1126,6 +1374,16 @@ final class OverlayTimelineTests: XCTestCase {
             ),
             frame: frame
         )
+    }
+}
+
+/// No-content diagnostics sink for asserting the Search category lines the
+/// overlay emits per completed search.
+private final class InMemoryDiagnosticsLog: CaptureInstrumentationLogSink {
+    private(set) var entries: [(category: String, message: String)] = []
+
+    func log(_ category: String, _ message: String) {
+        entries.append((category, message))
     }
 }
 

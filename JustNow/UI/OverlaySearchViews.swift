@@ -30,6 +30,12 @@ struct SearchBarView: View {
 
             if viewModel.isSearchLoading {
                 SearchingStatusBadge()
+            } else if viewModel.shouldShowSearchFailure {
+                // A failed search must not masquerade as a successful
+                // count or an "indexed" status.
+                Text("Search unavailable")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.6))
             } else if !viewModel.searchResults.isEmpty {
                 if indexPercent < 100 {
                     Text("\(viewModel.searchResults.count) found · \(indexPercent)% indexed")
@@ -96,6 +102,39 @@ struct SearchBarView: View {
                 await viewModel.refreshIndexStatus()
                 try? await Task.sleep(for: .seconds(2))
             }
+        }
+    }
+}
+
+/// Shown when the search store could not answer the current request, as
+/// distinct from a successful empty result. Copy stays content-free: no
+/// query text, no paths, no SQLite detail.
+struct SearchUnavailableStateView: View {
+    var onRetry: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.circle")
+                .font(.system(size: 40))
+                .foregroundStyle(.white.opacity(0.4))
+            Text("Search unavailable")
+                .font(.headline)
+                .foregroundStyle(.white.opacity(0.6))
+            Text("The search index could not answer this request.")
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.45))
+            Button(action: onRetry) {
+                Text("Retry")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.white.opacity(0.85))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .background(.white.opacity(0.15), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Retry search")
+            .accessibilityHint("Runs the same search again.")
         }
     }
 }

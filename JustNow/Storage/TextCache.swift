@@ -29,8 +29,17 @@ actor TextCache {
     /// Diagnostic seam counting attempted SQLite write transactions. Reads do
     /// not affect it, so tests can prove capture stayed off the OCR database.
     private var mutationTransactionCount = 0
+    /// Diagnostic seam counting lazy reconnect attempts after a failed open.
+    private var reconnectAttemptCount = 0
+    /// Monotonic uptime of the last reconnect attempt (wall-clock Date could
+    /// roll back and suppress retries for hours).
+    private var lastReconnectAttempt: TimeInterval?
 
     private static let inClauseChunkSize = 400
+    /// Minimum spacing between lazy reconnect attempts so a persistently
+    /// broken store does not retry on every search (including searches
+    /// re-triggered by index-status polling).
+    private static let reconnectMinimumInterval: TimeInterval = 1
     private static let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
     /// `directory` is injectable so tests can run against a temporary
@@ -44,27 +53,18 @@ actor TextCache {
         self.clearHook = clearHook
 
         do {
-            try FileManager.default.createDirectory(
-                at: appDir,
-                withIntermediateDirectories: true,
-                attributes: PrivateStorageProtection.ownerOnlyDirectoryAttributes
-            )
-            PrivateStorageProtection.apply(to: appDir)
-            let connection = try Self.openDatabase(at: databaseURL)
+            let connection = try Self.openStore(at: databaseURL)
             db = connection
-            try Self.createSchema(on: connection)
-            try Self.repairIndexIfNeeded(on: connection)
             Self.logger.info("Text cache ready with \(Self.countRows(in: connection)) entries")
 
             Task { [weak self] in
                 await self?.migrateLegacyCacheIfNeeded()
             }
         } catch {
+            // Init failure must not crash or block capture startup: the actor
+            // still constructs with db == nil and search is simply unavailable
+            // until a deliberate search retries the open lazily.
             Self.logger.error("Failed to initialise text cache: \(String(describing: error))")
-            if let db {
-                sqlite3_close(db)
-                self.db = nil
-            }
         }
     }
 
@@ -239,7 +239,9 @@ actor TextCache {
     }
 
     /// Search indexed OCR text and return matching frame IDs ordered by recency.
-    func searchFrameIDs(matching query: String, limit: Int, since: Date? = nil) -> [UUID] {
+    /// Throws when the store is unavailable or a query fails; a genuine empty
+    /// match is a successful empty result, never an error.
+    func searchFrameIDs(matching query: String, limit: Int, since: Date? = nil) throws -> [UUID] {
         guard limit > 0 else {
             return []
         }
@@ -249,23 +251,19 @@ actor TextCache {
 
         let needsUnsegmentedFallback = query.contains { !$0.isASCII }
 
+        try reconnectIfNeeded()
+        guard db != nil else {
+            throw sqliteError(message: "Text cache database is unavailable")
+        }
+
         if let matchQuery = ftsQuery(from: query) {
-            do {
-                let ids = try searchFrameIDsUsingFTS(
-                    matchQuery,
-                    limit: safeLimit,
-                    sinceEpoch: sinceEpoch
-                )
-                if !ids.isEmpty || !needsUnsegmentedFallback {
-                    return ids
-                }
-            } catch {
-                Self.logger.error(
-                    "FTS search failed: \(error.localizedDescription, privacy: .public)"
-                )
-                if !needsUnsegmentedFallback {
-                    return []
-                }
+            let ids = try searchFrameIDsUsingFTS(
+                matchQuery,
+                limit: safeLimit,
+                sinceEpoch: sinceEpoch
+            )
+            if !ids.isEmpty || !needsUnsegmentedFallback {
+                return ids
             }
         }
 
@@ -289,39 +287,43 @@ actor TextCache {
             LIMIT ?;
             """
 
-        guard let fallbackIDs = try? withPreparedStatement(fallbackSQL, { fallback in
+        return try withPreparedStatement(fallbackSQL) { fallback in
             var fallbackIDs: [UUID] = []
             var bindIndex: Int32 = 1
             guard bindText(query, to: fallback, index: bindIndex) else {
-                return fallbackIDs
+                throw sqliteError(message: "Text search query failed to bind")
             }
             bindIndex += 1
 
             if let sinceEpoch {
                 guard bindDouble(sinceEpoch, to: fallback, index: bindIndex) else {
-                    return fallbackIDs
+                    throw sqliteError(message: "Text search query failed to bind")
                 }
                 bindIndex += 1
             }
 
             guard bindInt32(safeLimit, to: fallback, index: bindIndex) else {
-                return fallbackIDs
+                throw sqliteError(message: "Text search query failed to bind")
             }
 
-            while sqlite3_step(fallback) == SQLITE_ROW {
-                guard let cText = sqlite3_column_text(fallback, 0) else { continue }
-                let raw = String(cString: cText)
-                if let id = UUID(uuidString: raw) {
-                    fallbackIDs.append(id)
+            while true {
+                let stepResult = sqlite3_step(fallback)
+                if stepResult == SQLITE_ROW {
+                    guard let cText = sqlite3_column_text(fallback, 0) else { continue }
+                    let raw = String(cString: cText)
+                    if let id = UUID(uuidString: raw) {
+                        fallbackIDs.append(id)
+                    }
+                    continue
                 }
+                guard stepResult == SQLITE_DONE else {
+                    throw sqliteError(message: "Text search query failed")
+                }
+                break
             }
 
             return fallbackIDs
-        }) else {
-            return []
         }
-
-        return fallbackIDs
     }
 
     /// Remove cached text for frames that no longer exist
@@ -379,7 +381,58 @@ actor TextCache {
         mutationTransactionCount
     }
 
+    func reconnectAttemptCountForTesting() -> Int {
+        reconnectAttemptCount
+    }
+
+    /// A failed init leaves `db` nil; a deliberate search retries the same
+    /// open/schema/repair sequence once per call, throttled by
+    /// `reconnectMinimumInterval` so a persistently broken store does not
+    /// retry unboundedly on every search (including searches re-triggered by
+    /// index-status polling). Non-search calls such as count/hasCachedText/
+    /// setText/hasCachedRecord deliberately do not reconnect: they run on the
+    /// capture path where a reconnect attempt per frame would stall writes.
+    private func reconnectIfNeeded() throws {
+        guard db == nil else { return }
+        if let lastReconnectAttempt,
+           ProcessInfo.processInfo.systemUptime - lastReconnectAttempt < Self.reconnectMinimumInterval {
+            throw sqliteError(message: "Text cache database is unavailable")
+        }
+        reconnectAttemptCount += 1
+        lastReconnectAttempt = ProcessInfo.processInfo.systemUptime
+        let connection = try Self.openStore(at: databaseURL)
+        db = connection
+        Self.logger.info("Text cache reconnected with \(Self.countRows(in: connection)) entries")
+        Task { [weak self] in
+            await self?.migrateLegacyCacheIfNeeded()
+        }
+    }
+
     // MARK: - SQLite Helpers
+
+    /// Runs the shared directory-create/open/schema/repair sequence used
+    /// by init and lazy reconnect so both recover from the same triggers
+    /// (including a file blocking the cache directory). On any failure the
+    /// provisional handle is closed so no connection leaks and the caller
+    /// is left with db == nil.
+    private static func openStore(at databaseURL: URL) throws -> OpaquePointer {
+        let appDir = databaseURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(
+            at: appDir,
+            withIntermediateDirectories: true,
+            attributes: PrivateStorageProtection.ownerOnlyDirectoryAttributes
+        )
+        PrivateStorageProtection.apply(to: appDir)
+        let connection = try openDatabase(at: databaseURL)
+        do {
+            try createSchema(on: connection)
+            try repairIndexIfNeeded(on: connection)
+        } catch {
+            sqlite3_close(connection)
+            throw error
+        }
+        return connection
+    }
 
     private static func openDatabase(at databaseURL: URL) throws -> OpaquePointer {
         try FrameStoreFile.requireNotSymbolicLink(
@@ -390,7 +443,13 @@ actor TextCache {
         let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
         guard sqlite3_open_v2(databaseURL.path, &connection, flags, nil) == SQLITE_OK,
               let connection else {
-            throw sqliteError(message: "Failed to open text cache database", on: connection)
+            // sqlite3_open_v2 may still hand back a handle on failure:
+            // capture the error message before closing so it cannot leak.
+            let error = sqliteError(message: "Failed to open text cache database", on: connection)
+            if let connection {
+                sqlite3_close(connection)
+            }
+            throw error
         }
 
         // A closing connection checkpoints the WAL under an exclusive lock;
@@ -398,9 +457,16 @@ actor TextCache {
         // fails instantly and permanently disables the cache for the session.
         sqlite3_busy_timeout(connection, 2000)
 
-        try execute("PRAGMA journal_mode=WAL;", on: connection)
-        try execute("PRAGMA synchronous=NORMAL;", on: connection)
-        try execute("PRAGMA temp_store=MEMORY;", on: connection)
+        do {
+            try execute("PRAGMA journal_mode=WAL;", on: connection)
+            try execute("PRAGMA synchronous=NORMAL;", on: connection)
+            try execute("PRAGMA temp_store=MEMORY;", on: connection)
+        } catch {
+            // The provisional handle is not visible to callers yet; close it
+            // here so a pragma failure cannot leak the connection.
+            sqlite3_close(connection)
+            throw error
+        }
 
         return connection
     }
@@ -720,24 +786,36 @@ actor TextCache {
         ) { statement in
             var ids: [UUID] = []
             var bindIndex: Int32 = 1
-            var canQuery = bindText(matchQuery, to: statement, index: bindIndex)
+            guard bindText(matchQuery, to: statement, index: bindIndex) else {
+                throw sqliteError(message: "FTS text search query failed to bind")
+            }
             bindIndex += 1
 
-            if canQuery, let sinceEpoch {
-                canQuery = bindDouble(sinceEpoch, to: statement, index: bindIndex)
+            if let sinceEpoch {
+                guard bindDouble(sinceEpoch, to: statement, index: bindIndex) else {
+                    throw sqliteError(message: "FTS text search query failed to bind")
+                }
                 bindIndex += 1
             }
 
-            guard canQuery, bindInt32(limit, to: statement, index: bindIndex) else {
-                return ids
+            guard bindInt32(limit, to: statement, index: bindIndex) else {
+                throw sqliteError(message: "FTS text search query failed to bind")
             }
 
-            while sqlite3_step(statement) == SQLITE_ROW {
-                guard let cText = sqlite3_column_text(statement, 0) else { continue }
-                let raw = String(cString: cText)
-                if let id = UUID(uuidString: raw) {
-                    ids.append(id)
+            while true {
+                let stepResult = sqlite3_step(statement)
+                if stepResult == SQLITE_ROW {
+                    guard let cText = sqlite3_column_text(statement, 0) else { continue }
+                    let raw = String(cString: cText)
+                    if let id = UUID(uuidString: raw) {
+                        ids.append(id)
+                    }
+                    continue
                 }
+                guard stepResult == SQLITE_DONE else {
+                    throw sqliteError(message: "FTS text search query failed")
+                }
+                break
             }
             return ids
         }

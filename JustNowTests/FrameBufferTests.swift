@@ -566,7 +566,7 @@ final class FrameBufferTests: XCTestCase {
 
         let finalWrites = await buffer.textCache.mutationTransactionCountForTesting()
         XCTAssertEqual(finalWrites, baselineWrites + 1)
-        let hits = await buffer.textCache.searchFrameIDs(
+        let hits = try await buffer.textCache.searchFrameIDs(
             matching: "checkpoint",
             limit: 10,
             since: base.addingTimeInterval(34)
@@ -605,7 +605,7 @@ final class FrameBufferTests: XCTestCase {
 
         let finalWrites = await buffer.textCache.mutationTransactionCountForTesting()
         XCTAssertEqual(finalWrites, baselineWrites + 1)
-        let hits = await buffer.textCache.searchFrameIDs(
+        let hits = try await buffer.textCache.searchFrameIDs(
             matching: "promotion",
             limit: 10,
             since: base.addingTimeInterval(4)
@@ -918,7 +918,7 @@ final class FrameBufferTests: XCTestCase {
             "first OCR after extension",
             for: queuedFrame
         )
-        let recentHits = await buffer.textCache.searchFrameIDs(
+        let recentHits = try await buffer.textCache.searchFrameIDs(
             matching: "first OCR",
             limit: 10,
             since: base.addingTimeInterval(4)
@@ -2105,7 +2105,7 @@ final class FrameBufferTests: XCTestCase {
             accuracy: 0.000_001
         )
         XCTAssertEqual(reopened.knownDisplays().map(\.name), ["A", "B"])
-        let matches = await reopened.textCache.searchFrameIDs(
+        let matches = try await reopened.textCache.searchFrameIDs(
             matching: "logical recency",
             limit: 10,
             since: base.addingTimeInterval(1.5)
@@ -2312,7 +2312,7 @@ final class FrameBufferTests: XCTestCase {
 
         XCTAssertEqual(reopened.getFrames().map(\.id), [frame.id])
         let hasCachedText = await reopened.textCache.hasCachedText(for: frame.id)
-        let searchMatches = await reopened.textCache.searchFrameIDs(
+        let searchMatches = try await reopened.textCache.searchFrameIDs(
             matching: "preserved legacy",
             limit: 10
         )

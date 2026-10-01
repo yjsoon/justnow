@@ -296,6 +296,9 @@ class OverlayViewModel {
     private var searchTask: Task<Void, Never>?
     private var imagePrefetchTask: Task<Void, Never>?
     private var resolvedSearchRequest: SearchRequest?
+    /// The request whose cache query failed. Distinct from a resolved empty
+    /// result so the UI can show a retryable error instead of "No matches".
+    private var failedSearchRequest: SearchRequest?
     var isTextGrabActive = false
     private var cancelTextGrabHandler: (() -> Void)?
 
@@ -338,6 +341,20 @@ class OverlayViewModel {
             && !isSearchLoading
             && resolvedSearchRequest == currentSearchRequest
             && searchResults.isEmpty
+    }
+
+    var shouldShowSearchFailure: Bool {
+        isSearchAvailable
+            && isSearching
+            && hasSearchQuery
+            && !isSearchLoading
+            && failedSearchRequest == currentSearchRequest
+    }
+
+    /// Deliberate retry of the currently failed search, bypassing debounce.
+    func retrySearch() {
+        guard failedSearchRequest != nil else { return }
+        performSearch(immediately: true)
     }
 
     var selectedIndex: Int {
@@ -504,6 +521,7 @@ class OverlayViewModel {
         isSearchPending = false
         isSearchInProgress = false
         resolvedSearchRequest = nil
+        failedSearchRequest = nil
         selectLatest(in: timelineEntries)
     }
 
@@ -543,11 +561,13 @@ class OverlayViewModel {
             isSearchPending = false
             isSearchInProgress = false
             resolvedSearchRequest = nil
+            failedSearchRequest = nil
             reconcileSelection(in: displayedEntries, preferLatestWhenMissing: true)
             return
         }
 
         resolvedSearchRequest = nil
+        failedSearchRequest = nil
 
         if immediately {
             beginSearch(for: request)
@@ -974,14 +994,35 @@ class OverlayViewModel {
         let includeLegacy = activeDisplay?.id == primaryDisplayID
         let leasedEntries = leasedTimelineEntries
 
+        // The diagnostic message is content-free: scope enum, whether an
+        // active display filter applied, and counts at each boundary. Query
+        // text, OCR content, and paths are never logged.
+        let searchScopeLabel = request.scope.rawValue
+        let hasActiveDisplay = activeDisplayID != nil
+
         searchTask = Task {
-            let matchedIDs = await cache.searchFrameIDs(matching: request.query, limit: 10_000, since: searchCutoff)
+            let matchedIDs: [UUID]
+            do {
+                matchedIDs = try await cache.searchFrameIDs(matching: request.query, limit: 10_000, since: searchCutoff)
+            } catch {
+                await MainActor.run {
+                    guard !Task.isCancelled else { return }
+                    searchResults = []
+                    isSearchInProgress = false
+                    resolvedSearchRequest = nil
+                    failedSearchRequest = request
+                    frameBuffer.logSearchDiagnostics(
+                        "outcome=failed scope=\(searchScopeLabel) activeDisplay=\(hasActiveDisplay)"
+                    )
+                }
+                return
+            }
 
             guard !Task.isCancelled else { return }
 
             let matchedIDSet = Set(matchedIDs)
-            let results = leasedEntries.filter { entry in
-                guard matchedIDSet.contains(entry.frame.id) else { return false }
+            let leasedMatches = leasedEntries.filter { matchedIDSet.contains($0.frame.id) }
+            let results = leasedMatches.filter { entry in
                 if let searchCutoff, timelineSpanBounds(for: entry).end < searchCutoff {
                     return false
                 }
@@ -997,6 +1038,8 @@ class OverlayViewModel {
             guard !Task.isCancelled else { return }
 
             let finalResults = results
+            let indexHitCount = matchedIDs.count
+            let leasedMatchCount = leasedMatches.count
             await MainActor.run {
                 if !Task.isCancelled {
                     let previousSpanID = selectedSpanID
@@ -1004,6 +1047,9 @@ class OverlayViewModel {
                     searchResults = finalResults
                     isSearchInProgress = false
                     resolvedSearchRequest = request
+                    frameBuffer.logSearchDiagnostics(
+                        "outcome=ok scope=\(searchScopeLabel) activeDisplay=\(hasActiveDisplay) indexHits=\(indexHitCount) leasedMatches=\(leasedMatchCount) filteredMatches=\(finalResults.count)"
+                    )
                     reconcileSelection(
                         in: finalResults,
                         preferredSpanID: previousSpanID,

@@ -320,6 +320,8 @@ struct ContentAreaView: View {
             }
         } else if viewModel.shouldShowSearchingState {
             SearchSearchingStateView()
+        } else if viewModel.shouldShowSearchFailure {
+            SearchUnavailableStateView(onRetry: viewModel.retrySearch)
         } else if viewModel.shouldShowNoSearchResults {
             VStack(spacing: 12) {
                 Image(systemName: "magnifyingglass")
