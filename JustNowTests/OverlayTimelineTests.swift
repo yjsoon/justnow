@@ -1,4 +1,5 @@
 import CoreGraphics
+import Observation
 import XCTest
 @testable import JustNow
 
@@ -517,6 +518,85 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertEqual(marker.targetDate, now.addingTimeInterval(-300))
         XCTAssertEqual(marker.position, 0.5, accuracy: 0.000_1)
         XCTAssertEqual(marker.id, marker.targetDate.timeIntervalSinceReferenceDate)
+    }
+
+    func testTimelineDecorationDoesNotInvalidateWhenScrubbingOrSearching() async throws {
+        let now = Date(timeIntervalSinceReferenceDate: 1_000_000)
+        let entries = [
+            makeEntry(start: now.addingTimeInterval(-1_000), end: now.addingTimeInterval(-990)),
+            makeEntry(start: now.addingTimeInterval(-101), end: now.addingTimeInterval(-100)),
+            makeEntry(start: now.addingTimeInterval(-2), end: now.addingTimeInterval(-1))
+        ]
+        let viewModel = try await makeViewModel(entries: entries, referenceDate: now)
+        let marker = try XCTUnwrap(viewModel.timelineMarkers.first { $0.targetAge == 300 })
+        XCTAssertEqual(marker.position, 0.5, accuracy: 0.000_1)
+        XCTAssertEqual(viewModel.timelineZoneFills.map(\.start), [0, 0.5])
+        XCTAssertEqual(viewModel.timelineZoneFills.map(\.end), [0.5, 1])
+
+        let invalidated = expectation(description: "Static decoration must not observe selection or search")
+        invalidated.isInverted = true
+        withObservationTracking {
+            _ = viewModel.timelineMarkers
+            _ = viewModel.timelineZoneFills
+        } onChange: {
+            invalidated.fulfill()
+        }
+
+        viewModel.selectedIndex = 0
+        viewModel.setSelectedTimestamp(now.addingTimeInterval(-100))
+        viewModel.isSearching = true
+        viewModel.searchQuery = "needle"
+        viewModel.searchResults = [entries[1]]
+        XCTAssertEqual(viewModel.displayedFrameCount, 1)
+        viewModel.clearSearch()
+        XCTAssertEqual(viewModel.displayedFrameCount, 3)
+
+        await fulfillment(of: [invalidated], timeout: 0.05)
+    }
+
+    func testTimelineDecorationRebuildsWhenSwitchingDisplayAndReferenceDate() async throws {
+        let now = Date(timeIntervalSinceReferenceDate: 1_000_000)
+        let displayA = DisplayInfo(id: UUID(), displayID: 1, name: "A")
+        let displayB = DisplayInfo(id: UUID(), displayID: 2, name: "B")
+        let entriesA = [
+            makeEntry(start: now.addingTimeInterval(-1_000), end: now.addingTimeInterval(-990), displayID: displayA.id),
+            makeEntry(start: now.addingTimeInterval(-101), end: now.addingTimeInterval(-100), displayID: displayA.id),
+            makeEntry(start: now.addingTimeInterval(-2), end: now.addingTimeInterval(-1), displayID: displayA.id)
+        ]
+        let futureB = makeEntry(
+            start: now.addingTimeInterval(600),
+            end: now.addingTimeInterval(610),
+            displayID: displayB.id
+        )
+        let buffer = try await makeBuffer(repository: nil)
+        let viewModel = OverlayViewModel(
+            timelineEntries: entriesA,
+            leasedTimelineEntries: entriesA + [futureB],
+            frameBuffer: buffer,
+            recentTimelineWindow: 300,
+            rewindHistoryOption: .twentyFourHours,
+            availableDisplays: [displayA, displayB],
+            activeDisplay: displayA,
+            primaryDisplayID: displayA.id,
+            timelineReferenceDate: now,
+            onDismiss: {},
+            onOpenSettings: {}
+        )
+        XCTAssertEqual(viewModel.timelineMarkers.first { $0.targetAge == 300 }?.position, 0.5)
+
+        viewModel.switchDisplay(to: displayB)
+        XCTAssertEqual(viewModel.timelineReferenceDate, now.addingTimeInterval(610))
+        XCTAssertTrue(viewModel.timelineMarkers.isEmpty)
+        XCTAssertEqual(viewModel.timelineZoneFills.map(\.start), [0])
+        XCTAssertEqual(viewModel.timelineZoneFills.map(\.end), [1])
+
+        viewModel.switchDisplay(to: displayA)
+        XCTAssertEqual(viewModel.timelineReferenceDate, now)
+        let marker = try XCTUnwrap(viewModel.timelineMarkers.first { $0.targetAge == 300 })
+        XCTAssertEqual(marker.targetDate, now.addingTimeInterval(-300))
+        XCTAssertEqual(marker.position, 0.5)
+        XCTAssertEqual(viewModel.timelineZoneFills.map(\.start), [0, 0.5])
+        XCTAssertEqual(viewModel.timelineZoneFills.map(\.end), [0.5, 1])
     }
 
     func testTimelineColourSegmentsSplitAtExactBorder() {

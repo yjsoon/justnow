@@ -265,6 +265,10 @@ class OverlayViewModel {
     private(set) var selectedSpanID: UUID?
     var presentedFrame: StoredFrame?
     private(set) var timelineEntries: [TimelineEntry]
+    /// Static decoration for the active display snapshot. Scrubbing and search
+    /// must not rebuild landmarks by scanning the entire timeline on each redraw.
+    private(set) var timelineMarkers: [TimelineMarker] = []
+    private(set) var timelineZoneFills: [TimelineZoneFill] = []
     /// Full repository snapshot protected by the overlay's payload lease.
     /// Display switching and search are projections of this immutable set.
     private let leasedTimelineEntries: [TimelineEntry]
@@ -375,7 +379,7 @@ class OverlayViewModel {
     }
 
     var displayedFrameCount: Int {
-        displayedFrames.count
+        displayedEntries.count
     }
 
     var canMoveLeft: Bool {
@@ -455,6 +459,25 @@ class OverlayViewModel {
             self.selectedTimestamp = resolvedReferenceDate
             self.selectedSpanID = nil
         }
+        refreshTimelineDecoration()
+    }
+
+    private func refreshTimelineDecoration() {
+        timelineMarkers = timelineLandmarkMarkers(
+            entries: timelineEntries,
+            recentWindow: recentTimelineWindow,
+            now: timelineReferenceDate
+        )
+        let borderPosition = timelineMarkers.first { $0.targetAge == recentTimelineWindow }?.position
+            ?? resolveTimelineMarkerPosition(
+                entries: timelineEntries,
+                targetAge: recentTimelineWindow,
+                now: timelineReferenceDate
+            )
+        timelineZoneFills = timelineColourSegments(
+            entries: timelineEntries,
+            borderPosition: borderPosition
+        )
     }
 
     func toggleSearch() {
@@ -609,6 +632,7 @@ class OverlayViewModel {
                 requested: semanticReferenceDate,
                 entries: newEntries
             )
+            refreshTimelineDecoration()
             selectLatest(in: newEntries)
             presentedFrame = nil
         }
