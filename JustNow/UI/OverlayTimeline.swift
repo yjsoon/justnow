@@ -39,29 +39,14 @@ struct TimelineSlider: View {
     private var frameCount: Int { displayedEntries.count }
     private var timelineMarkers: [TimelineMarker] {
         guard !(viewModel.isSearching && viewModel.hasSearchQuery) else { return [] }
-        return timelineLandmarkMarkers(
-            entries: displayedEntries,
-            recentWindow: viewModel.recentTimelineWindow,
-            now: viewModel.timelineReferenceDate
-        )
+        return viewModel.timelineMarkers
     }
 
     private var colourSegments: [TimelineZoneFill] {
         guard !(viewModel.isSearching && viewModel.hasSearchQuery) else {
             return timelineColourSegments(entries: displayedEntries, borderPosition: nil)
         }
-
-        let recentWindowPosition =
-            timelineMarkers.first(where: { $0.targetAge == viewModel.recentTimelineWindow })?.position
-            ?? resolveTimelineMarkerPosition(
-                entries: displayedEntries,
-                targetAge: viewModel.recentTimelineWindow,
-                now: viewModel.timelineReferenceDate
-            )
-        return timelineColourSegments(
-            entries: displayedEntries,
-            borderPosition: recentWindowPosition
-        )
+        return viewModel.timelineZoneFills
     }
 
     var body: some View {
