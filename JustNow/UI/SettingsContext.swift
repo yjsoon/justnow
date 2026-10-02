@@ -10,7 +10,10 @@ import Sparkle
 @Observable
 final class SettingsContext {
     var frameBuffer: FrameBuffer?
-    var launchAtLoginManager: LaunchAtLoginManager?
+    var launchAtLoginManager: LaunchAtLoginManager? {
+        didSet { refreshLaunchAtLoginState() }
+    }
+    private(set) var launchAtLoginEnabled = false
     var updater: SPUUpdater? {
         didSet { observeUpdater() }
     }
@@ -38,6 +41,7 @@ final class SettingsContext {
         self.onShortcutChanged = onShortcutChanged
         self.onRelaunch = onRelaunch
         observeUpdater()
+        refreshLaunchAtLoginState()
     }
 
     private func observeUpdater() {
@@ -94,8 +98,8 @@ final class SettingsContext {
         launchAtLoginManager?.canConfigure ?? false
     }
 
-    func launchAtLoginEnabled() -> Bool {
-        launchAtLoginManager?.isEnabled ?? false
+    func refreshLaunchAtLoginState() {
+        launchAtLoginEnabled = launchAtLoginManager?.isEnabled ?? false
     }
 
     func setLaunchAtLoginEnabled(_ isEnabled: Bool) throws -> LaunchAtLoginManager.ChangeResult {
@@ -103,6 +107,7 @@ final class SettingsContext {
             throw LaunchAtLoginError.serviceUnavailable
         }
 
+        defer { refreshLaunchAtLoginState() }
         return try launchAtLoginManager.setEnabled(isEnabled)
     }
 }

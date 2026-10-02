@@ -48,7 +48,6 @@ struct SettingsView: View {
     @State private var showClearConfirmation = false
     @State private var telemetrySnapshot: SearchTelemetrySnapshot = .empty
     @State private var isSearchDiagnosticsExpanded = false
-    @State private var launchAtLoginEnabled = false
     @State private var launchAtLoginAlertMessage: String?
     @State private var clearHistoryAlertMessage: String?
     @State private var showRelaunchConfirmation = false
@@ -67,10 +66,10 @@ struct SettingsView: View {
             await updateStorageInfo()
         }
         .task(id: launchAtLoginIdentity) {
-            syncLaunchAtLoginState()
+            context.refreshLaunchAtLoginState()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            syncLaunchAtLoginState()
+            context.refreshLaunchAtLoginState()
         }
         .task {
             await refreshSettingsLoop()
@@ -723,26 +722,17 @@ struct SettingsView: View {
         )
     }
 
-    private func syncLaunchAtLoginState() {
-        launchAtLoginEnabled = context.launchAtLoginEnabled()
-    }
-
     private var launchAtLoginBinding: Binding<Bool> {
         Binding(
-            get: { launchAtLoginEnabled },
+            get: { context.launchAtLoginEnabled },
             set: { newValue in
-                let previousValue = launchAtLoginEnabled
-                launchAtLoginEnabled = newValue
-
                 do {
                     let result = try context.setLaunchAtLoginEnabled(newValue)
-                    syncLaunchAtLoginState()
 
                     if result == .requiresApproval {
                         launchAtLoginAlertMessage = "macOS needs approval before JustNow can launch at startup. Enable JustNow in System Settings > General > Login Items."
                     }
                 } catch {
-                    launchAtLoginEnabled = previousValue
                     launchAtLoginAlertMessage = error.localizedDescription
                 }
             }

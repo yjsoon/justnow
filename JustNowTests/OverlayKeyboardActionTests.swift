@@ -4,6 +4,23 @@ import XCTest
 @testable import JustNow
 
 final class OverlayKeyboardActionTests: XCTestCase {
+    func testConfiguredArrowDismissalStillWorksWhileEditing() {
+        let state = OverlayKeyboardState(
+            isSearchAvailable: true, isSearching: true, hasSearchQuery: true,
+            isTextGrabActive: false, isEditingText: true
+        )
+        for (modifiers, expected): (NSEvent.ModifierFlags, OverlayKeyboardAction) in [
+            (.command, .dismissOverlay), (.option, .passthrough), ([], .passthrough)
+        ] {
+            XCTAssertEqual(resolveOverlayKeyboardAction(
+                keyCode: UInt16(kVK_LeftArrow), modifiers: modifiers,
+                dismissShortcutKeyCode: kVK_LeftArrow,
+                dismissShortcutModifiers: Int(NSEvent.ModifierFlags.command.rawValue),
+                state: state
+            ), expected)
+        }
+    }
+
     func testTextEditingKeepsNavigationKeysButUnfocusedSearchStillNavigatesFrames() {
         let editing = OverlayKeyboardState(
             isSearchAvailable: true, isSearching: true, hasSearchQuery: true,

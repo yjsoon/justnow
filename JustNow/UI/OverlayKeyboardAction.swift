@@ -46,6 +46,10 @@ func resolveOverlayKeyboardAction(
         .intersection(.shortcutModifiers)
     let matchesDismissShortcut = Int(keyCode) == dismissShortcutKeyCode && pressedModifiers == dismissModifiers
 
+    if matchesDismissShortcut && keyCode != UInt16(kVK_Escape) {
+        return .dismissOverlay
+    }
+
     if state.isEditingText {
         switch Int(keyCode) {
         case kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow,
@@ -54,10 +58,6 @@ func resolveOverlayKeyboardAction(
         default:
             break
         }
-    }
-
-    if matchesDismissShortcut && keyCode != UInt16(kVK_Escape) {
-        return .dismissOverlay
     }
 
     switch keyCode {
