@@ -61,6 +61,7 @@ struct FramePreviewView: View {
                                     layout: searchTextLayout,
                                     query: viewModel.searchQuery
                                 )
+                                .id("\(frame.id)|\(viewModel.searchQuery)")
                                 .allowsHitTesting(false)
                             }
                         }
@@ -198,7 +199,8 @@ private struct SearchHighlightOverlay: View {
     let layout: SearchTextLayout
     let query: String
 
-    private let rectPadding: CGFloat = 5
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var reveal: CGFloat = 0
 
     var body: some View {
         GeometryReader { proxy in
@@ -215,37 +217,56 @@ private struct SearchHighlightOverlay: View {
                     let displayedRect = TextGrabGeometry.paddedDisplayedRect(
                         forNormalisedImageRect: normalisedRect,
                         displayedImageRect: displayedImageRect,
-                        padding: rectPadding
+                        padding: 3
                     )
-                    let cornerRadius = max(10, min(displayedRect.width, displayedRect.height) * 0.22)
 
                     if displayedRect.width > 0, displayedRect.height > 0 {
-                        RoundedRectangle(
-                            cornerRadius: cornerRadius,
-                            style: .continuous
-                        )
-                        .fill(Color(red: 1.0, green: 0.82, blue: 0.14).opacity(0.18))
-                        .overlay {
-                            ZStack {
-                                RoundedRectangle(
-                                    cornerRadius: cornerRadius,
-                                    style: .continuous
-                                )
-                                .stroke(Color.black.opacity(0.36), lineWidth: 4)
-
-                                RoundedRectangle(
-                                    cornerRadius: cornerRadius,
-                                    style: .continuous
-                                )
-                                .stroke(Color(red: 1.0, green: 0.93, blue: 0.52).opacity(0.96), lineWidth: 2)
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(Color.yellow.opacity(0.16))
+                            .overlay(alignment: .bottom) {
+                                SearchMatchUnderline()
+                                    .trim(from: 0, to: reduceMotion ? 1 : reveal)
+                                    .stroke(
+                                        Color(red: 1, green: 0.76, blue: 0.16),
+                                        style: StrokeStyle(lineWidth: 2, lineCap: .round)
+                                    )
+                                    .shadow(color: .black.opacity(0.65), radius: 0.5, y: 0.5)
+                                    .frame(height: 3)
+                                    .padding(.horizontal, 1)
+                                    .padding(.bottom, 1)
                             }
-                        }
-                        .shadow(color: Color.black.opacity(0.18), radius: 5)
-                        .frame(width: displayedRect.width, height: displayedRect.height)
-                        .offset(x: displayedRect.minX, y: displayedRect.minY)
+                            .frame(width: displayedRect.width, height: displayedRect.height)
+                            .offset(x: displayedRect.minX, y: displayedRect.minY)
                     }
                 }
             }
         }
+        .accessibilityHidden(true)
+        .onAppear {
+            // A single draw-on catches the eye without moving while the user
+            // reads. Reduced Motion gets the complete underline immediately.
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.55)) {
+                reveal = 1
+            }
+        }
+    }
+}
+
+private struct SearchMatchUnderline: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.midY))
+        var x = rect.minX
+        var bendsDown = true
+        while x < rect.maxX {
+            let endX = min(x + 4, rect.maxX)
+            path.addQuadCurve(
+                to: CGPoint(x: endX, y: rect.midY),
+                control: CGPoint(x: (x + endX) / 2, y: bendsDown ? rect.maxY : rect.minY)
+            )
+            bendsDown.toggle()
+            x = endX
+        }
+        return path
     }
 }

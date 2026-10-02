@@ -44,8 +44,22 @@ struct SearchIndexStatus: Sendable, Equatable {
     let totalFrames: Int
     let indexedFrames: Int
     let queuedFrames: Int
+    /// OCR batches that have left the queue and are currently being processed.
+    /// A queue can be empty while Vision work is still in flight.
+    let indexingFrames: Int
 
-    static let empty = SearchIndexStatus(totalFrames: 0, indexedFrames: 0, queuedFrames: 0)
+    /// Work that can still add searchable text. `indexedFrames` is not a
+    /// coverage percentage: the cache can contain rows outside this timeline.
+    var activeWorkFrames: Int {
+        queuedFrames + indexingFrames
+    }
+
+    static let empty = SearchIndexStatus(
+        totalFrames: 0,
+        indexedFrames: 0,
+        queuedFrames: 0,
+        indexingFrames: 0
+    )
 }
 
 private enum SyncIngestResult {
@@ -159,9 +173,7 @@ class FrameBuffer {
     private let jpegEncoder: FrameJPEGEncoder
     private let retentionManager: RetentionManager
     private let blackFrameDetector = BlackFrameDetector.screenOff
-    private lazy var ocrIndexingWorker = OCRIndexingWorker(
-        dependencies: .live(frameRepository: frameRepository, textCache: textCache)
-    )
+    private let ocrIndexingWorker: OCRIndexingWorker
     private var blackFrameFilterUntil: Date?
     private var saveOptions: FrameSaveOptions = .standard
     private var duplicatePolicy: DuplicateFramePolicy = .standard
@@ -169,8 +181,12 @@ class FrameBuffer {
     private let pruneInterval: TimeInterval = 30
     private var ocrIndexingPolicy: OCRIndexingPolicy = .disabled
     private var ocrFrameQueue = OCRFrameQueue()
+    /// Each task keeps its own count so a cancelled older task cannot erase a
+    /// replacement task's in-flight status when it eventually unwinds.
+    private var ocrIndexingFramesByTask: [Int: Int] = [:]
     private var ocrPruningFrameIDs: Set<UUID> = []
     private var ocrIndexingTask: Task<Void, Never>?
+    private var ocrIndexingTaskGeneration = 0
     /// Bounded backlog of captures waiting to hash and persist. Sync captures discard older async backlog rather than reordering processing, so dedupe stays chronological.
     private var ingestQueue: [PendingIngest] = []
     private var ingestProcessorTask: Task<Void, Never>?
@@ -256,7 +272,8 @@ class FrameBuffer {
         diagnosticsLog: CaptureInstrumentationLogSink?,
         frameRepository: (any FrameRepository)? = nil,
         historyStorageMode: HistoryStorageMode? = nil,
-        jpegEncoder: FrameJPEGEncoder = FrameJPEGEncoder()
+        jpegEncoder: FrameJPEGEncoder = FrameJPEGEncoder(),
+        ocrIndexingWorker: OCRIndexingWorker? = nil
     ) async throws {
         let instrumentation = CapturePersistenceInstrumentation()
         self.captureInstrumentation = instrumentation
@@ -264,8 +281,9 @@ class FrameBuffer {
         self.jpegEncoder = jpegEncoder
         let resolvedHistoryStorageMode = historyStorageMode ?? HistoryStorageMode.launchDefault()
         self.historyStorageMode = resolvedHistoryStorageMode
+        let resolvedFrameRepository: any FrameRepository
         if let frameRepository {
-            self.frameRepository = frameRepository
+            resolvedFrameRepository = frameRepository
         } else {
             let frameStore = try FrameStore(
                 directory: storageDirectory,
@@ -273,13 +291,18 @@ class FrameBuffer {
             )
             switch resolvedHistoryStorageMode {
             case .allDisk:
-                self.frameRepository = DiskFrameRepository(frameStore: frameStore)
+                resolvedFrameRepository = DiskFrameRepository(frameStore: frameStore)
             case .hybridRAM(let byteCap):
-                self.frameRepository = HybridFrameRepository(frameStore: frameStore, byteCap: byteCap)
+                resolvedFrameRepository = HybridFrameRepository(frameStore: frameStore, byteCap: byteCap)
             }
         }
-        self.textCache = TextCache(directory: storageDirectory)
+        let textCache = TextCache(directory: storageDirectory)
+        self.frameRepository = resolvedFrameRepository
+        self.textCache = textCache
         self.retentionManager = RetentionManager(policy: retentionPolicy)
+        self.ocrIndexingWorker = ocrIndexingWorker ?? OCRIndexingWorker(
+            dependencies: .live(frameRepository: resolvedFrameRepository, textCache: textCache)
+        )
         // A single 5K BGRA frame is ~58 MB decoded. `countLimit` lets 24 of
         // those pin ~1.4 GB; switch to byte budgets so the cache evicts under
         // real memory pressure.
@@ -537,12 +560,14 @@ class FrameBuffer {
         guard let currentTimestamp = currentOCRCacheTimestamp(for: frame) else { return false }
         await textCache.setText(text, for: frame.id, timestamp: currentTimestamp)
 
-        guard shouldContinueOCR(for: frame) else {
+        guard isCurrentOCRFrame(frame) else {
             await textCache.removeText(for: frame.id)
             return false
         }
 
-        return true
+        // Cancellation and provisional prune fences stop publication, not
+        // valid committed data. Another span may retain this physical frame.
+        return shouldContinueOCR(for: frame)
     }
 
     /// Commits a generated layout using the physical frame's current logical
@@ -553,12 +578,12 @@ class FrameBuffer {
         guard let currentTimestamp = currentOCRCacheTimestamp(for: frame) else { return false }
         await textCache.setSearchLayout(layout, for: frame.id, timestamp: currentTimestamp)
 
-        guard shouldContinueOCR(for: frame) else {
+        guard isCurrentOCRFrame(frame) else {
             await textCache.removeText(for: frame.id)
             return false
         }
 
-        return true
+        return shouldContinueOCR(for: frame)
     }
 
     /// Get logical timeline spans with near-duplicates removed for smoother
@@ -701,7 +726,8 @@ class FrameBuffer {
         return SearchIndexStatus(
             totalFrames: physicalFrameCount,
             indexedFrames: indexedFrames,
-            queuedFrames: ocrFrameQueue.count
+            queuedFrames: ocrFrameQueue.count,
+            indexingFrames: ocrIndexingFramesByTask.values.reduce(0, +)
         )
     }
 
@@ -756,7 +782,17 @@ class FrameBuffer {
     }
 
     func getSearchLayout(for frame: StoredFrame, image: CGImage? = nil) async -> SearchTextLayout? {
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        var outcome = "invalidated"
+        var recognitionMilliseconds = 0
+        defer {
+            let elapsedMilliseconds = Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000)
+            logSearchDiagnostics(
+                "Layout outcome=\(Task.isCancelled ? "cancelled" : outcome) total_ms=\(elapsedMilliseconds) recognition_ms=\(recognitionMilliseconds)"
+            )
+        }
         if let cached = await textCache.getSearchLayout(for: frame.id) {
+            outcome = "cache_hit"
             return cached
         }
 
@@ -771,13 +807,18 @@ class FrameBuffer {
             }
 
             guard !Task.isCancelled else { return nil }
-            guard let layout = await TextRecognitionManager.extractSearchLayout(from: sourceImage),
-                  !layout.isEmpty else {
+            let recognitionStartedAt = ProcessInfo.processInfo.systemUptime
+            let recognisedLayout = await TextRecognitionManager.extractSearchLayout(from: sourceImage)
+            recognitionMilliseconds = Int((ProcessInfo.processInfo.systemUptime - recognitionStartedAt) * 1_000)
+            guard let layout = recognisedLayout, !layout.isEmpty else {
+                outcome = "no_layout"
                 return nil
             }
             guard await cacheSearchLayoutIfCurrent(layout, for: frame) else { return nil }
+            outcome = "generated"
             return layout
         } catch {
+            outcome = "image_unavailable"
             return nil
         }
     }
@@ -1440,6 +1481,12 @@ class FrameBuffer {
         work.syncContinuation?.resume(returning: result)
     }
 
+    /// Persistent, content-free search outcome reporting: a diagnostic export
+    /// must be able to distinguish a failed search from a true no-match.
+    func logSearchDiagnostics(_ message: String) {
+        diagnosticsLog?.log("Search", message)
+    }
+
     private func maybeLogCaptureInstrumentation(force: Bool = false) {
         guard let diagnosticsLog else { return }
 
@@ -1877,8 +1924,10 @@ class FrameBuffer {
         guard ocrIndexingPolicy.isEnabled else { return }
         guard ocrIndexingTask == nil else { return }
 
+        ocrIndexingTaskGeneration += 1
+        let taskGeneration = ocrIndexingTaskGeneration
         ocrIndexingTask = Task(priority: .utility) { [weak self] in
-            await self?.runBackgroundOCRIndexingLoop()
+            await self?.runBackgroundOCRIndexingLoop(taskGeneration: taskGeneration)
         }
     }
 
@@ -1900,9 +1949,11 @@ class FrameBuffer {
     }
 
     private func shouldContinueOCR(for frame: StoredFrame) -> Bool {
-        guard !Task.isCancelled else { return false }
+        !Task.isCancelled && !ocrPruningFrameIDs.contains(frame.id) && isCurrentOCRFrame(frame)
+    }
+
+    private func isCurrentOCRFrame(_ frame: StoredFrame) -> Bool {
         guard !isBufferClearing else { return false }
-        guard !ocrPruningFrameIDs.contains(frame.id) else { return false }
         return containsFrame(id: frame.id)
     }
 
@@ -1914,11 +1965,14 @@ class FrameBuffer {
         return frameLookup[frame.id]?.timestamp
     }
 
-    private func runBackgroundOCRIndexingLoop() async {
+    private func runBackgroundOCRIndexingLoop(taskGeneration: Int) async {
         defer {
-            ocrIndexingTask = nil
-            if ocrIndexingPolicy.isEnabled && !ocrFrameQueue.isEmpty {
-                startBackgroundOCRIndexingIfNeeded()
+            ocrIndexingFramesByTask[taskGeneration] = nil
+            if ocrIndexingTaskGeneration == taskGeneration {
+                ocrIndexingTask = nil
+                if ocrIndexingPolicy.isEnabled && !ocrFrameQueue.isEmpty {
+                    startBackgroundOCRIndexingIfNeeded()
+                }
             }
         }
 
@@ -1932,13 +1986,17 @@ class FrameBuffer {
             guard !dequeuedFrames.isEmpty else { return }
 
             let framesToIndex = dequeuedFrames.filter(shouldContinueOCR(for:))
+            ocrIndexingFramesByTask[taskGeneration] = framesToIndex.count
             let indexedFrames = await ocrIndexingWorker.index(
                 frames: framesToIndex,
                 searchImageMaxPixelSize: policy.searchImageMaxPixelSize
             )
 
             for indexedFrame in indexedFrames {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else {
+                    ocrIndexingFramesByTask[taskGeneration] = 0
+                    return
+                }
                 guard await cacheOCRTextIfCurrent(indexedFrame.text, for: indexedFrame.frame) else {
                     continue
                 }
@@ -1948,6 +2006,7 @@ class FrameBuffer {
                     indexLag: indexedFrame.indexLag
                 )
             }
+            ocrIndexingFramesByTask[taskGeneration] = 0
 
             let sleepDuration = policy.minimumInterval
             if sleepDuration > 0 {

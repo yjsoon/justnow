@@ -483,6 +483,94 @@ final class FrameBufferTests: XCTestCase {
         XCTAssertEqual(searchStatus.totalFrames, 2)
         XCTAssertEqual(searchStatus.indexedFrames, 0)
         XCTAssertEqual(searchStatus.queuedFrames, 0)
+        XCTAssertEqual(searchStatus.indexingFrames, 0)
+        XCTAssertEqual(searchStatus.activeWorkFrames, 0)
+    }
+
+    func testSearchIndexStatusReportsQueuedAndInFlightWorkSeparatelyFromCoverage() {
+        let idlePartialHistory = SearchIndexStatus(
+            totalFrames: 2,
+            indexedFrames: 1,
+            queuedFrames: 0,
+            indexingFrames: 0
+        )
+        XCTAssertEqual(idlePartialHistory.activeWorkFrames, 0)
+        XCTAssertNil(SearchBarView.indexingStatus(for: idlePartialHistory))
+
+        let activeOCR = SearchIndexStatus(
+            totalFrames: 2,
+            indexedFrames: 1,
+            queuedFrames: 0,
+            indexingFrames: 1
+        )
+        XCTAssertEqual(activeOCR.activeWorkFrames, 1)
+        XCTAssertEqual(SearchBarView.indexingStatus(for: activeOCR), "Indexing 1 recent frame…")
+
+        let queuedAndActiveOCR = SearchIndexStatus(
+            totalFrames: 5,
+            indexedFrames: 1,
+            queuedFrames: 3,
+            indexingFrames: 1
+        )
+        XCTAssertEqual(queuedAndActiveOCR.activeWorkFrames, 4)
+        XCTAssertEqual(SearchBarView.indexingStatus(for: queuedAndActiveOCR), "Indexing 4 recent frames…")
+    }
+
+    func testSearchIndexStatusKeepsInFlightWorkAcrossDisabledAndReplacementOCRTasks() async throws {
+        let gate = BlockingOCRIndexGate()
+        defer {
+            Task { await gate.releaseAll() }
+        }
+        let worker = OCRIndexingWorker(
+            dependencies: OCRIndexingWorkerDependencies(
+                hasCachedText: { _ in false },
+                indexFrame: { frame, _ in
+                    await gate.waitForRelease()
+                    return OCRIndexedFrame(frame: frame, text: "indexed", duration: 0, indexLag: 0)
+                }
+            )
+        )
+        let buffer = try await FrameBuffer(
+            retentionPolicy: .default24Hours,
+            storageDirectory: directory,
+            diagnosticsLog: nil,
+            historyStorageMode: .allDisk,
+            ocrIndexingWorker: worker
+        )
+        try await buffer.beginCaptureSession(at: Date())
+        await buffer.addFrameSync(try makeStructuredImage(seed: 706), timestamp: Date(), display: nil)
+
+        let policy = OCRIndexingPolicy(
+            isEnabled: true,
+            minimumInterval: 0,
+            maxQueueDepth: 2,
+            maxFrameAge: 60,
+            concurrentJobs: 1,
+            searchImageMaxPixelSize: 320
+        )
+        buffer.updateOCRIndexingPolicy(policy)
+        await gate.waitUntilStarted(count: 1)
+
+        let firstInFlight = await buffer.searchIndexStatus()
+        XCTAssertEqual(firstInFlight.queuedFrames, 0)
+        XCTAssertEqual(firstInFlight.indexingFrames, 1)
+        XCTAssertEqual(firstInFlight.activeWorkFrames, 1)
+
+        // Disabling cancels and clears queued work, but the worker may still
+        // be executing. Re-enabling starts a replacement without allowing the
+        // stale task to erase the replacement's in-flight count.
+        buffer.updateOCRIndexingPolicy(.disabled)
+        let disabledWhileInFlight = await buffer.searchIndexStatus()
+        XCTAssertEqual(disabledWhileInFlight.indexingFrames, 1)
+        buffer.updateOCRIndexingPolicy(policy)
+        await gate.waitUntilStarted(count: 2)
+        let replacementInFlight = await buffer.searchIndexStatus()
+        XCTAssertEqual(replacementInFlight.indexingFrames, 2)
+
+        await gate.releaseNext()
+        try await waitForSearchIndexStatus(buffer) { $0.indexingFrames == 1 }
+        await gate.releaseNext()
+        try await waitForSearchIndexStatus(buffer) { $0.activeWorkFrames == 0 }
     }
 
     func testDurableInsertPromotionAndCheckpointDoNotWriteEmptyTextCacheRows() async throws {
@@ -566,7 +654,7 @@ final class FrameBufferTests: XCTestCase {
 
         let finalWrites = await buffer.textCache.mutationTransactionCountForTesting()
         XCTAssertEqual(finalWrites, baselineWrites + 1)
-        let hits = await buffer.textCache.searchFrameIDs(
+        let hits = try await buffer.textCache.searchFrameIDs(
             matching: "checkpoint",
             limit: 10,
             since: base.addingTimeInterval(34)
@@ -605,7 +693,7 @@ final class FrameBufferTests: XCTestCase {
 
         let finalWrites = await buffer.textCache.mutationTransactionCountForTesting()
         XCTAssertEqual(finalWrites, baselineWrites + 1)
-        let hits = await buffer.textCache.searchFrameIDs(
+        let hits = try await buffer.textCache.searchFrameIDs(
             matching: "promotion",
             limit: 10,
             since: base.addingTimeInterval(4)
@@ -918,7 +1006,7 @@ final class FrameBufferTests: XCTestCase {
             "first OCR after extension",
             for: queuedFrame
         )
-        let recentHits = await buffer.textCache.searchFrameIDs(
+        let recentHits = try await buffer.textCache.searchFrameIDs(
             matching: "first OCR",
             limit: 10,
             since: base.addingTimeInterval(4)
@@ -985,6 +1073,208 @@ final class FrameBufferTests: XCTestCase {
             extendedAt.timeIntervalSince1970,
             accuracy: 0.000_001
         )
+    }
+
+    func testCancelledLayoutWriteKeepsSearchDataForExistingFrame() async throws {
+        try await assertSuspendedCacheWriteKeepsExistingFrame(writeLayout: true)
+    }
+
+    func testCancelledOCRTextWriteKeepsSearchDataForExistingFrame() async throws {
+        try await assertSuspendedCacheWriteKeepsExistingFrame(writeLayout: false)
+    }
+
+    func testLayoutWriteDuringSharedFramePruneKeepsSearchData() async throws {
+        try await assertSuspendedCacheWriteKeepsExistingFrame(writeLayout: true, pruneSharedSpan: true)
+    }
+
+    func testOCRTextWriteDuringSharedFramePruneKeepsSearchData() async throws {
+        try await assertSuspendedCacheWriteKeepsExistingFrame(writeLayout: false, pruneSharedSpan: true)
+    }
+
+    private func assertSuspendedCacheWriteKeepsExistingFrame(
+        writeLayout: Bool,
+        pruneSharedSpan: Bool = false
+    ) async throws {
+        let buffer: FrameBuffer
+        var pruningRepository: FrameRepositoryProbe?
+        var retainedSpanID: UUID?
+        if pruneSharedSpan {
+            let now = Date()
+            let physicalFrame = StoredFrame(
+                id: UUID(), timestamp: now.addingTimeInterval(-120), hash: 215,
+                displayID: nil, displayName: nil
+            )
+            let sessionID = UUID()
+            let entries = [physicalFrame.timestamp, now].map { timestamp in
+                TimelineEntry(
+                    span: TimelineSpan(
+                        id: UUID(), frameID: physicalFrame.id, sessionID: sessionID,
+                        startedAt: timestamp, observedThroughAt: timestamp,
+                        observationCount: 1, displayID: nil, displayName: nil
+                    ),
+                    frame: physicalFrame
+                )
+            }
+            let repository = FrameRepositoryProbe(
+                frames: [physicalFrame], image: try makeStructuredImage(seed: 215),
+                exportedURL: directory.appendingPathComponent("unused.jpg"),
+                suspendFirstPrune: true, timeline: entries
+            )
+            pruningRepository = repository
+            retainedSpanID = entries[1].span.id
+            buffer = try await FrameBuffer(
+                retentionPolicy: .default24Hours, storageDirectory: directory,
+                diagnosticsLog: nil, frameRepository: repository
+            )
+        } else {
+            buffer = try await makeBuffer()
+            await buffer.addFrameSync(try makeStructuredImage(seed: 215), timestamp: Date(), display: nil)
+        }
+        let frame = try XCTUnwrap(buffer.getFrames().first)
+        let cache = buffer.textCache
+        await cache.setText("anchor original", for: frame.id)
+        await cache.setSearchLayout(SearchTextLayout(lines: [
+            SearchTextLine(
+                text: "anchor original",
+                rect: CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.1),
+                words: []
+            )
+        ]), for: frame.id)
+        let layout = SearchTextLayout(lines: [
+            SearchTextLine(
+                text: "anchor refreshed",
+                rect: CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.1),
+                words: []
+            )
+        ])
+        let originalHits = try await cache.searchFrameIDs(matching: "anchor", limit: 10)
+        XCTAssertEqual(originalHits, [frame.id])
+
+        // Hold the real cache actor in a query so the writer can pass its
+        // current-frame check, enqueue a write, and then be cancelled. The
+        // main actor stays free; no sleep or new production hook is needed.
+        var connection: OpaquePointer?
+        let databaseURL = directory.appendingPathComponent("text_cache.sqlite")
+        guard sqlite3_open_v2(databaseURL.path, &connection, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK,
+              let connection else {
+            XCTFail("Failed to open synthetic cache")
+            return
+        }
+        sqlite3_busy_timeout(connection, 2_000)
+        let seeded = sqlite3_exec(connection, """
+            BEGIN IMMEDIATE;
+            WITH RECURSIVE frames(n) AS (
+                SELECT 1 UNION ALL SELECT n + 1 FROM frames WHERE n < 5000
+            )
+            INSERT INTO frame_text(frame_id, timestamp, text)
+            SELECT printf('10000000-0000-0000-0000-%012d', n), n, 'scan marker' FROM frames;
+            INSERT INTO frame_text_fts(frame_id, text)
+            SELECT frame_id, text FROM frame_text WHERE frame_id LIKE '10000000-%';
+            COMMIT;
+            """, nil, nil, nil)
+        sqlite3_close(connection)
+        XCTAssertEqual(seeded, SQLITE_OK)
+        guard seeded == SQLITE_OK else { return }
+
+        let queryEntered = expectation(description: "Query holds cache actor")
+        queryEntered.assertForOverFulfill = true
+        let releaseQuery = DispatchSemaphore(value: 0)
+        defer { releaseQuery.signal() }
+        await cache.setQueryProgressHookForTesting {
+            queryEntered.fulfill()
+            XCTAssertEqual(releaseQuery.wait(timeout: .now() + 5), .success)
+            // Abort after the first callback so this gate cannot be entered
+            // a second time. The query's handler must clear before the write.
+            withUnsafeCurrentTask { $0?.cancel() }
+        }
+        defer { Task { await cache.setQueryProgressHookForTesting(nil) } }
+        let blockedQuery = Task {
+            try await cache.searchFrameIDs(matching: "京都", limit: 10)
+        }
+        await fulfillment(of: [queryEntered], timeout: 2)
+
+        let writerEntered = expectation(description: "Writer reaches cache await")
+        let writer = Task { @MainActor in
+            writerEntered.fulfill()
+            // No suspension before the cache await inside either method.
+            if writeLayout {
+                return await buffer.cacheSearchLayoutIfCurrent(layout, for: frame)
+            }
+            return await buffer.cacheOCRTextIfCurrent("anchor refreshed", for: frame)
+        }
+        await fulfillment(of: [writerEntered], timeout: 2)
+        var pendingPrune: Task<Void, Never>?
+        if let repository = pruningRepository {
+            pendingPrune = Task { @MainActor in
+                await buffer.updateRetentionPolicy(
+                    RetentionPolicy(tiers: [RetentionTier(maxAge: 60, minimumSpacing: 0)])
+                )
+            }
+            await repository.waitForPruneInvocation()
+        } else {
+            writer.cancel()
+        }
+        defer {
+            if let repository = pruningRepository {
+                Task {
+                    await repository.resumeSuspendedPrune()
+                    await pendingPrune?.value
+                }
+            }
+        }
+        releaseQuery.signal()
+        do {
+            _ = try await blockedQuery.value
+            XCTFail("Expected the gate query to cancel")
+        } catch is CancellationError {}
+        let published = await writer.value
+        await cache.setQueryProgressHookForTesting(nil)
+
+        XCTAssertFalse(published, "A cancelled or pruning-fenced caller must not publish its result")
+        XCTAssertTrue(buffer.containsFrame(id: frame.id))
+        let hits = try await cache.searchFrameIDs(matching: "anchor", limit: 10)
+        let restoredLayout = await cache.getSearchLayout(for: frame.id)
+        XCTAssertEqual(hits, [frame.id], "Cancellation or provisional pruning must not delete a current frame's index")
+        XCTAssertEqual(restoredLayout?.lines.first?.text, writeLayout ? "anchor refreshed" : "anchor original")
+        if !writeLayout {
+            let refreshedHits = try await cache.searchFrameIDs(matching: "refreshed", limit: 10)
+            XCTAssertEqual(refreshedHits, [frame.id], "The queued write must have committed")
+        }
+        if let repository = pruningRepository {
+            await repository.resumeSuspendedPrune()
+            await pendingPrune?.value
+            XCTAssertEqual(buffer.getTimelineEntries().map(\.span.id), [try XCTUnwrap(retainedSpanID)])
+            let retainedHits = try await cache.searchFrameIDs(matching: "anchor", limit: 10)
+            XCTAssertEqual(retainedHits, [frame.id])
+        }
+    }
+
+    func testSearchLayoutDiagnosticsDistinguishCacheHitAndInvalidationWithoutContent() async throws {
+        let diagnostics = InMemoryCaptureMetricsLog()
+        let buffer = try await makeBuffer(diagnosticsLog: diagnostics)
+        await buffer.addFrameSync(try makeStructuredImage(seed: 216), timestamp: Date(), display: nil)
+        let frame = try XCTUnwrap(buffer.getFrames().first)
+        let privateText = "private-layout-sentinel"
+        await buffer.textCache.setSearchLayout(SearchTextLayout(lines: [
+            SearchTextLine(text: privateText, rect: .zero, words: [])
+        ]), for: frame.id)
+
+        let cached = await buffer.getSearchLayout(for: frame)
+        XCTAssertEqual(cached?.lines.first?.text, privateText)
+        try await buffer.clear()
+        let missing = await buffer.getSearchLayout(for: frame)
+        XCTAssertNil(missing)
+
+        let messages = diagnostics.entries.filter { $0.category == "Search" }.map(\.message)
+        XCTAssertEqual(messages.count, 2)
+        XCTAssertTrue(messages.first?.hasPrefix("Layout outcome=cache_hit total_ms=") == true)
+        XCTAssertTrue(messages.last?.hasPrefix("Layout outcome=invalidated total_ms=") == true)
+        for message in messages {
+            XCTAssertTrue(message.hasSuffix("recognition_ms=0"))
+            XCTAssertFalse(message.contains(privateText))
+            XCTAssertFalse(message.contains(frame.id.uuidString))
+            XCTAssertFalse(message.contains(directory.path))
+        }
     }
 
     func testSuspendedSaveCrossingClearIsPrunedAndRetriedInFreshEpoch() async throws {
@@ -2105,7 +2395,7 @@ final class FrameBufferTests: XCTestCase {
             accuracy: 0.000_001
         )
         XCTAssertEqual(reopened.knownDisplays().map(\.name), ["A", "B"])
-        let matches = await reopened.textCache.searchFrameIDs(
+        let matches = try await reopened.textCache.searchFrameIDs(
             matching: "logical recency",
             limit: 10,
             since: base.addingTimeInterval(1.5)
@@ -2312,7 +2602,7 @@ final class FrameBufferTests: XCTestCase {
 
         XCTAssertEqual(reopened.getFrames().map(\.id), [frame.id])
         let hasCachedText = await reopened.textCache.hasCachedText(for: frame.id)
-        let searchMatches = await reopened.textCache.searchFrameIDs(
+        let searchMatches = try await reopened.textCache.searchFrameIDs(
             matching: "preserved legacy",
             limit: 10
         )
@@ -2416,6 +2706,57 @@ final class FrameBufferTests: XCTestCase {
             throw FrameDatabaseError.sqlite("Test query returned no row")
         }
         return sqlite3_column_double(statement, 0)
+    }
+
+    private func waitForSearchIndexStatus(
+        _ buffer: FrameBuffer,
+        matching predicate: (SearchIndexStatus) -> Bool
+    ) async throws {
+        for _ in 0..<100 {
+            if predicate(await buffer.searchIndexStatus()) {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Timed out waiting for search-index status")
+    }
+}
+
+private actor BlockingOCRIndexGate {
+    private var startedCount = 0
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+    private var isReleased = false
+
+    func waitForRelease() async {
+        startedCount += 1
+        guard !isReleased else { return }
+        await withCheckedContinuation { releaseWaiters.append($0) }
+    }
+
+    func waitUntilStarted(count: Int) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while startedCount < count {
+            guard clock.now < deadline else {
+                XCTFail("Timed out waiting for OCR job \(count)")
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    func releaseNext() {
+        guard !releaseWaiters.isEmpty else { return }
+        releaseWaiters.removeFirst().resume()
+    }
+
+    func releaseAll() {
+        isReleased = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
     }
 }
 
