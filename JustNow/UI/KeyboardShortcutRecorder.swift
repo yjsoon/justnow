@@ -159,7 +159,13 @@ class RecorderNSView: NSView {
 
     override func keyDown(with event: NSEvent) {
         guard isRecording else {
-            super.keyDown(with: event)
+            if [UInt16(kVK_Space), UInt16(kVK_Return)].contains(event.keyCode),
+               event.modifierFlags.intersection(.shortcutModifiers).isEmpty,
+               !event.isARepeat {
+                startRecording()
+            } else {
+                super.keyDown(with: event)
+            }
             return
         }
 
@@ -169,7 +175,7 @@ class RecorderNSView: NSView {
             return
         }
 
-        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let mods = event.modifierFlags.intersection(.shortcutModifiers)
 
         let hasModifier = mods.contains(.command) || mods.contains(.option) || mods.contains(.control) || mods.contains(.shift)
         let isEscape = event.keyCode == UInt16(kVK_Escape)
@@ -206,7 +212,7 @@ class RecorderNSView: NSView {
         }
 
         // Show current modifiers while recording
-        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let mods = event.modifierFlags.intersection(.shortcutModifiers)
         textField.stringValue = modifierSymbols(from: mods) + "..."
         textField.textColor = .labelColor
     }
@@ -218,19 +224,31 @@ class RecorderNSView: NSView {
         return super.resignFirstResponder()
     }
 
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .button }
+    override func accessibilityLabel() -> String? { "Record keyboard shortcut" }
+    override func accessibilityValue() -> Any? {
+        isRecording ? "Press shortcut" : (currentKeyCode == -1 ? "Not set" : textField.stringValue)
+    }
+    override func accessibilityPerformPress() -> Bool {
+        if !isRecording { startRecording() }
+        return true
+    }
+
     private func startRecording() {
         isRecording = true
         window?.makeFirstResponder(self)
         textField.stringValue = "Press shortcut..."
         textField.textColor = .labelColor
         delegate?.recorderDidStartRecording()
+        NSAccessibility.post(element: self, notification: .valueChanged)
     }
 
     private func stopRecording() {
         isRecording = false
-        window?.makeFirstResponder(nil)
         updateDisplayText()
         delegate?.recorderDidEndRecording()
+        NSAccessibility.post(element: self, notification: .valueChanged)
     }
 
     func updateDisplay(keyCode: Int, modifiers: Int, isRecording: Bool) {

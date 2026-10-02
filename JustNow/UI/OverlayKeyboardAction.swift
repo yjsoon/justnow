@@ -11,6 +11,7 @@ struct OverlayKeyboardState: Equatable {
     let isSearching: Bool
     let hasSearchQuery: Bool
     let isTextGrabActive: Bool
+    var isEditingText: Bool = false
 }
 
 enum OverlayKeyboardAction: Equatable {
@@ -40,13 +41,23 @@ func resolveOverlayKeyboardAction(
     dismissShortcutModifiers: Int,
     state: OverlayKeyboardState
 ) -> OverlayKeyboardAction {
-    let pressedModifiers = modifiers.intersection(.deviceIndependentFlagsMask)
+    let pressedModifiers = modifiers.intersection(.shortcutModifiers)
     let dismissModifiers = NSEvent.ModifierFlags(rawValue: UInt(dismissShortcutModifiers))
-        .intersection(.deviceIndependentFlagsMask)
+        .intersection(.shortcutModifiers)
     let matchesDismissShortcut = Int(keyCode) == dismissShortcutKeyCode && pressedModifiers == dismissModifiers
 
     if matchesDismissShortcut && keyCode != UInt16(kVK_Escape) {
         return .dismissOverlay
+    }
+
+    if state.isEditingText {
+        switch Int(keyCode) {
+        case kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow,
+             kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown:
+            return .passthrough
+        default:
+            break
+        }
     }
 
     switch keyCode {

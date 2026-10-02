@@ -225,7 +225,8 @@ class OverlayWindowController: NSObject {
 
         // Monitor keyboard events
         keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self = self, let vm = self.viewModel else { return event }
+            guard let self, let window = self.window,
+                  event.window === window, let vm = self.viewModel else { return event }
 
             let action = resolveOverlayKeyboardAction(
                 keyCode: event.keyCode,
@@ -236,7 +237,8 @@ class OverlayWindowController: NSObject {
                     isSearchAvailable: vm.isSearchAvailable,
                     isSearching: vm.isSearching,
                     hasSearchQuery: vm.hasSearchQuery,
-                    isTextGrabActive: vm.isTextGrabActive
+                    isTextGrabActive: vm.isTextGrabActive,
+                    isEditingText: (window.firstResponder as? NSTextView)?.isEditable == true
                 )
             )
 
@@ -283,11 +285,12 @@ class OverlayWindowController: NSObject {
         // Track ⌘ state so the instructions pill and drag handler can switch
         // between the user's default drag action and the alternate action.
         flagsChangedMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            guard let self, let window = self.window, event.window === window else { return event }
             // Only publish when the bit actually flips — Observation invalidates
             // subscribers on every assignment, equal-value writes included.
             let isHeld = event.modifierFlags.contains(.command)
-            if self?.viewModel?.isCommandHeld != isHeld {
-                self?.viewModel?.isCommandHeld = isHeld
+            if self.viewModel?.isCommandHeld != isHeld {
+                self.viewModel?.isCommandHeld = isHeld
             }
             return event
         }
@@ -295,7 +298,8 @@ class OverlayWindowController: NSObject {
         // Monitor scroll events
         timelineScrollAccumulator.reset()
         scrollEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-            guard let self = self, let vm = self.viewModel else { return event }
+            guard let self, let window = self.window,
+                  event.window === window, let vm = self.viewModel else { return event }
             guard timelineScrollDirection != .off else { return event }
 
             let delta = timelineScrollDirection.navigationDelta(

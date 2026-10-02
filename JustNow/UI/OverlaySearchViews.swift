@@ -178,6 +178,8 @@ private struct SearchingStatusBadge: View {
 }
 
 private struct SearchingRippleBar: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private let trackColor = Color.white.opacity(0.08)
     private let borderColor = Color.white.opacity(0.14)
     private let rippleColors = [
@@ -190,9 +192,9 @@ private struct SearchingRippleBar: View {
 
     var body: some View {
         GeometryReader { proxy in
-            TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { context in
                 let duration = 3.8
-                let progress = (context.date.timeIntervalSinceReferenceDate
+                let progress = reduceMotion ? 0.5 : (context.date.timeIntervalSinceReferenceDate
                     .truncatingRemainder(dividingBy: duration)) / duration
                 let glowWidth = max(proxy.size.width * 0.72, 44)
                 let travel = proxy.size.width + glowWidth
@@ -215,5 +217,6 @@ private struct SearchingRippleBar: View {
             }
         }
         .frame(height: height)
+        .accessibilityHidden(true)
     }
 }

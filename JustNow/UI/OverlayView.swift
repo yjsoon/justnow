@@ -21,6 +21,7 @@ private enum OverlayChromeMetrics {
 
 struct OverlayView: View {
     var viewModel: OverlayViewModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
@@ -55,7 +56,7 @@ struct OverlayView: View {
                 }
                     .padding(.top, 90)
                     .transition(.asymmetric(
-                        insertion: .move(edge: .top).combined(with: .opacity),
+                        insertion: reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity),
                         removal: .opacity
                     ))
                     .id(toast.id)
@@ -224,6 +225,7 @@ struct EmptyStateView: View {
 
 struct ContentAreaView: View {
     var viewModel: OverlayViewModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var displayedEntries: [TimelineEntry] { viewModel.displayedEntries }
     @State private var textGrabBannerState: TextGrabBannerState = .hint
@@ -234,7 +236,7 @@ struct ContentAreaView: View {
                 SearchBarView(viewModel: viewModel)
                     .padding(.top, OverlayChromeMetrics.searchBarTopPadding)
                     .padding(.horizontal, 200)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
             }
 
             centerContent
@@ -250,7 +252,7 @@ struct ContentAreaView: View {
             TimelineFooter(viewModel: viewModel, textGrabBannerState: textGrabBannerState)
                 .padding(.bottom, OverlayChromeMetrics.timelineFooterBottomPadding)
         }
-        .animation(.easeInOut(duration: 0.2), value: viewModel.isSearchAvailable && viewModel.isSearching)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: viewModel.isSearchAvailable && viewModel.isSearching)
         .task(id: viewModel.selectedFramePrefetchKey) {
             viewModel.prefetchImagesNearSelection()
         }

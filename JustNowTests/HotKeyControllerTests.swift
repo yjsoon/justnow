@@ -4,6 +4,15 @@ import XCTest
 @testable import JustNow
 
 final class HotKeyControllerTests: XCTestCase {
+    func testConflictsIgnoreStateFlagsButKeepShortcutModifiers() {
+        let command = Int(NSEvent.ModifierFlags.command.rawValue)
+        let withStateFlags = Int(NSEvent.ModifierFlags([.command, .capsLock, .numericPad, .function]).rawValue)
+        XCTAssertTrue(HotKeyController.conflicts(38, command, 38, withStateFlags))
+        XCTAssertFalse(HotKeyController.conflicts(38, command, 38, Int(NSEvent.ModifierFlags([.command, .shift]).rawValue)))
+        XCTAssertFalse(HotKeyController.conflicts(38, command, 35, withStateFlags))
+        XCTAssertFalse(HotKeyController.conflicts(-1, command, -1, withStateFlags))
+    }
+
     func testRegistrationPlanSkipsPauseHotKeyWhenItMatchesOverlayShortcut() {
         let modifiers = Int(UInt(NSEvent.ModifierFlags.command.rawValue))
         let configuration = HotKeyConfiguration(
