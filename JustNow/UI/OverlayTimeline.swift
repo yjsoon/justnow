@@ -77,6 +77,7 @@ struct TimelineSlider: View {
 struct TimelineFooter: View {
     var viewModel: OverlayViewModel
     let textGrabBannerState: TextGrabBannerState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var displayedEntries: [TimelineEntry] { viewModel.displayedEntries }
     private var frameCount: Int { displayedEntries.count }
@@ -88,11 +89,11 @@ struct TimelineFooter: View {
 
             if textGrabBannerState != .hint {
                 TextGrabToast(state: textGrabBannerState)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
             }
         }
         .frame(minHeight: 44)
-        .animation(.spring(response: 0.28, dampingFraction: 0.86), value: textGrabBannerState)
+        .animation(reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.28, dampingFraction: 0.86), value: textGrabBannerState)
     }
 
     @ViewBuilder

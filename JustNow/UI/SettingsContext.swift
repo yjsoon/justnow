@@ -11,7 +11,14 @@ import Sparkle
 final class SettingsContext {
     var frameBuffer: FrameBuffer?
     var launchAtLoginManager: LaunchAtLoginManager?
-    var updater: SPUUpdater?
+    var updater: SPUUpdater? {
+        didSet { observeUpdater() }
+    }
+    private(set) var automaticallyChecksForUpdates = false
+    private(set) var automaticallyDownloadsUpdates = false
+    private(set) var allowsAutomaticUpdates = false
+    private(set) var canCheckForUpdates = false
+    @ObservationIgnored private var updaterObservations: [NSKeyValueObservation] = []
     private let onCheckForUpdates: @MainActor () -> Void
     private let onShortcutChanged: @MainActor () -> Void
     private let onRelaunch: @MainActor () -> Void
@@ -30,6 +37,45 @@ final class SettingsContext {
         self.onCheckForUpdates = onCheckForUpdates
         self.onShortcutChanged = onShortcutChanged
         self.onRelaunch = onRelaunch
+        observeUpdater()
+    }
+
+    private func observeUpdater() {
+        updaterObservations.removeAll()
+        syncUpdaterState()
+        guard let updater else { return }
+        // Sparkle can change these outside Settings, including in its own
+        // permission dialog. Keep both Settings hosts on the same snapshot.
+        updaterObservations = [
+            \.automaticallyChecksForUpdates,
+            \.automaticallyDownloadsUpdates,
+            \.allowsAutomaticUpdates,
+            \.canCheckForUpdates
+        ].map { (keyPath: KeyPath<SPUUpdater, Bool>) in
+            updater.observe(keyPath, options: [.new]) { [weak self] observedUpdater, _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.updater === observedUpdater else { return }
+                    self.syncUpdaterState()
+                }
+            }
+        }
+    }
+
+    private func syncUpdaterState() {
+        automaticallyChecksForUpdates = updater?.automaticallyChecksForUpdates ?? false
+        automaticallyDownloadsUpdates = updater?.automaticallyDownloadsUpdates ?? false
+        allowsAutomaticUpdates = updater?.allowsAutomaticUpdates ?? false
+        canCheckForUpdates = updater?.canCheckForUpdates ?? false
+    }
+
+    func setAutomaticallyChecksForUpdates(_ enabled: Bool) {
+        updater?.automaticallyChecksForUpdates = enabled
+        syncUpdaterState()
+    }
+
+    func setAutomaticallyDownloadsUpdates(_ enabled: Bool) {
+        updater?.automaticallyDownloadsUpdates = enabled
+        syncUpdaterState()
     }
 
     func checkForUpdates() {

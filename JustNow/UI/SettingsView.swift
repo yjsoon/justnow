@@ -7,6 +7,7 @@ import SwiftUI
 import Sparkle
 import Foundation
 import AppKit
+import Combine
 
 struct SettingsView: View {
     @AppStorage(AppStorageKey.captureInterval) private var captureInterval: Double = AppStorageDefault.captureInterval
@@ -47,9 +48,6 @@ struct SettingsView: View {
     @State private var showClearConfirmation = false
     @State private var telemetrySnapshot: SearchTelemetrySnapshot = .empty
     @State private var isSearchDiagnosticsExpanded = false
-    @State private var automaticallyChecksForUpdates = false
-    @State private var automaticallyDownloadsUpdates = false
-    @State private var allowsAutomaticUpdates = false
     @State private var launchAtLoginEnabled = false
     @State private var launchAtLoginAlertMessage: String?
     @State private var clearHistoryAlertMessage: String?
@@ -68,10 +66,10 @@ struct SettingsView: View {
         .task(id: frameBufferIdentity) {
             await updateStorageInfo()
         }
-        .task(id: updaterIdentity) {
-            syncUpdaterState()
-        }
         .task(id: launchAtLoginIdentity) {
+            syncLaunchAtLoginState()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             syncLaunchAtLoginState()
         }
         .task {
@@ -161,12 +159,12 @@ struct SettingsView: View {
                 Button("Check for Updates…") {
                     context.checkForUpdates()
                 }
-                .disabled(!(context.updater?.canCheckForUpdates ?? false))
+                .disabled(!context.canCheckForUpdates)
 
                 Toggle("Check for updates automatically", isOn: automaticChecksBinding)
 
                 Toggle("Download updates automatically", isOn: automaticDownloadsBinding)
-                    .disabled(!allowsAutomaticUpdates)
+                    .disabled(!context.allowsAutomaticUpdates)
 
                 Text("JustNow uses Sparkle to deliver signed updates from the public appcast at justnow.tk.sg.")
                     .font(.caption)
@@ -658,10 +656,6 @@ struct SettingsView: View {
         context.frameBuffer.map(ObjectIdentifier.init)
     }
 
-    private var updaterIdentity: ObjectIdentifier? {
-        context.updater.map(ObjectIdentifier.init)
-    }
-
     private var launchAtLoginIdentity: ObjectIdentifier? {
         context.launchAtLoginManager.map(ObjectIdentifier.init)
     }
@@ -717,37 +711,16 @@ struct SettingsView: View {
 
     private var automaticChecksBinding: Binding<Bool> {
         Binding(
-            get: { automaticallyChecksForUpdates },
-            set: { newValue in
-                automaticallyChecksForUpdates = newValue
-                context.updater?.automaticallyChecksForUpdates = newValue
-                syncUpdaterState()
-            }
+            get: { context.automaticallyChecksForUpdates },
+            set: context.setAutomaticallyChecksForUpdates
         )
     }
 
     private var automaticDownloadsBinding: Binding<Bool> {
         Binding(
-            get: { automaticallyDownloadsUpdates },
-            set: { newValue in
-                automaticallyDownloadsUpdates = newValue
-                context.updater?.automaticallyDownloadsUpdates = newValue
-                syncUpdaterState()
-            }
+            get: { context.automaticallyDownloadsUpdates },
+            set: context.setAutomaticallyDownloadsUpdates
         )
-    }
-
-    private func syncUpdaterState() {
-        guard let updater = context.updater else {
-            automaticallyChecksForUpdates = false
-            automaticallyDownloadsUpdates = false
-            allowsAutomaticUpdates = false
-            return
-        }
-
-        automaticallyChecksForUpdates = updater.automaticallyChecksForUpdates
-        automaticallyDownloadsUpdates = updater.automaticallyDownloadsUpdates
-        allowsAutomaticUpdates = updater.allowsAutomaticUpdates
     }
 
     private func syncLaunchAtLoginState() {
@@ -814,7 +787,7 @@ struct SettingsView: View {
                 let comparison = shortcuts[comparisonIndex]
                 guard comparison.keyCode != -1 else { continue }
 
-                if current.keyCode == comparison.keyCode && current.modifiers == comparison.modifiers {
+                if HotKeyController.conflicts(current.keyCode, current.modifiers, comparison.keyCode, comparison.modifiers) {
                     return "\(current.label) and \(comparison.label) should not share the same shortcut."
                 }
             }

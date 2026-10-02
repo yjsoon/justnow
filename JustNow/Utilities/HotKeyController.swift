@@ -112,7 +112,8 @@ final class HotKeyController {
         lhsKeyCode != -1
             && rhsKeyCode != -1
             && lhsKeyCode == rhsKeyCode
-            && lhsModifiers == rhsModifiers
+            && NSEvent.ModifierFlags(rawValue: UInt(lhsModifiers)).intersection(.shortcutModifiers)
+                == NSEvent.ModifierFlags(rawValue: UInt(rhsModifiers)).intersection(.shortcutModifiers)
     }
 
     private func makeHotKey(

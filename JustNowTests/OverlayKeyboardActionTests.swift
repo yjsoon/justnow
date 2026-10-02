@@ -4,6 +4,50 @@ import XCTest
 @testable import JustNow
 
 final class OverlayKeyboardActionTests: XCTestCase {
+    func testTextEditingKeepsNavigationKeysButUnfocusedSearchStillNavigatesFrames() {
+        let editing = OverlayKeyboardState(
+            isSearchAvailable: true, isSearching: true, hasSearchQuery: true,
+            isTextGrabActive: false, isEditingText: true
+        )
+        var unfocused = editing
+        unfocused.isEditingText = false
+        let modifiers: [NSEvent.ModifierFlags] = [[], .shift, .option, [.option, .shift], .command, [.command, .shift]]
+        for key in [kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow, kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown] {
+            for flags in modifiers {
+                XCTAssertEqual(resolveOverlayKeyboardAction(
+                    keyCode: UInt16(key), modifiers: flags,
+                    dismissShortcutKeyCode: kVK_Escape, dismissShortcutModifiers: 0,
+                    state: editing
+                ), .passthrough)
+            }
+        }
+        XCTAssertEqual(resolveOverlayKeyboardAction(
+            keyCode: UInt16(kVK_LeftArrow), modifiers: .option,
+            dismissShortcutKeyCode: kVK_Escape, dismissShortcutModifiers: 0,
+            state: unfocused
+        ), .jumpLeft)
+        XCTAssertEqual(resolveOverlayKeyboardAction(
+            keyCode: UInt16(kVK_Escape), modifiers: [],
+            dismissShortcutKeyCode: kVK_Escape, dismissShortcutModifiers: 0,
+            state: editing
+        ), .clearSearch)
+    }
+
+    func testDismissShortcutIgnoresStateFlagsInBothSavedAndPressedModifiers() {
+        for (pressed, saved) in [
+            (NSEvent.ModifierFlags([.command, .capsLock]), NSEvent.ModifierFlags.command),
+            (.command, [.command, .capsLock, .numericPad, .function])
+        ] {
+            XCTAssertEqual(resolveOverlayKeyboardAction(
+                keyCode: UInt16(kVK_ANSI_J),
+                modifiers: pressed,
+                dismissShortcutKeyCode: Int(kVK_ANSI_J),
+                dismissShortcutModifiers: Int(saved.rawValue),
+                state: .init(isSearchAvailable: true, isSearching: false, hasSearchQuery: false, isTextGrabActive: false)
+            ), .dismissOverlay)
+        }
+    }
+
     func testDismissShortcutDismissesWhenNotEscape() {
         let action = resolveOverlayKeyboardAction(
             keyCode: UInt16(kVK_ANSI_J),
