@@ -1001,10 +1001,18 @@ class OverlayViewModel {
         let hasActiveDisplay = activeDisplayID != nil
 
         searchTask = Task {
+            let startedAt = ProcessInfo.processInfo.systemUptime
             let matchedIDs: [UUID]
             do {
-                matchedIDs = try await cache.searchFrameIDs(matching: request.query, limit: 10_000, since: searchCutoff)
+                // The leased snapshot, not an arbitrary database cap, defines
+                // the result set. Filtering happens below because one physical
+                // frame can represent several logical timeline spans.
+                matchedIDs = try await cache.searchFrameIDs(matching: request.query, limit: .max, since: searchCutoff)
+            } catch is CancellationError {
+                return
             } catch {
+                let cacheMilliseconds = Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000)
+                let sqliteCode = (error as? TextCacheError)?.sqliteResultCode.map { String($0) } ?? "none"
                 await MainActor.run {
                     guard !Task.isCancelled else { return }
                     searchResults = []
@@ -1012,7 +1020,7 @@ class OverlayViewModel {
                     resolvedSearchRequest = nil
                     failedSearchRequest = request
                     frameBuffer.logSearchDiagnostics(
-                        "outcome=failed scope=\(searchScopeLabel) activeDisplay=\(hasActiveDisplay)"
+                        "outcome=failed scope=\(searchScopeLabel) activeDisplay=\(hasActiveDisplay) cacheMs=\(cacheMilliseconds) sqliteCode=\(sqliteCode)"
                     )
                 }
                 return
@@ -1020,17 +1028,28 @@ class OverlayViewModel {
 
             guard !Task.isCancelled else { return }
 
+            // Includes actor queueing and SQL, not just SQLite execution time.
+            let cacheFinishedAt = ProcessInfo.processInfo.systemUptime
+            let cacheMilliseconds = Int((cacheFinishedAt - startedAt) * 1_000)
             let matchedIDSet = Set(matchedIDs)
             let leasedMatches = leasedEntries.filter { matchedIDSet.contains($0.frame.id) }
+            var timeDropped = 0
+            var displayDropped = 0
             let results = leasedMatches.filter { entry in
                 if let searchCutoff, timelineSpanBounds(for: entry).end < searchCutoff {
+                    timeDropped += 1
                     return false
                 }
                 if let activeDisplayID {
                     if let entryDisplayID = entry.span.displayID {
-                        return entryDisplayID == activeDisplayID
+                        if entryDisplayID != activeDisplayID {
+                            displayDropped += 1
+                            return false
+                        }
+                    } else if !includeLegacy {
+                        displayDropped += 1
+                        return false
                     }
-                    return includeLegacy
                 }
                 return true
             }
@@ -1040,6 +1059,10 @@ class OverlayViewModel {
             let finalResults = results
             let indexHitCount = matchedIDs.count
             let leasedMatchCount = leasedMatches.count
+            let unleasedHits = matchedIDSet.count - Set(leasedMatches.map(\.frame.id)).count
+            let filterMilliseconds = Int((ProcessInfo.processInfo.systemUptime - cacheFinishedAt) * 1_000)
+            let timeDropCount = timeDropped
+            let displayDropCount = displayDropped
             await MainActor.run {
                 if !Task.isCancelled {
                     let previousSpanID = selectedSpanID
@@ -1048,7 +1071,7 @@ class OverlayViewModel {
                     isSearchInProgress = false
                     resolvedSearchRequest = request
                     frameBuffer.logSearchDiagnostics(
-                        "outcome=ok scope=\(searchScopeLabel) activeDisplay=\(hasActiveDisplay) indexHits=\(indexHitCount) leasedMatches=\(leasedMatchCount) filteredMatches=\(finalResults.count)"
+                        "outcome=ok scope=\(searchScopeLabel) activeDisplay=\(hasActiveDisplay) indexHits=\(indexHitCount) leasedMatches=\(leasedMatchCount) filteredMatches=\(finalResults.count) unleasedHits=\(unleasedHits) timeDropped=\(timeDropCount) displayDropped=\(displayDropCount) cacheMs=\(cacheMilliseconds) filterMs=\(filterMilliseconds)"
                     )
                     reconcileSelection(
                         in: finalResults,

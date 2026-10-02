@@ -1,5 +1,6 @@
 import CoreGraphics
 import Observation
+import SQLite3
 import XCTest
 @testable import JustNow
 
@@ -927,6 +928,65 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertEqual(viewModel.searchResults.map(\.span.id), [recent.span.id])
     }
 
+    /// Search must filter the immutable leased snapshot after collecting all
+    /// matching IDs. More than the former 10,000-row global cap from another
+    /// display cannot hide the selected display's matching timeline spans.
+    func testSearchSelectedDisplayIsNotTruncatedByMoreThanTenThousandOtherDisplayMatches() async throws {
+        let base = Date(timeIntervalSinceReferenceDate: 10_000)
+        let displayA = DisplayInfo(id: UUID(), displayID: 1, name: "A")
+        let displayB = DisplayInfo(id: UUID(), displayID: 2, name: "B")
+        let image = try XCTUnwrap(TestImageFactory.makeSolidImage(width: 8, height: 8, level: 97))
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OverlayTimelineTests-\(UUID().uuidString)", isDirectory: true)
+        temporaryDirectories.append(directory)
+        let otherEntries = (0...10_000).map { index in
+            makeEntry(
+                start: base.addingTimeInterval(TimeInterval(20_000 + index)),
+                end: base.addingTimeInterval(TimeInterval(20_000 + index)),
+                displayID: displayA.id
+            )
+        }
+        let selectedEntries = (0..<40).map { index in
+            makeEntry(
+                start: base.addingTimeInterval(TimeInterval(index)),
+                end: base.addingTimeInterval(TimeInterval(index)),
+                displayID: displayB.id
+            )
+        }
+        let allEntries = otherEntries + selectedEntries
+        let buffer = try await FrameBuffer(
+            retentionPolicy: .default24Hours,
+            storageDirectory: directory,
+            diagnosticsLog: nil,
+            frameRepository: OverlayTimelineRepositoryProbe(entries: allEntries, image: image)
+        )
+        try seedSearchRows(
+            allEntries,
+            text: "display-cap-regression",
+            in: directory
+        )
+        let viewModel = OverlayViewModel(
+            timelineEntries: selectedEntries,
+            leasedTimelineEntries: allEntries,
+            frameBuffer: buffer,
+            recentTimelineWindow: 300,
+            rewindHistoryOption: .twentyFourHours,
+            availableDisplays: [displayA, displayB],
+            activeDisplay: displayB,
+            primaryDisplayID: displayA.id,
+            timelineReferenceDate: base.addingTimeInterval(40_000),
+            onDismiss: {},
+            onOpenSettings: {}
+        )
+
+        viewModel.isSearching = true
+        viewModel.searchQuery = "display-cap"
+        viewModel.performSearch(immediately: true)
+        try await waitUntil { !viewModel.isSearchLoading }
+
+        XCTAssertEqual(viewModel.searchResults.map(\.span.id), selectedEntries.map(\.span.id))
+    }
+
     func testFutureSpanDoesNotShiftOtherDisplayRetentionOnSwitch() async throws {
         let semanticNow = Date(timeIntervalSinceReferenceDate: 10_000)
         let displayA = DisplayInfo(id: UUID(), displayID: 1, name: "A")
@@ -1267,7 +1327,14 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertTrue(message.contains("indexHits=3"))
         XCTAssertTrue(message.contains("leasedMatches=2"))
         XCTAssertTrue(message.contains("filteredMatches=1"))
+        XCTAssertTrue(message.contains("unleasedHits=1"))
+        XCTAssertTrue(message.contains("timeDropped=1"))
+        XCTAssertTrue(message.contains("displayDropped=0"))
+        XCTAssertTrue(message.contains("cacheMs="))
+        XCTAssertTrue(message.contains("filterMs="))
         XCTAssertFalse(message.contains("needle"))
+        XCTAssertFalse(message.contains(ghostFrameID.uuidString))
+        XCTAssertFalse(message.contains(directory.path))
     }
 
     private func makeBufferWithSymlinkedTextCache(
@@ -1329,6 +1396,37 @@ final class OverlayTimelineTests: XCTestCase {
             onDismiss: {},
             onOpenSettings: {}
         )
+    }
+
+    private func seedSearchRows(_ entries: [TimelineEntry], text: String, in directory: URL) throws {
+        var connection: OpaquePointer?
+        let url = directory.appendingPathComponent("text_cache.sqlite")
+        guard sqlite3_open_v2(url.path, &connection, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK,
+              let connection else {
+            throw TextCacheError.sqlite("Failed to open synthetic search store")
+        }
+        defer { sqlite3_close(connection) }
+        sqlite3_busy_timeout(connection, 2_000)
+        XCTAssertEqual(sqlite3_exec(connection, "BEGIN IMMEDIATE;", nil, nil, nil), SQLITE_OK)
+        defer { _ = sqlite3_exec(connection, "ROLLBACK;", nil, nil, nil) }
+        var primary: OpaquePointer?
+        var fts: OpaquePointer?
+        XCTAssertEqual(sqlite3_prepare_v2(connection, "INSERT INTO frame_text(frame_id, timestamp, text) VALUES (?, ?, ?);", -1, &primary, nil), SQLITE_OK)
+        XCTAssertEqual(sqlite3_prepare_v2(connection, "INSERT INTO frame_text_fts(frame_id, text) VALUES (?, ?);", -1, &fts, nil), SQLITE_OK)
+        defer { sqlite3_finalize(primary); sqlite3_finalize(fts) }
+        for entry in entries {
+            let id = entry.frame.id.uuidString
+            sqlite3_bind_text(primary, 1, id, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_double(primary, 2, timelineSpanBounds(for: entry).end.timeIntervalSince1970)
+            sqlite3_bind_text(primary, 3, text, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            XCTAssertEqual(sqlite3_step(primary), SQLITE_DONE)
+            sqlite3_reset(primary); sqlite3_clear_bindings(primary)
+            sqlite3_bind_text(fts, 1, id, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_text(fts, 2, text, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            XCTAssertEqual(sqlite3_step(fts), SQLITE_DONE)
+            sqlite3_reset(fts); sqlite3_clear_bindings(fts)
+        }
+        XCTAssertEqual(sqlite3_exec(connection, "COMMIT;", nil, nil, nil), SQLITE_OK)
     }
 
     private func waitUntil(

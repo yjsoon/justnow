@@ -8,16 +8,53 @@ import SQLite3
 import os.log
 
 enum TextCacheError: LocalizedError {
-    case sqlite(String)
+    case sqlite(String, code: Int32? = nil)
 
     var errorDescription: String? {
         switch self {
-        case .sqlite(let message): message
+        case .sqlite(let message, _): message
+        }
+    }
+
+    var sqliteResultCode: Int32? {
+        switch self {
+        case .sqlite(_, let code): code
         }
     }
 }
 
 typealias TextCacheClearHook = @Sendable () throws -> Void
+
+/// Shared with SQLite's synchronous progress callback so cancellation can
+/// interrupt a long-running statement while the actor is busy stepping it.
+nonisolated private final class TextCacheQueryCancellationState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    let onProgress: (@Sendable () -> Void)?
+
+    init(onProgress: (@Sendable () -> Void)? = nil) {
+        self.onProgress = onProgress
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+
+    func isCancelled() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+}
+
+nonisolated private func textCacheProgressHandler(_ context: UnsafeMutableRawPointer?) -> Int32 {
+    guard let context else { return 0 }
+    let state = Unmanaged<TextCacheQueryCancellationState>.fromOpaque(context).takeUnretainedValue()
+    state.onProgress?()
+    return state.isCancelled() ? 1 : 0
+}
 
 /// Caches OCR-extracted text for frames to speed up subsequent searches
 actor TextCache {
@@ -34,6 +71,19 @@ actor TextCache {
     /// Monotonic uptime of the last reconnect attempt (wall-clock Date could
     /// roll back and suppress retries for hours).
     private var lastReconnectAttempt: TimeInterval?
+
+    #if DEBUG
+    private var queryProgressHookForTesting: (@Sendable () -> Void)?
+    private var substringSearchCount = 0
+
+    func setQueryProgressHookForTesting(_ hook: (@Sendable () -> Void)?) {
+        queryProgressHookForTesting = hook
+    }
+
+    func substringSearchCountForTesting() -> Int {
+        substringSearchCount
+    }
+    #endif
 
     private static let inClauseChunkSize = 400
     /// Minimum spacing between lazy reconnect attempts so a persistently
@@ -94,6 +144,27 @@ actor TextCache {
     func setText(_ text: String, for frameID: UUID, timestamp: Date = Date()) {
         do {
             try withTransaction {
+                // `frame_id` is unindexed in the FTS table, so deleting an
+                // absent entry scans the entire index. The primary table is
+                // authoritative: startup repair removes FTS drift, and all
+                // normal mutations update both tables in this transaction.
+                let hadPriorText = try withPreparedStatement(
+                    "SELECT 1 FROM frame_text WHERE frame_id = ? LIMIT 1;"
+                ) { statement in
+                    guard bindFrameID(frameID, to: statement) else {
+                        throw sqliteError(message: "Failed to check existing OCR text")
+                    }
+
+                    switch sqlite3_step(statement) {
+                    case SQLITE_ROW:
+                        return true
+                    case SQLITE_DONE:
+                        return false
+                    default:
+                        throw sqliteError(message: "Failed to check existing OCR text")
+                    }
+                }
+
                 try withPreparedStatement(
                     """
                     INSERT INTO frame_text (frame_id, timestamp, text)
@@ -111,10 +182,12 @@ actor TextCache {
                     }
                 }
 
-                try withPreparedStatement("DELETE FROM frame_text_fts WHERE frame_id = ?;") { deleteFTS in
-                    guard bindFrameID(frameID, to: deleteFTS),
-                          sqlite3_step(deleteFTS) == SQLITE_DONE else {
-                        throw sqliteError(message: "Failed to delete prior FTS entry")
+                if hadPriorText {
+                    try withPreparedStatement("DELETE FROM frame_text_fts WHERE frame_id = ?;") { deleteFTS in
+                        guard bindFrameID(frameID, to: deleteFTS),
+                              sqlite3_step(deleteFTS) == SQLITE_DONE else {
+                            throw sqliteError(message: "Failed to delete prior FTS entry")
+                        }
                     }
                 }
 
@@ -241,88 +314,49 @@ actor TextCache {
     /// Search indexed OCR text and return matching frame IDs ordered by recency.
     /// Throws when the store is unavailable or a query fails; a genuine empty
     /// match is a successful empty result, never an error.
-    func searchFrameIDs(matching query: String, limit: Int, since: Date? = nil) throws -> [UUID] {
+    func searchFrameIDs(matching query: String, limit: Int, since: Date? = nil) async throws -> [UUID] {
         guard limit > 0 else {
             return []
         }
+        try Task.checkCancellation()
 
         let safeLimit = Int32(clamping: limit)
         let sinceEpoch = since?.timeIntervalSince1970
 
-        let needsUnsegmentedFallback = query.contains { !$0.isASCII }
+        let matchQuery = ftsQuery(from: query)
+        let literalTokens = query
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty && !$0.allSatisfy(\.isASCII) }
+        let asciiMatchQuery = ftsQuery(from: query, including: { $0.allSatisfy(\.isASCII) })
 
         try reconnectIfNeeded()
         guard db != nil else {
             throw sqliteError(message: "Text cache database is unavailable")
         }
 
-        if let matchQuery = ftsQuery(from: query) {
-            let ids = try searchFrameIDsUsingFTS(
-                matchQuery,
-                limit: safeLimit,
-                sinceEpoch: sinceEpoch
-            )
-            if !ids.isEmpty || !needsUnsegmentedFallback {
-                return ids
-            }
-        }
-
-        let fallbackSQL =
-            sinceEpoch == nil
-            ?
-            """
-            SELECT frame_id
-            FROM frame_text
-            WHERE instr(lower(text), lower(?)) > 0
-            ORDER BY timestamp DESC
-            LIMIT ?;
-            """
-            :
-            """
-            SELECT frame_id
-            FROM frame_text
-            WHERE instr(lower(text), lower(?)) > 0
-              AND timestamp >= ?
-            ORDER BY timestamp DESC
-            LIMIT ?;
-            """
-
-        return try withPreparedStatement(fallbackSQL) { fallback in
-            var fallbackIDs: [UUID] = []
-            var bindIndex: Int32 = 1
-            guard bindText(query, to: fallback, index: bindIndex) else {
-                throw sqliteError(message: "Text search query failed to bind")
-            }
-            bindIndex += 1
-
-            if let sinceEpoch {
-                guard bindDouble(sinceEpoch, to: fallback, index: bindIndex) else {
-                    throw sqliteError(message: "Text search query failed to bind")
+        #if DEBUG
+        let cancellation = TextCacheQueryCancellationState(onProgress: queryProgressHookForTesting)
+        #else
+        let cancellation = TextCacheQueryCancellationState()
+        #endif
+        do {
+            return try await withTaskCancellationHandler(operation: {
+                try withQueryCancellation(cancellation) {
+                    try searchFrameIDs(
+                        query: query,
+                        matchQuery: matchQuery,
+                        includesSubstringFallback: !literalTokens.isEmpty || matchQuery == nil,
+                        literalTokens: literalTokens,
+                        asciiMatchQuery: asciiMatchQuery,
+                        limit: safeLimit,
+                        sinceEpoch: sinceEpoch
+                    )
                 }
-                bindIndex += 1
-            }
-
-            guard bindInt32(safeLimit, to: fallback, index: bindIndex) else {
-                throw sqliteError(message: "Text search query failed to bind")
-            }
-
-            while true {
-                let stepResult = sqlite3_step(fallback)
-                if stepResult == SQLITE_ROW {
-                    guard let cText = sqlite3_column_text(fallback, 0) else { continue }
-                    let raw = String(cString: cText)
-                    if let id = UUID(uuidString: raw) {
-                        fallbackIDs.append(id)
-                    }
-                    continue
-                }
-                guard stepResult == SQLITE_DONE else {
-                    throw sqliteError(message: "Text search query failed")
-                }
-                break
-            }
-
-            return fallbackIDs
+            }, onCancel: {
+                cancellation.cancel()
+            })
+        } catch where cancellation.isCancelled() || Task.isCancelled {
+            throw CancellationError()
         }
     }
 
@@ -757,72 +791,136 @@ actor TextCache {
         sqlite3_bind_int(statement, index, value) == SQLITE_OK
     }
 
-    private func searchFrameIDsUsingFTS(
-        _ matchQuery: String,
+    private func withQueryCancellation<T>(
+        _ cancellation: TextCacheQueryCancellationState,
+        _ body: () throws -> T
+    ) throws -> T {
+        guard let db else { throw sqliteError(message: "Database is not open") }
+        sqlite3_progress_handler(
+            db,
+            1_000,
+            textCacheProgressHandler,
+            Unmanaged.passUnretained(cancellation).toOpaque()
+        )
+        defer { sqlite3_progress_handler(db, 0, nil, nil) }
+        try Task.checkCancellation()
+        return try body()
+    }
+
+    private func searchFrameIDs(
+        query: String,
+        matchQuery: String?,
+        includesSubstringFallback: Bool,
+        literalTokens: [String],
+        asciiMatchQuery: String?,
         limit: Int32,
         sinceEpoch: TimeInterval?
     ) throws -> [UUID] {
-        try withPreparedStatement(
-            sinceEpoch == nil
-                ?
+        let timestampPredicate = sinceEpoch == nil ? "" : " AND frame_text.timestamp >= ?"
+        var sources: [String] = []
+        if matchQuery != nil {
+            sources.append(
                 """
-                SELECT frame_text.frame_id
+                SELECT frame_text.frame_id, frame_text.timestamp
                 FROM frame_text_fts
                 JOIN frame_text ON frame_text.frame_id = frame_text_fts.frame_id
-                WHERE frame_text_fts MATCH ?
-                ORDER BY frame_text.timestamp DESC
-                LIMIT ?;
+                WHERE frame_text_fts MATCH ?\(timestampPredicate)
                 """
-                :
-                """
-                SELECT frame_text.frame_id
-                FROM frame_text_fts
-                JOIN frame_text ON frame_text.frame_id = frame_text_fts.frame_id
-                WHERE frame_text_fts MATCH ?
-                  AND frame_text.timestamp >= ?
-                ORDER BY frame_text.timestamp DESC
-                LIMIT ?;
-                """
-        ) { statement in
-            var ids: [UUID] = []
-            var bindIndex: Int32 = 1
-            guard bindText(matchQuery, to: statement, index: bindIndex) else {
-                throw sqliteError(message: "FTS text search query failed to bind")
+            )
+        }
+        if includesSubstringFallback {
+            #if DEBUG
+            substringSearchCount += 1
+            #endif
+            let literalPredicates: String
+            if literalTokens.isEmpty {
+                // Preserve the established punctuation-only literal search.
+                literalPredicates = "instr(lower(text), lower(?)) > 0"
+            } else {
+                literalPredicates = Array(repeating: "instr(lower(text), lower(?)) > 0", count: literalTokens.count)
+                    .joined(separator: " AND ")
             }
-            bindIndex += 1
-
-            if let sinceEpoch {
-                guard bindDouble(sinceEpoch, to: statement, index: bindIndex) else {
-                    throw sqliteError(message: "FTS text search query failed to bind")
+            let asciiPredicate = asciiMatchQuery == nil
+                ? ""
+                : " AND frame_id IN (SELECT frame_id FROM frame_text_fts WHERE frame_text_fts MATCH ?)"
+            sources.append(
+                """
+                SELECT frame_text.frame_id, frame_text.timestamp
+                FROM frame_text
+                WHERE \(literalPredicates)\(asciiPredicate)\(timestampPredicate)
+                """
+            )
+        }
+        let sql = "SELECT frame_id FROM (\(sources.joined(separator: " UNION "))) ORDER BY timestamp DESC LIMIT ?;"
+        return try withPreparedStatement(sql) { statement in
+            var bindIndex: Int32 = 1
+            if let matchQuery {
+                guard bindText(matchQuery, to: statement, index: bindIndex) else {
+                    throw sqliteError(message: "Text search query failed to bind")
                 }
                 bindIndex += 1
-            }
-
-            guard bindInt32(limit, to: statement, index: bindIndex) else {
-                throw sqliteError(message: "FTS text search query failed to bind")
-            }
-
-            while true {
-                let stepResult = sqlite3_step(statement)
-                if stepResult == SQLITE_ROW {
-                    guard let cText = sqlite3_column_text(statement, 0) else { continue }
-                    let raw = String(cString: cText)
-                    if let id = UUID(uuidString: raw) {
-                        ids.append(id)
+                if let sinceEpoch {
+                    guard bindDouble(sinceEpoch, to: statement, index: bindIndex) else {
+                        throw sqliteError(message: "Text search query failed to bind")
                     }
-                    continue
+                    bindIndex += 1
                 }
-                guard stepResult == SQLITE_DONE else {
-                    throw sqliteError(message: "FTS text search query failed")
-                }
-                break
             }
+            if includesSubstringFallback {
+                if literalTokens.isEmpty {
+                    guard bindText(query, to: statement, index: bindIndex) else {
+                        throw sqliteError(message: "Text search query failed to bind")
+                    }
+                    bindIndex += 1
+                } else {
+                    for token in literalTokens {
+                        guard bindText(token, to: statement, index: bindIndex) else {
+                            throw sqliteError(message: "Text search query failed to bind")
+                        }
+                        bindIndex += 1
+                    }
+                }
+                if let asciiMatchQuery {
+                    guard bindText(asciiMatchQuery, to: statement, index: bindIndex) else {
+                        throw sqliteError(message: "Text search query failed to bind")
+                    }
+                    bindIndex += 1
+                }
+                if let sinceEpoch {
+                    guard bindDouble(sinceEpoch, to: statement, index: bindIndex) else {
+                        throw sqliteError(message: "Text search query failed to bind")
+                    }
+                    bindIndex += 1
+                }
+            }
+            guard bindInt32(limit, to: statement, index: bindIndex) else {
+                throw sqliteError(message: "Text search query failed to bind")
+            }
+            return try readFrameIDs(from: statement, errorMessage: "Text search query failed")
+        }
+    }
+
+    private func readFrameIDs(from statement: OpaquePointer, errorMessage: String) throws -> [UUID] {
+        var ids: [UUID] = []
+        while true {
+            let stepResult = sqlite3_step(statement)
+            if stepResult == SQLITE_ROW {
+                guard let cText = sqlite3_column_text(statement, 0) else { continue }
+                if let id = UUID(uuidString: String(cString: cText)) {
+                    ids.append(id)
+                }
+                continue
+            }
+            guard stepResult == SQLITE_DONE else { throw sqliteError(message: errorMessage) }
             return ids
         }
     }
 
-    private func ftsQuery(from query: String) -> String? {
-        let tokens = SearchQueryTokeniser.tokens(from: query)
+    private func ftsQuery(
+        from query: String,
+        including predicate: (String) -> Bool = { _ in true }
+    ) -> String? {
+        let tokens = SearchQueryTokeniser.tokens(from: query).filter(predicate)
         guard !tokens.isEmpty else { return nil }
 
         return tokens
@@ -835,10 +933,11 @@ actor TextCache {
 
     private static func sqliteError(message: String, on db: OpaquePointer?) -> TextCacheError {
         guard let db else { return .sqlite(message) }
+        let code = sqlite3_extended_errcode(db)
         if let cText = sqlite3_errmsg(db) {
-            return .sqlite("\(message) (\(String(cString: cText)))")
+            return .sqlite("\(message) (\(String(cString: cText)))", code: code)
         }
-        return .sqlite(message)
+        return .sqlite(message, code: code)
     }
 
     private func sqliteError(message: String) -> TextCacheError {

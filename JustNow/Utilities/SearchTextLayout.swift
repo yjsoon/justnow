@@ -72,8 +72,14 @@ nonisolated struct SearchTextLayout: Codable, Sendable {
 
     private func tokensMatch(_ candidateTokens: [String], anyOf queryTokens: [String]) -> Bool {
         for candidate in candidateTokens {
-            for query in queryTokens where candidate.hasPrefix(query) {
-                return true
+            for query in queryTokens {
+                // FTS accepts accent-insensitive prefixes. Non-ASCII queries
+                // also support substring search for unsegmented text. Match
+                // each word here: a hit elsewhere must not suppress its box.
+                if candidate.range(of: query, options: [.anchored, .diacriticInsensitive]) != nil
+                    || (query.contains { !$0.isASCII } && candidate.contains(query)) {
+                    return true
+                }
             }
         }
         return false

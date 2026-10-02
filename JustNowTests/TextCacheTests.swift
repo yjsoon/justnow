@@ -73,6 +73,89 @@ final class TextCacheTests: XCTestCase {
         XCTAssertEqual(count, 1)
     }
 
+    /// The first write can skip the expensive FTS delete only because startup
+    /// repair removes any FTS-only row before the cache accepts new writes.
+    func testStartupRepairRemovesOrphanedFTSRowBeforeFirstPrimaryWrite() async throws {
+        let frameID = UUID()
+        do {
+            let cache = TextCache(directory: directory)
+            _ = await cache.count
+        }
+
+        let databaseURL = directory.appendingPathComponent("text_cache.sqlite")
+        do {
+            var connection: OpaquePointer?
+            guard sqlite3_open_v2(databaseURL.path, &connection, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK,
+                  let connection else {
+                XCTFail("Failed to open test cache for FTS drift")
+                return
+            }
+            defer { sqlite3_close(connection) }
+            sqlite3_busy_timeout(connection, 2_000)
+
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(
+                connection,
+                "INSERT INTO frame_text_fts(frame_id, text) VALUES (?, ?);",
+                -1,
+                &statement,
+                nil
+            ) == SQLITE_OK, let statement else {
+                XCTFail("Failed to prepare orphaned FTS insert")
+                return
+            }
+            defer { sqlite3_finalize(statement) }
+            sqlite3_bind_text(statement, 1, frameID.uuidString, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_text(statement, 2, "stale orphan", -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            XCTAssertEqual(sqlite3_step(statement), SQLITE_DONE)
+        }
+
+        let repaired = TextCache(directory: directory)
+        await repaired.setText("fresh content", for: frameID)
+
+        let staleHits = try await repaired.searchFrameIDs(matching: "stale", limit: 10)
+        let freshHits = try await repaired.searchFrameIDs(matching: "fresh", limit: 10)
+        XCTAssertTrue(staleHits.isEmpty)
+        XCTAssertEqual(freshHits, [frameID])
+    }
+
+    func testEmptyTextOverwriteAndRemoveReinsertKeepOneFTSRow() async throws {
+        let cache = TextCache(directory: directory)
+        let frameID = UUID()
+        await cache.setText("", for: frameID)
+        await cache.setText("first contents", for: frameID)
+        await cache.removeText(for: frameID)
+        await cache.setText("", for: frameID)
+        await cache.setText("replacement contents", for: frameID)
+
+        let staleHits = try await cache.searchFrameIDs(matching: "first", limit: 10)
+        let freshHits = try await cache.searchFrameIDs(matching: "replacement", limit: 10)
+        XCTAssertTrue(staleHits.isEmpty)
+        XCTAssertEqual(freshHits, [frameID])
+
+        var connection: OpaquePointer?
+        let url = directory.appendingPathComponent("text_cache.sqlite")
+        guard sqlite3_open_v2(url.path, &connection, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+              let connection else {
+            XCTFail("Failed to open synthetic search store")
+            return
+        }
+        defer { sqlite3_close(connection) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            connection,
+            "SELECT COUNT(*) FROM frame_text_fts WHERE frame_id = ?;",
+            -1, &statement, nil
+        ) == SQLITE_OK, let statement else {
+            XCTFail("Failed to count synthetic FTS rows")
+            return
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, frameID.uuidString, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        XCTAssertEqual(sqlite3_step(statement), SQLITE_ROW)
+        XCTAssertEqual(sqlite3_column_int(statement, 0), 1)
+    }
+
     func testSearchOrdersByRecencyAndHonoursLimit() async throws {
         let cache = TextCache(directory: directory)
         let oldest = UUID()
@@ -142,6 +225,87 @@ final class TextCacheTests: XCTestCase {
         XCTAssertTrue(negativeLimit.isEmpty)
     }
 
+    /// Cancellation observed before a search enters SQLite must surface as a
+    /// CancellationError and leave the connection usable for the next write.
+    /// Native benchmarking separately exercises cancellation during a scan.
+    func testCancelledSearchBeforeEntryDoesNotPoisonSubsequentWrite() async throws {
+        let cache = TextCache(directory: directory)
+        let gate = SearchStartGate()
+        let search = Task {
+            await gate.wait()
+            return try await cache.searchFrameIDs(matching: "cancelled", limit: 10)
+        }
+        search.cancel()
+        await gate.open()
+
+        do {
+            _ = try await search.value
+            XCTFail("Expected cancelled search to throw")
+        } catch is CancellationError {
+            // Entry cancellation is rejected before installing a handler.
+        }
+
+        let frameID = UUID()
+        await cache.setText("post cancellation write", for: frameID)
+        let hits = try await cache.searchFrameIDs(matching: "post", limit: 10)
+        XCTAssertEqual(hits, [frameID])
+    }
+
+    func testCancellationInsideSQLiteRemovesHandlerBeforeOverwrite() async throws {
+        let cache = TextCache(directory: directory)
+        _ = await cache.count
+        let frameID = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000001"))
+        let databaseURL = directory.appendingPathComponent("text_cache.sqlite")
+        var connection: OpaquePointer?
+        guard sqlite3_open_v2(databaseURL.path, &connection, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK,
+              let connection else {
+            XCTFail("Failed to open synthetic search store")
+            return
+        }
+        sqlite3_busy_timeout(connection, 2_000)
+        let seedSQL = """
+            BEGIN IMMEDIATE;
+            WITH RECURSIVE frames(n) AS (
+                SELECT 1 UNION ALL SELECT n + 1 FROM frames WHERE n < 5000
+            )
+            INSERT INTO frame_text(frame_id, timestamp, text)
+            SELECT printf('00000000-0000-0000-0000-%012d', n), n, 'scan 東京都庁 marker' FROM frames;
+            INSERT INTO frame_text_fts(frame_id, text) SELECT frame_id, text FROM frame_text;
+            COMMIT;
+            """
+        let seeded = sqlite3_exec(connection, seedSQL, nil, nil, nil)
+        sqlite3_close(connection)
+        XCTAssertEqual(seeded, SQLITE_OK)
+
+        let reachedProgress = expectation(description: "SQLite reaches progress callback")
+        reachedProgress.assertForOverFulfill = true
+        await cache.setQueryProgressHookForTesting {
+            reachedProgress.fulfill()
+            withUnsafeCurrentTask { $0?.cancel() }
+        }
+        defer { Task { await cache.setQueryProgressHookForTesting(nil) } }
+        let writesBeforeSearch = await cache.mutationTransactionCountForTesting()
+        let search = Task {
+            try await cache.searchFrameIDs(matching: "京都", limit: 10)
+        }
+        do {
+            _ = try await search.value
+            XCTFail("Expected cancellation from inside SQLite")
+        } catch is CancellationError {}
+        await fulfillment(of: [reachedProgress], timeout: 1)
+        await cache.setQueryProgressHookForTesting(nil)
+        let writesAfterSearch = await cache.mutationTransactionCountForTesting()
+        XCTAssertEqual(writesAfterSearch, writesBeforeSearch)
+
+        // Overwriting scans the populated FTS table, so a leaked cancelled
+        // progress handler would interrupt this write rather than commit it.
+        await cache.setText("replacement marker", for: frameID)
+        let newHits = try await cache.searchFrameIDs(matching: "replacement", limit: 10)
+        let oldHits = try await cache.searchFrameIDs(matching: "scan", limit: .max)
+        XCTAssertEqual(newHits, [frameID])
+        XCTAssertFalse(oldHits.contains(frameID))
+    }
+
     /// Queries are user-controlled input that reaches SQL; quoting and
     /// injection-shaped strings must neither throw, corrupt the store, nor
     /// match unrelated frames.
@@ -194,6 +358,104 @@ final class TextCacheTests: XCTestCase {
         let hits = try await cache.searchFrameIDs(matching: "京都", limit: 10)
 
         XCTAssertEqual(hits, [frameID])
+    }
+
+    /// An FTS prefix hit elsewhere must not suppress the Unicode substring
+    /// fallback: both snapshots are valid matches and remain recency ordered.
+    func testUnicodeSubstringFallbackUnionsWithFTSPrefixHits() async throws {
+        let cache = TextCache(directory: directory)
+        let substringOnly = UUID()
+        let prefixHit = UUID()
+        await cache.setText(
+            "東京都庁",
+            for: substringOnly,
+            timestamp: Date(timeIntervalSince1970: 100)
+        )
+        await cache.setText(
+            "京都旅行",
+            for: prefixHit,
+            timestamp: Date(timeIntervalSince1970: 200)
+        )
+
+        let hits = try await cache.searchFrameIDs(matching: "京都", limit: 10)
+
+        XCTAssertEqual(hits, [prefixHit, substringOnly])
+    }
+
+    /// Mixed queries retain FTS's token-AND/prefix contract while still
+    /// returning a separate unsegmented-script substring match.
+    func testMixedUnicodeQueryKeepsTokenANDAndFallbackMatches() async throws {
+        let cache = TextCache(directory: directory)
+        let ftsMatch = UUID()
+        let substringMatch = UUID()
+        let midTokenMiss = UUID()
+        await cache.setText("京都旅行 planning", for: ftsMatch, timestamp: Date(timeIntervalSince1970: 100))
+        await cache.setText("東京都 planning", for: substringMatch, timestamp: Date(timeIntervalSince1970: 200))
+        await cache.setText("xchrome 東京都", for: midTokenMiss, timestamp: Date(timeIntervalSince1970: 300))
+
+        let hits = try await cache.searchFrameIDs(matching: "京都 planning", limit: 10)
+
+        XCTAssertEqual(hits, [substringMatch, ftsMatch])
+        let missingToken = try await cache.searchFrameIDs(matching: "京都 missing", limit: 10)
+        XCTAssertEqual(missingToken, [], "The ASCII token must still be required")
+        let recentLimited = try await cache.searchFrameIDs(
+            matching: "京都 planning",
+            limit: 1,
+            since: Date(timeIntervalSince1970: 150)
+        )
+        XCTAssertEqual(recentLimited, [substringMatch])
+        let midTokenHits = try await cache.searchFrameIDs(matching: "chrome 京都", limit: 10)
+        XCTAssertEqual(
+            midTokenHits,
+            [],
+            "Literal Unicode fallback must not turn an ASCII mid-token into a match"
+        )
+        let punctuated = try await cache.searchFrameIDs(matching: "京都, planning", limit: 10)
+        XCTAssertEqual(
+            punctuated,
+            [substringMatch, ftsMatch],
+            "Unicode token matching must not depend on query punctuation or spacing"
+        )
+
+        let asciiPrefix = UUID()
+        await cache.setText("chromebook 東京都", for: asciiPrefix)
+        let prefixHits = try await cache.searchFrameIDs(matching: "chrome 京都", limit: 10)
+        XCTAssertEqual(prefixHits, [asciiPrefix])
+    }
+
+    func testLiteralFallbackPreservesPunctuationAndOriginalUnicodeCase() async throws {
+        let cache = TextCache(directory: directory)
+        let punctuation = UUID()
+        let cyrillicSubstring = UUID()
+        let mixedScript = UUID()
+        await cache.setText("status ... ready", for: punctuation)
+        await cache.setText("xxПривет", for: cyrillicSubstring)
+        await cache.setText("新mac版", for: mixedScript)
+
+        let punctuationHits = try await cache.searchFrameIDs(matching: "...", limit: 10)
+        let cyrillicHits = try await cache.searchFrameIDs(matching: "Привет", limit: 10)
+        let mixedScriptHits = try await cache.searchFrameIDs(matching: "Mac版", limit: 10)
+        XCTAssertEqual(punctuationHits, [punctuation])
+        XCTAssertEqual(cyrillicHits, [cyrillicSubstring])
+        XCTAssertEqual(mixedScriptHits, [mixedScript])
+    }
+
+    func testNonASCIIPunctuationDoesNotTriggerSubstringScan() async throws {
+        let cache = TextCache(directory: directory)
+        let frameID = UUID()
+        await cache.setText("don’t pay price €5", for: frameID)
+        await cache.setText("different text", for: UUID())
+
+        let apostropheHits = try await cache.searchFrameIDs(matching: "don’t", limit: 10)
+        let currencyHits = try await cache.searchFrameIDs(matching: "price €5", limit: 10)
+        let scansBeforeUnicodeToken = await cache.substringSearchCountForTesting()
+        XCTAssertEqual(apostropheHits, [frameID])
+        XCTAssertEqual(currencyHits, [frameID])
+        XCTAssertEqual(scansBeforeUnicodeToken, 0)
+
+        _ = try await cache.searchFrameIDs(matching: "京都", limit: 10)
+        let scansAfterUnicodeToken = await cache.substringSearchCountForTesting()
+        XCTAssertEqual(scansAfterUnicodeToken, 1)
     }
 
     func testSymlinkedDatabaseIsRejectedWithoutTouchingExternalFile() async throws {
@@ -284,7 +546,7 @@ final class TextCacheTests: XCTestCase {
         do {
             try await cache.clear()
             XCTFail("Expected the first clear to report its failure")
-        } catch TextCacheError.sqlite(let message) {
+        } catch TextCacheError.sqlite(let message, _) {
             XCTAssertTrue(message.contains("Injected OCR clear failure"))
         }
         let countAfterFailure = await cache.count
@@ -480,7 +742,9 @@ final class TextCacheTests: XCTestCase {
         do {
             _ = try await cache.searchFrameIDs(matching: "hello", limit: 10)
             XCTFail("A query failure must surface, not return empty")
-        } catch {}
+        } catch let error as TextCacheError {
+            XCTAssertEqual(error.sqliteResultCode, SQLITE_ERROR)
+        }
     }
 
     /// For unsegmented scripts the substring fallback is still allowed to
@@ -599,5 +863,23 @@ final class TextCacheTests: XCTestCase {
             throw TextCacheError.sqlite("Missing timestamp rows")
         }
         return (sqlite3_column_double(statement, 0), sqlite3_column_double(statement, 1))
+    }
+}
+
+private actor SearchStartGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var isOpen = false
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func open() {
+        isOpen = true
+        continuation?.resume()
+        continuation = nil
     }
 }

@@ -4,11 +4,16 @@ struct SearchBarView: View {
     var viewModel: OverlayViewModel
     @FocusState private var isFocused: Bool
 
-    private var indexPercent: Int {
-        let status = viewModel.searchIndexStatus
-        return status.totalFrames > 0
-            ? Int(round(Double(status.indexedFrames) / Double(status.totalFrames) * 100))
-            : 100
+    private var indexingStatus: String? {
+        Self.indexingStatus(for: viewModel.searchIndexStatus)
+    }
+
+    static func indexingStatus(for status: SearchIndexStatus) -> String? {
+        let activeWorkFrames = status.activeWorkFrames
+        guard activeWorkFrames > 0 else { return nil }
+        return activeWorkFrames == 1
+            ? "Indexing 1 recent frame…"
+            : "Indexing \(activeWorkFrames) recent frames…"
     }
 
     var body: some View {
@@ -37,8 +42,8 @@ struct SearchBarView: View {
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.6))
             } else if !viewModel.searchResults.isEmpty {
-                if indexPercent < 100 {
-                    Text("\(viewModel.searchResults.count) found · \(indexPercent)% indexed")
+                if let indexingStatus {
+                    Text("\(viewModel.searchResults.count) found · \(indexingStatus)")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.6))
                 } else {
@@ -47,8 +52,8 @@ struct SearchBarView: View {
                         .foregroundStyle(.white.opacity(0.6))
                 }
             } else {
-                if indexPercent < 100 {
-                    Text("\(indexPercent)% indexed")
+                if let indexingStatus {
+                    Text(indexingStatus)
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.4))
                 }
