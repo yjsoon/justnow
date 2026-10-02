@@ -1143,14 +1143,19 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertFalse(failureLines[0].message.contains("needle"))
     }
 
-    /// After the trigger is removed, a deliberate retry on the same view
-    /// model clears the error and returns the previously indexed rows.
-    func testSearchRetryAfterTriggerRemovedShowsResults() async throws {
+    /// Recovery must use logical span recency even when the unavailable cache
+    /// missed startup timestamp reconciliation for a reused physical frame.
+    func testScopedSearchRetryUsesRecentSpanDespiteStaleCacheTimestamp() async throws {
         let base = Date(timeIntervalSinceReferenceDate: 10_000)
         let frameID = UUID()
         let entry = makeEntry(frameID: frameID, start: base, end: base.addingTimeInterval(30))
+        let expiredEntry = makeEntry(
+            frameID: frameID,
+            start: base.addingTimeInterval(-700),
+            end: base.addingTimeInterval(-600)
+        )
         let repository = OverlayTimelineRepositoryProbe(
-            entries: [entry],
+            entries: [entry, expiredEntry],
             image: try XCTUnwrap(TestImageFactory.makeSolidImage(width: 8, height: 8, level: 94))
         )
         let directory = FileManager.default.temporaryDirectory
@@ -1160,7 +1165,7 @@ final class OverlayTimelineTests: XCTestCase {
 
         do {
             let seed = TextCache(directory: directory)
-            await seed.setText("recovery needle", for: frameID, timestamp: base)
+            await seed.setText("recovery needle", for: frameID, timestamp: base.addingTimeInterval(-600))
         }
 
         let databaseURL = directory.appendingPathComponent("text_cache.sqlite")
@@ -1185,12 +1190,13 @@ final class OverlayTimelineTests: XCTestCase {
             frameRepository: repository
         )
         let viewModel = makeViewModel(
-            entries: [entry],
+            entries: [entry, expiredEntry],
             buffer: buffer,
             referenceDate: base.addingTimeInterval(40)
         )
 
         viewModel.isSearching = true
+        viewModel.searchTimeScope = .fiveMinutes
         viewModel.searchQuery = "recovery"
         viewModel.performSearch(immediately: true)
         try await waitUntil { !viewModel.isSearchLoading }

@@ -1007,7 +1007,9 @@ class OverlayViewModel {
                 // The leased snapshot, not an arbitrary database cap, defines
                 // the result set. Filtering happens below because one physical
                 // frame can represent several logical timeline spans.
-                matchedIDs = try await cache.searchFrameIDs(matching: request.query, limit: .max, since: searchCutoff)
+                // Cache timestamps may predate a recent span after reconnect
+                // skips startup reconciliation; only span bounds define scope.
+                matchedIDs = try await cache.searchFrameIDs(matching: request.query, limit: .max)
             } catch is CancellationError {
                 return
             } catch {
