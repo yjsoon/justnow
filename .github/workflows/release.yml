@@ -1,0 +1,187 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to build (for example v1.5.2); does not publish assets'
+        required: true
+        type: string
+
+concurrency:
+  # Serialize all releases, not just runs for the same tag, to protect the stable feed.
+  group: justnow-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_KEY_ISSUER_ID: ${{ secrets.APPLE_API_KEY_ISSUER_ID }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Validate tag and required secrets
+        env:
+          APPLE_SIGNING_CERTIFICATE_P12: ${{ secrets.APPLE_SIGNING_CERTIFICATE_P12 }}
+          APPLE_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_SIGNING_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Expected a version tag such as v1.5.2."
+            exit 1
+          fi
+          for name in APPLE_SIGNING_IDENTITY APPLE_TEAM_ID APPLE_SIGNING_CERTIFICATE_P12 APPLE_SIGNING_CERTIFICATE_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing repository Actions secret: $name"
+              exit 1
+            fi
+          done
+          if [[ "$APPLE_SIGNING_IDENTITY" != "Developer ID Application: "* ]]; then
+            echo "::error::Use the existing Developer ID Application signing identity."
+            exit 1
+          fi
+
+      - name: Checkout the exact release tag
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+          persist-credentials: false
+
+      - name: Check version and toolchain
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          project = Path('JustNow.xcodeproj/project.pbxproj').read_text()
+          versions = set(re.findall(r'MARKETING_VERSION = ([^;]+);', project))
+          builds = set(re.findall(r'CURRENT_PROJECT_VERSION = ([^;]+);', project))
+          if versions != {os.environ['RELEASE_TAG'][1:]} or len(builds) != 1:
+              raise SystemExit('Release tag/version mismatch or inconsistent build numbers')
+          PY
+          xcodebuild -version
+          xcrun swift --version
+
+      - name: Install packaging dependencies
+        run: |
+          set -euo pipefail
+          brew install create-dmg
+          python3 -m venv "$RUNNER_TEMP/release-python"
+          "$RUNNER_TEMP/release-python/bin/pip" install 'Pillow==12.3.0'
+          echo "$RUNNER_TEMP/release-python/bin" >> "$GITHUB_PATH"
+
+      - name: Run unit tests
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s Scripts/tests -v
+          xcodebuild test \
+            -project JustNow.xcodeproj -scheme JustNow \
+            -destination 'platform=macOS' -derivedDataPath build-tests-unsigned \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM=""
+
+      - name: Import signing credentials into a temporary keychain
+        env:
+          APPLE_SIGNING_CERTIFICATE_P12: ${{ secrets.APPLE_SIGNING_CERTIFICATE_P12 }}
+          APPLE_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_SIGNING_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          KEYCHAIN_PATH="$RUNNER_TEMP/justnow-release.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+          printf '%s' "$APPLE_SIGNING_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          printf '%s' "$APPLE_API_KEY" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/signing.p12" \
+            -P "$APPLE_SIGNING_CERTIFICATE_PASSWORD" -t cert -f pkcs12 \
+            -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security default-keychain -d user -s "$KEYCHAIN_PATH"
+
+      - name: Build, sign, and notarise universal release artifacts
+        env:
+          APPLE_API_KEY_PATH: ${{ runner.temp }}/notary.p8
+          RELEASE_ENV_FILE: /dev/null
+        run: |
+          set -euo pipefail
+          # Apply to the existing packager without changing local build defaults.
+          printf 'ARCHS = arm64 x86_64\nONLY_ACTIVE_ARCH = NO\n' > "$RUNNER_TEMP/release.xcconfig"
+          export XCODE_XCCONFIG_FILE="$RUNNER_TEMP/release.xcconfig"
+          ./Scripts/local-release-build.sh "$RELEASE_TAG" --distribution --notarize
+          test -s "dist/JustNow-$RELEASE_TAG-macos.zip"
+          test -s "dist/JustNow-$RELEASE_TAG-macos.dmg"
+          lipo -verify_arch arm64 x86_64 build/Build/Products/Release/JustNow.app/Contents/MacOS/JustNow
+          codesign --verify --deep --strict build/Build/Products/Release/JustNow.app
+          xcrun stapler validate "dist/JustNow-$RELEASE_TAG-macos.dmg"
+          spctl --assess --type open --context context:primary-signature \
+            --verbose=2 "dist/JustNow-$RELEASE_TAG-macos.dmg"
+
+      - name: Keep artifacts for manual download
+        uses: actions/upload-artifact@v4
+        with:
+          name: JustNow-${{ env.RELEASE_TAG }}-macos
+          path: |
+            dist/JustNow-${{ env.RELEASE_TAG }}-macos.zip
+            dist/JustNow-${{ env.RELEASE_TAG }}-macos.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Set up website deployment tooling
+        if: github.event_name == 'push'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install pinned Wrangler
+        if: github.event_name == 'push'
+        run: npm install --no-save --package-lock=false wrangler@4.144.0
+
+      - name: Publish release, signed feed, and website
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          python3 Scripts/ci-release-publish.py "$RELEASE_TAG"
+
+      - name: Keep generated website for source reconciliation and recovery
+        if: always() && github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: JustNow-${{ env.RELEASE_TAG }}-site
+          path: site/
+          retention-days: 90
+
+      - name: Remove signing credentials
+        if: always()
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/justnow-release.keychain-db"
+          if [[ -f "$KEYCHAIN_PATH" ]]; then
+            security delete-keychain "$KEYCHAIN_PATH"
+          fi
+          rm -f "$RUNNER_TEMP/signing.p12" "$RUNNER_TEMP/notary.p8"
