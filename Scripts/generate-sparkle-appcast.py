@@ -134,6 +134,8 @@ def main() -> None:
                 args.site_url,
                 "--full-release-notes-url",
                 args.release_notes_url,
+                "--maximum-versions",
+                "0",
                 "--maximum-deltas",
                 "0",
             ],

@@ -55,14 +55,22 @@ def check_forward_release(tag, info, metadata, feed):
     current_builds = [int(item.findtext(f"{{{SPARKLE_NS}}}version"))
                       for item in ET.fromstring(feed).findall("./channel/item")]
     latest = metadata["releases"][0]
-    if current_builds and (build < max(current_builds)
-                          or (build == max(current_builds) and latest["tag"] != tag)):
+    version = tuple(map(int, tag[1:].split(".")))
+    latest_version = tuple(map(int, latest["version"].split(".")))
+    same_release = latest["tag"] == tag and build == max(current_builds, default=0)
+    if ((version <= latest_version and not same_release)
+            or (current_builds and build <= max(current_builds) and not same_release)):
         raise SystemExit("Refusing to roll back the deployed stable release/build")
 
 
-def validate_feed(tag, archive, info, feed):
+def validate_feed(tag, archive, info, feed, previous_feed):
     expected_url = f"https://github.com/{os.environ['GH_REPO']}/releases/download/{tag}/{archive.name}"
-    items = [item for item in ET.fromstring(feed).findall("./channel/item")
+    root = ET.fromstring(feed)
+    enclosures = [enclosure.attrib for enclosure in root.iter("enclosure")]
+    for previous in ET.fromstring(previous_feed).iter("enclosure"):
+        if previous.get("url") != expected_url and previous.attrib not in enclosures:
+            raise SystemExit("Generated feed lost or changed deployed enclosure history")
+    items = [item for item in root.findall("./channel/item")
              if item.find("enclosure") is not None
              and item.find("enclosure").get("url") == expected_url]
     if len(items) != 1:
@@ -139,7 +147,7 @@ def main():
         run("python3", "Scripts/generate-site-content.py")
         # Separate Sparkle executables must not depend on interactive keychain ACL prompts.
         run("env", f"SPARKLE_ED_KEY_FILE={key}", "bash", "Scripts/generate-sparkle-appcast.sh", tag)
-        signature = validate_feed(tag, archive, info, Path("site/appcast.xml").read_bytes())
+        signature = validate_feed(tag, archive, info, Path("site/appcast.xml").read_bytes(), previous_feed)
         run(str(tools / "bin/sign_update"), "--ed-key-file", str(key), "--verify", str(archive), signature)
         key.unlink()
 

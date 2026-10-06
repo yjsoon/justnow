@@ -5,6 +5,7 @@ import plistlib
 import shutil
 import subprocess
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -17,13 +18,17 @@ publisher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(publisher)
 REAL_RUN = subprocess.run
 OLD_FEED = b'''<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
-<channel><item><sparkle:version>22</sparkle:version></item></channel></rss>'''
+<channel><item><sparkle:version>22</sparkle:version>
+<enclosure url="https://github.com/yjsoon/justnow/releases/download/v1.5.2/JustNow-v1.5.2-macos.zip"
+length="91" sparkle:edSignature="historical-signature" /></item></channel></rss>'''
 NEW_FEED = b'''<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
 <channel><item><sparkle:version>23</sparkle:version>
 <sparkle:shortVersionString>1.5.3</sparkle:shortVersionString>
 <enclosure url="https://github.com/yjsoon/justnow/releases/download/v1.5.3/JustNow-v1.5.3-macos.zip"
 length="SIZE" sparkle:edSignature="synthetic-signature" /></item>
-<item><sparkle:version>22</sparkle:version></item></channel></rss>'''
+<item><sparkle:version>22</sparkle:version>
+<enclosure url="https://github.com/yjsoon/justnow/releases/download/v1.5.2/JustNow-v1.5.2-macos.zip"
+length="91" sparkle:edSignature="historical-signature" /></item></channel></rss>'''
 
 
 class ReleasePublicationTests(unittest.TestCase):
@@ -156,6 +161,45 @@ class ReleasePublicationTests(unittest.TestCase):
             publisher.main()
         self.assert_no_publication()
 
+    def test_changed_historical_enclosure_stops_before_publication(self):
+        self.feed = self.feed.replace(b"historical-signature", b"changed-signature")
+        with self.assertRaisesRegex(SystemExit, "history"):
+            publisher.main()
+        self.assert_no_publication()
+
+    def test_missing_historical_enclosure_stops_before_publication(self):
+        self.feed = self.feed.replace(b"/v1.5.2/JustNow-v1.5.2-macos.zip", b"/removed.zip")
+        with self.assertRaisesRegex(SystemExit, "history"):
+            publisher.main()
+        self.assert_no_publication()
+
+    def test_feed_preserves_more_than_three_historical_downloads(self):
+        older = b'''<item><enclosure url="https://example/older-1.zip" length="41"
+sparkle:edSignature="older-1-signature" /></item>
+<item><enclosure url="https://example/older-2.zip" length="52"
+sparkle:edSignature="older-2-signature" /></item>
+<item><enclosure url="https://example/older-3.zip" length="63"
+sparkle:edSignature="older-3-signature" /></item>'''
+        previous = OLD_FEED.replace(b"</channel>", older + b"</channel>")
+        preserved = self.feed.replace(b"</channel>", older + b"</channel>")
+        self.assertEqual(publisher.validate_feed("v1.5.3", self.archive, self.info, preserved, previous),
+                         "synthetic-signature")
+        with self.assertRaisesRegex(SystemExit, "history"):
+            publisher.validate_feed("v1.5.3", self.archive, self.info,
+                                    preserved.replace(b"older-3.zip", b"removed.zip"), previous)
+
+    def test_credential_files_are_removed_even_if_keychain_cleanup_fails(self):
+        workflow = (SCRIPTS.parent / ".github/workflows/release.yml").read_text()
+        cleanup = workflow.split("      - name: Remove signing credentials\n", 1)[1]
+        script = textwrap.dedent(cleanup.split("        run: |\n", 1)[1])
+        for name in ("justnow-release.keychain-db", "signing.p12", "notary.p8"):
+            Path(name).write_text("synthetic credential")
+        result = REAL_RUN(["bash", "-c", "security() { return 17; }\n" + script],
+                          env={**os.environ, "RUNNER_TEMP": str(Path.cwd())}, capture_output=True)
+        self.assertEqual(result.returncode, 17)
+        self.assertFalse(Path("signing.p12").exists())
+        self.assertFalse(Path("notary.p8").exists())
+
     def test_changed_download_stops_before_release_publication(self):
         self.bad_download = True
         with self.assertRaisesRegex(SystemExit, "differs"):
@@ -175,7 +219,7 @@ class ReleasePublicationTests(unittest.TestCase):
                          (b">1.5.3<", b">1.5.4<"), (b">23<", b">24<"),
                          (b'sparkle:edSignature="synthetic-signature"', b"")):
             with self.subTest(corruption=old), self.assertRaises(SystemExit):
-                publisher.validate_feed("v1.5.3", self.archive, self.info, self.feed.replace(old, new))
+                publisher.validate_feed("v1.5.3", self.archive, self.info, self.feed.replace(old, new), OLD_FEED)
 
     def test_build_boundaries_reject_rollback_and_reused_build_for_new_tag(self):
         for build in ("21", "22"):
@@ -185,6 +229,15 @@ class ReleasePublicationTests(unittest.TestCase):
         publisher.check_forward_release("v1.5.3", self.info, self.metadata, OLD_FEED)
         publisher.check_forward_release("v1.5.2", {**self.info, "CFBundleVersion": "22",
                                         "CFBundleShortVersionString": "1.5.2"}, self.metadata, OLD_FEED)
+
+    def test_older_marketing_version_is_rejected_even_with_a_higher_build(self):
+        with self.assertRaisesRegex(SystemExit, "roll back"):
+            publisher.check_forward_release("v1.4.1", {**self.info, "CFBundleShortVersionString": "1.4.1"},
+                                            self.metadata, OLD_FEED)
+        # Version ordering is numeric, not lexical.
+        latest = {**self.metadata, "releases": [{"tag": "v1.5.9", "version": "1.5.9"}]}
+        publisher.check_forward_release("v1.5.10", {**self.info, "CFBundleShortVersionString": "1.5.10"},
+                                        latest, OLD_FEED)
 
     def test_generator_supports_file_signing_and_preserves_local_account_mode(self):
         generator_spec = importlib.util.spec_from_file_location("generator", SCRIPTS / "generate-sparkle-appcast.py")
@@ -200,6 +253,8 @@ class ReleasePublicationTests(unittest.TestCase):
                 self.assertTrue(check)
                 self.assertIn(expected, args)
                 self.assertNotIn("--account" if expected == "--ed-key-file" else "--ed-key-file", args)
+                self.assertIn("--maximum-versions", args)
+                self.assertEqual(args[args.index("--maximum-versions") + 1], "0")
                 Path(args[1], "appcast.xml").write_bytes(self.feed)
 
             argv = ["generator", "--tag", "v1.5.3", "--archive", str(self.archive),

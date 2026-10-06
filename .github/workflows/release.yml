@@ -181,7 +181,9 @@ jobs:
         run: |
           set -euo pipefail
           KEYCHAIN_PATH="$RUNNER_TEMP/justnow-release.keychain-db"
+          cleanup_status=0
           if [[ -f "$KEYCHAIN_PATH" ]]; then
-            security delete-keychain "$KEYCHAIN_PATH"
+            security delete-keychain "$KEYCHAIN_PATH" || cleanup_status=$?
           fi
           rm -f "$RUNNER_TEMP/signing.p12" "$RUNNER_TEMP/notary.p8"
+          exit "$cleanup_status"
