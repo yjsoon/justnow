@@ -126,8 +126,20 @@ def main():
         key.touch(mode=0o600)
         key.write_text(os.environ["SPARKLE_PRIVATE_KEY"])
         account = "sg.tk.JustNow"
-        run(str(tools / "bin/generate_keys"), "--account", account, "-f", str(key), capture=True)
-        public_key = run(str(tools / "bin/generate_keys"), "--account", account, "-p", capture=True).strip()
+        try:
+            public_key = run(str(tools / "bin/generate_keys"), "--account", account, "-p", capture=True).strip()
+        except subprocess.CalledProcessError:
+            run(str(tools / "bin/generate_keys"), "--account", account, "-f", str(key), capture=True)
+            public_key = run(str(tools / "bin/generate_keys"), "--account", account, "-p", capture=True).strip()
+        else:
+            # Import is add-only: do not replace an existing recovery Mac's key.
+            # Public-key equality alone would not validate the supplied secret.
+            existing_key = scratch / "existing-sparkle-key"
+            run(str(tools / "bin/generate_keys"), "--account", account, "-x", str(existing_key), capture=True)
+            existing_key.chmod(0o600)
+            if existing_key.read_text().strip() != key.read_text().strip():
+                raise SystemExit("Supplied Sparkle private key does not match the existing key")
+            existing_key.unlink()
         if not info.get("SUPublicEDKey") or public_key != info["SUPublicEDKey"]:
             raise SystemExit("Sparkle private key does not match the app's existing SUPublicEDKey")
 
