@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 import os
 import plistlib
@@ -275,6 +276,22 @@ sparkle:edSignature="older-3-signature" /></item>'''
                     patch.object(generator.subprocess, "run", side_effect=generate):
                 generator.main()
                 self.assertIn(b"synthetic-signature", Path("site/appcast.xml").read_bytes())
+
+
+class ReleaseFetchTests(unittest.TestCase):
+    def test_requests_identify_publisher_and_preserve_authentication(self):
+        for url, token in (("https://justnow.tk.sg/releases.json", None),
+                           ("https://api.cloudflare.com/client/v4/accounts/synthetic", "synthetic-token")):
+            with self.subTest(url=url), patch.object(publisher.urllib.request, "urlopen",
+                                                    return_value=io.BytesIO(b"metadata")) as urlopen:
+                self.assertEqual(publisher.fetch(url, token), b"metadata")
+                request = urlopen.call_args.args[0]
+                self.assertEqual(request.get_header("User-agent"),
+                                 "JustNow-Release-Publisher/1.0 (+https://github.com/yjsoon/justnow)")
+                self.assertEqual(request.get_header("Cache-control"), "no-cache")
+                self.assertEqual(request.get_header("Authorization"),
+                                 "Bearer synthetic-token" if token else None)
+                self.assertEqual(urlopen.call_args.kwargs["timeout"], 60)
 
 
 if __name__ == "__main__":

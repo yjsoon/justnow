@@ -26,7 +26,10 @@ def run(*args, capture=False):
 
 
 def fetch(url, token=None):
-    headers = {"Cache-Control": "no-cache"}
+    headers = {
+        "Cache-Control": "no-cache",
+        "User-Agent": "JustNow-Release-Publisher/1.0 (+https://github.com/yjsoon/justnow)",
+    }
     if token:
         headers["Authorization"] = f"Bearer {token}"
     with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60) as response:
