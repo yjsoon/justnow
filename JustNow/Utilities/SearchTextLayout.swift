@@ -18,6 +18,12 @@ nonisolated enum SearchQueryTokeniser {
 nonisolated struct SearchTextLayout: Codable, Sendable {
     let lines: [SearchTextLine]
 
+    // Old accurate-OCR layouts use "lines". Treat them as cache misses so
+    // index-matching boxes regenerate lazily without touching indexed text.
+    private enum CodingKeys: String, CodingKey {
+        case lines = "indexedLines"
+    }
+
     var isEmpty: Bool {
         lines.isEmpty
     }

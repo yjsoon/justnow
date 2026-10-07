@@ -9,7 +9,6 @@ import Carbon.HIToolbox
 struct OverlayKeyboardState: Equatable {
     let isSearchAvailable: Bool
     let isSearching: Bool
-    let hasSearchQuery: Bool
     let isTextGrabActive: Bool
     var isEditingText: Bool = false
 }
@@ -20,8 +19,7 @@ enum OverlayKeyboardAction: Equatable {
     case dismissOverlay
     case cancelTextGrab
     case clearSearch
-    case toggleSearch
-    case submitSearch
+    case focusSearch
     case moveLeft
     case jumpLeft
     case goToStart
@@ -71,14 +69,12 @@ func resolveOverlayKeyboardAction(
         return .dismissOverlay
 
     case UInt16(kVK_ANSI_Slash):
+        guard !state.isEditingText, pressedModifiers.isEmpty else { return .passthrough }
         guard state.isSearchAvailable else { return .consume }
-        return state.isSearching ? .passthrough : .toggleSearch
+        return .focusSearch
 
-    case UInt16(kVK_Return):
-        if state.isSearchAvailable && state.isSearching && state.hasSearchQuery {
-            return .submitSearch
-        }
-        return .passthrough
+    case UInt16(kVK_ANSI_F):
+        return pressedModifiers == .command && state.isSearchAvailable ? .focusSearch : .passthrough
 
     case UInt16(kVK_LeftArrow):
         if pressedModifiers.contains(.command) {

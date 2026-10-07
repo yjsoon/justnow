@@ -192,7 +192,8 @@ class OverlayWindowController: NSObject {
             defer: false
         )
 
-        window.level = .statusBar + 1
+        // Keep system dialogs and other apps reachable if the overlay stalls.
+        window.level = .normal
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.isOpaque = false
         window.backgroundColor = .clear
@@ -236,7 +237,6 @@ class OverlayWindowController: NSObject {
                 state: OverlayKeyboardState(
                     isSearchAvailable: vm.isSearchAvailable,
                     isSearching: vm.isSearching,
-                    hasSearchQuery: vm.hasSearchQuery,
                     isTextGrabActive: vm.isTextGrabActive,
                     isEditingText: (window.firstResponder as? NSTextView)?.isEditable == true
                 )
@@ -253,10 +253,8 @@ class OverlayWindowController: NSObject {
                 _ = vm.cancelTextGrabIfNeeded()
             case .clearSearch:
                 vm.clearSearch()
-            case .toggleSearch:
-                vm.toggleSearch()
-            case .submitSearch:
-                vm.performSearch(immediately: true)
+            case .focusSearch:
+                vm.focusSearch()
             case .moveLeft:
                 vm.moveLeft()
             case .jumpLeft:
