@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import plistlib
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -199,6 +200,15 @@ sparkle:edSignature="older-3-signature" /></item>'''
         self.assertEqual(result.returncode, 17)
         self.assertFalse(Path("signing.p12").exists())
         self.assertFalse(Path("notary.p8").exists())
+
+    def test_lipo_verification_keeps_binary_out_of_architecture_arguments(self):
+        workflow = (SCRIPTS.parent / ".github/workflows/release.yml").read_text()
+        command = shlex.split(next(line.strip() for line in workflow.splitlines()
+                                   if line.strip().startswith("lipo ")))
+        verify = command.index("-verify_arch")
+        self.assertEqual(command[verify + 1:], ["arm64", "x86_64"])
+        self.assertEqual(command[1:verify],
+                         ["build/Build/Products/Release/JustNow.app/Contents/MacOS/JustNow"])
 
     def test_changed_download_stops_before_release_publication(self):
         self.bad_download = True
