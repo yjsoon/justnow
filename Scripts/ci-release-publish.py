@@ -135,8 +135,8 @@ def main():
             # Import is add-only: do not replace an existing recovery Mac's key.
             # Public-key equality alone would not validate the supplied secret.
             existing_key = scratch / "existing-sparkle-key"
-            existing_key.touch(mode=0o600)
             run(str(tools / "bin/generate_keys"), "--account", account, "-x", str(existing_key), capture=True)
+            existing_key.chmod(0o600)
             if existing_key.read_text().strip() != key.read_text().strip():
                 raise SystemExit("Supplied Sparkle private key does not match the existing key")
             existing_key.unlink()

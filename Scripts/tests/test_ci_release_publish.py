@@ -105,7 +105,9 @@ class ReleasePublicationTests(unittest.TestCase):
                 self.existing_key = key.read_text()
             elif "-x" in args:
                 key = Path(args[-1])
-                self.assertEqual(key.stat().st_mode & 0o777, 0o600)
+                if key.exists():
+                    raise subprocess.CalledProcessError(1, args, stderr="Export destination already exists")
+                self.assertEqual(key.parent.stat().st_mode & 0o777, 0o700)
                 key.write_text(self.existing_key)
             else:
                 if self.existing_key is None:
