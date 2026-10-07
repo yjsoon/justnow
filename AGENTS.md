@@ -44,4 +44,4 @@ Read the reference relevant to the task, not every document or the whole reposit
 - `JustNow/AppDelegate.swift` and `JustNow/Capture/`: lifecycle, capture coordination, frame buffering, retention handoff, and OCR queueing.
 - `JustNow/Storage/FrameStore.swift`, `FrameDatabase.swift`, `HybridFrameRepository.swift`, and `TextCache.swift`: durable images/SQLite, memory-resident recent history, and OCR/search data.
 - `JustNow/UI/`: overlay presentation, timeline/search, drag actions, Settings, and menu bar controls.
-- `.github/workflows/unit-tests.yml`: macOS test command. Release/site workflows are archived under `.github/archived-workflows/`; they are not active publishing paths.
+- `.github/workflows/unit-tests.yml`: macOS test command. `.github/workflows/release.yml`: stable tag-triggered app/site/feed publication via `Scripts/ci-release-publish.py`. Older workflows under `.github/archived-workflows/` are historical references only.

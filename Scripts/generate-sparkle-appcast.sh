@@ -19,11 +19,16 @@ if [ ! -f "${ARCHIVE_PATH}" ]; then
   exit 1
 fi
 
+SIGNING_ARGS=(--key-account "${SPARKLE_KEY_ACCOUNT}")
+if [ -n "${SPARKLE_ED_KEY_FILE:-}" ]; then
+  SIGNING_ARGS=(--ed-key-file "${SPARKLE_ED_KEY_FILE}")
+fi
+
 python3 "${SCRIPT_DIR}/generate-sparkle-appcast.py" \
   --tag "${TAG}" \
   --archive "${ARCHIVE_PATH}" \
   --generate-appcast-bin "${TOOLS_DIR}/bin/generate_appcast" \
-  --key-account "${SPARKLE_KEY_ACCOUNT}" \
+  "${SIGNING_ARGS[@]}" \
   --download-url-prefix "${SPARKLE_RELEASE_DOWNLOAD_BASE_URL}/${TAG}/" \
   --site-url "${SPARKLE_SITE_URL}" \
   --release-notes-url "${SPARKLE_RELEASES_URL}"

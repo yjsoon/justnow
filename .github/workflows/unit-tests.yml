@@ -20,6 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Run release automation tests
+        run: python3 -m unittest discover -s Scripts/tests -v
+
       - name: Show Xcode version and scheme list
         run: |
           xcodebuild -version

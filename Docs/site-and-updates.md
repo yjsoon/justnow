@@ -18,7 +18,7 @@ This repo carries the macOS app and its static public site: product page, releas
 - The public site assumes a root-mounted custom domain, so root-absolute paths such as `/styles.css` and `/appcast.xml` are intentional.
 - Repository builds include Sparkle and point at `https://justnow.tk.sg/appcast.xml`.
 - Stable release publishing should update `site/releases.json`, regenerate `site/releases/`, and rebuild `site/appcast.xml` from the exact ZIP uploaded to GitHub. See [release checks and script limitations](release-and-distribution.md#release-checks-and-current-limitations).
-- Use `site/releases.json` and `site/appcast.xml` for checked-in release state; verify live endpoints when reporting what is currently deployed rather than relying on a version recorded in prose.
+- CI uses the deployed `releases.json` and `appcast.xml` as its release ledger and preserves history across tag builds. Generated site artifacts must be reconciled into checked-in `site/` before separate manual site deployments. Verify live endpoints when reporting what is currently deployed rather than relying on a version recorded in prose.
 
 ## Open Source Hosting
 
@@ -28,13 +28,17 @@ This repo carries the macOS app and its static public site: product page, releas
 
 ## Stable release flow
 
+The [Release action](../.github/workflows/release.yml) automates app packaging, GitHub release publication, signed Sparkle feed generation, and production Cloudflare Pages deployment on a stable `vX.Y.Z` tag push. It verifies the existing Sparkle key, exact uploaded assets, forward-moving build number, Cloudflare target, and public site/feed. See [Actions setup and operation](release-and-distribution.md#github-actions-setup) for secrets, notes, manual build-only checks, and partial-publication recovery. The job does not push generated files; reconcile the successful run's site artifact before deploying checked-in site content separately.
+
+The alternative local flow is:
+
 1. Build and sign locally; notarise and staple the DMG. The packaging flow does not staple the ZIP or its enclosed app.
 2. Upload the signed `.zip` and `.dmg` to GitHub Releases.
 3. Populate `site/releases.json` from the release notes and regenerate the public release notes page.
 4. Generate and validate the Sparkle appcast against the exact uploaded ZIP.
 5. Review and commit generated metadata, then deploy the intended committed site state to Cloudflare Pages and verify the public version, notes, feed, and links. Push/merge only within the authorized scope.
 
-The publisher deploys by default and does not stop on appcast generation failure. Use `--skip-site-deploy` to stage validation before a separate deploy within the same authorized release, not to silently leave the website stale. Draft/prerelease publication intentionally leaves the stable website/feed unchanged.
+The local publisher deploys by default and does not stop on appcast generation failure; CI does stop. Use `--skip-site-deploy` locally to stage validation before a separate deploy within the same authorized release, not to silently leave the website stale. Local draft/prerelease publication intentionally leaves the stable website/feed unchanged; the tag action supports stable releases only. Do not run both publishing paths for the same tag.
 
 ## Local generation and preview
 
@@ -67,4 +71,4 @@ Replace the tag with the intended release. This is a signing operation using the
 - Keep the appcast at a stable public URL such as `/appcast.xml`, even if the website structure changes later.
 - Keep the site deployed at a root-mounted domain; if we ever move back to a project-site path, the root-absolute links will need to change.
 - Prefer hosting release note pages in `site/releases/` and linking to them from appcast items.
-- [Cloudflare Pages](cloudflare-pages.md) and `wrangler.jsonc` own deployment targets. GitHub Actions release/site workflows are archived; GitHub Pages is not the supported host.
+- [Cloudflare Pages](cloudflare-pages.md) and `wrangler.jsonc` own deployment targets. The active release action uploads directly to Cloudflare Pages; the older workflows remain archived. GitHub Pages is not the supported host.

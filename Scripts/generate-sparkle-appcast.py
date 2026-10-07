@@ -22,7 +22,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tag", required=True, help="Release tag, for example v0.1.1")
     parser.add_argument("--archive", required=True, help="Path to the signed zip archive for the release")
     parser.add_argument("--generate-appcast-bin", required=True, help="Path to Sparkle's generate_appcast binary")
-    parser.add_argument("--key-account", required=True, help="Sparkle keychain account name")
+    signing = parser.add_mutually_exclusive_group(required=True)
+    signing.add_argument("--key-account", help="Sparkle keychain account name")
+    signing.add_argument("--ed-key-file", help="Exported Sparkle private key file (noninteractive CI)")
     parser.add_argument("--download-url-prefix", required=True, help="Public download URL prefix ending with the release tag path")
     parser.add_argument("--site-url", required=True, help="Public site URL, for example https://justnow.tk.sg")
     parser.add_argument("--release-notes-url", required=True, help="Public full release notes URL")
@@ -123,8 +125,8 @@ def main() -> None:
             [
                 args.generate_appcast_bin,
                 str(staging_dir),
-                "--account",
-                args.key_account,
+                *(["--ed-key-file", args.ed_key_file] if args.ed_key_file
+                  else ["--account", args.key_account]),
                 "--download-url-prefix",
                 args.download_url_prefix,
                 "--embed-release-notes",
@@ -132,6 +134,8 @@ def main() -> None:
                 args.site_url,
                 "--full-release-notes-url",
                 args.release_notes_url,
+                "--maximum-versions",
+                "0",
                 "--maximum-deltas",
                 "0",
             ],
