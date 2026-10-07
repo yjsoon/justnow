@@ -38,9 +38,23 @@
 
       <main class="release-list">
         <article class="release-card">
-          <h2>v1.5.3</h2>
+          <h2>v1.5.4</h2>
           <div class="release-meta">
             <span>Current public build</span>
+            <span>October 7, 2026</span>
+          </div>
+          <ul>
+            <li>Match search-highlight recognition to the search index so small text found by search can also be highlighted. Previously cached highlight layouts regenerate without removing indexed text or history.</li>
+            <li>Hand keyboard focus to the timeline after scrubbing, clicking navigation arrows, or submitting a search. Arrow keys continue editing the query while the search field is focused.</li>
+            <li>Keep the rewind overlay at normal window level so other applications and system dialogs remain reachable if the app stalls.</li>
+            <li>Use ⌘F to open or refocus search without clearing the query or selected result. The `/` shortcut also refocuses search when not editing text.</li>
+            <li>Keep native Tab traversal while search is open, and show the monitor-switching Tab hint only when search is closed.</li>
+          </ul>
+        </article>
+        <article class="release-card">
+          <h2>v1.5.3</h2>
+          <div class="release-meta">
+            <span>Previous release</span>
             <span>October 7, 2026</span>
           </div>
           <ul>
