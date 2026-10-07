@@ -6,8 +6,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing release tag to build (for example v1.5.2); does not publish assets'
+        description: 'Version label matching the app (for example v1.5.2); builds only'
         required: true
+        type: string
+      source_ref:
+        description: 'Optional commit/branch for build-only rehearsal; blank uses the tag'
+        required: false
         type: string
 
 concurrency:
@@ -53,15 +57,17 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout the exact release tag
+      - name: Checkout release source
         uses: actions/checkout@v4
         with:
-          ref: refs/tags/${{ env.RELEASE_TAG }}
+          # Tag publication never accepts a source override.
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || format('refs/tags/{0}', env.RELEASE_TAG) }}
           persist-credentials: false
 
       - name: Check version and toolchain
         run: |
           set -euo pipefail
+          git rev-parse HEAD
           python3 - <<'PY'
           import os
           import re
