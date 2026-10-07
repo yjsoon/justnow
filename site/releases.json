@@ -11,10 +11,25 @@
   },
   "releases": [
     {
+      "tag": "v1.5.3",
+      "version": "1.5.3",
+      "published_at": "2026-10-07",
+      "status": "Current public build",
+      "notes": [
+        "Improved search matching and result highlighting, including Unicode text and recovered history.",
+        "Unavailable search indexes can recover, with a retry action instead of treating a failed search as an empty result.",
+        "Arrow and navigation keys no longer move the rewind timeline while you are editing a text field.",
+        "Launch-at-login and software-update controls stay synchronized across Settings windows and external changes.",
+        "Improved keyboard shortcut recording, modifier handling, and accessibility.",
+        "Reduced repeated timeline work while scrubbing through history.",
+        "Search animations now respect macOS Reduce Motion."
+      ]
+    },
+    {
       "tag": "v1.5.2",
       "version": "1.5.2",
       "published_at": "2026-09-11",
-      "status": "Current public build",
+      "status": "Previous release",
       "notes": [
         "JustNow now keeps recording while iOS Simulator is running, instead of pausing whenever Simulator was open.",
         "If macOS briefly interrupts screen capture, JustNow recovers automatically and the menu shows “Recovering…” instead of looking like a recording permission problem.",

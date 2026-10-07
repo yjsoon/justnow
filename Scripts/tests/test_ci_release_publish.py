@@ -62,6 +62,7 @@ class ReleasePublicationTests(unittest.TestCase):
         self.feed = NEW_FEED.replace(b"SIZE", str(self.archive.stat().st_size).encode())
         self.calls = []
         self.deployed = False
+        self.html_transform = lambda html: html
         self.public_key = "existing-public-key"
         self.existing_key = None
         self.bad_signature = False
@@ -84,7 +85,8 @@ class ReleasePublicationTests(unittest.TestCase):
             return json.dumps(self.project).encode()
         if self.deployed:
             path = url.split("justnow.tk.sg/")[1].split("?")[0]
-            return Path("site", path).read_bytes() if path else b"homepage"
+            data = Path("site", path).read_bytes() if path else b"homepage"
+            return self.html_transform(data) if path.endswith(".html") else data
         if "releases.json" in url:
             return json.dumps(self.metadata).encode()
         return OLD_FEED
@@ -155,6 +157,23 @@ class ReleasePublicationTests(unittest.TestCase):
         self.assertLess(upload, publish)
         self.assertLess(publish, deploy)
         self.assertFalse(any("--clobber" in c for c in self.calls))
+
+    def test_public_html_accepts_only_cloudflare_beacon_injection(self):
+        beacon = (b'<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v31edd6" '
+                  b'integrity="sha512-c3ludGhldGlj" data-cf-beacon=\'{"version":"2024.11.0","token":"synthetic"}\' '
+                  b'crossorigin="anonymous"></script>\n')
+        self.html_transform = lambda html: html.replace(b"</body>", beacon + b"</body>")
+        with patch.object(publisher.time, "sleep"):
+            publisher.main()
+        self.assertTrue(self.deployed)
+
+    def test_public_html_still_rejects_wrong_notes_or_unrelated_scripts(self):
+        for changed in (lambda html: html.replace(b"A new feature", b"Wrong release notes"),
+                        lambda html: html.replace(b"</body>", b'<script src="https://other.example/beacon.js"></script></body>')):
+            with self.subTest(change=changed), patch.object(publisher.time, "sleep"):
+                self.html_transform = changed
+                with self.assertRaisesRegex(ValueError, "Public releases/index.html"):
+                    publisher.main()
 
     def test_wrong_cloudflare_domain_stops_before_release_creation(self):
         self.project["result"]["domains"] = ["another.example"]

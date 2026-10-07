@@ -90,6 +90,29 @@ def validate_feed(tag, archive, info, feed, previous_feed):
     return signature
 
 
+def verify_public_site(tag):
+    for attempt in range(12):
+        try:
+            for path in ("releases.json", "appcast.xml", "releases/index.html"):
+                public = fetch(f"{SITE_URL}/{path}?release={tag}&attempt={attempt}")
+                if path.endswith(".html"):
+                    # Cloudflare can inject this analytics tag into otherwise identical HTML.
+                    public = re.sub(
+                        rb'<script type="module" src="https://static\.cloudflareinsights\.com/beacon\.min\.js/v[a-f0-9]+" '
+                        rb'integrity="sha512-[A-Za-z0-9+/=]+" data-cf-beacon=\'[^\'<>]*\' '
+                        rb'crossorigin="anonymous"></script>\n?', b"", public,
+                    )
+                if public != Path("site", path).read_bytes():
+                    raise ValueError(f"Public {path} does not match the generated release")
+            fetch(SITE_URL + "/")
+            print(f"Verified public website and signed feed for {tag}")
+            return
+        except (OSError, ValueError):
+            if attempt == 11:
+                raise
+            time.sleep(10)
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
@@ -184,18 +207,7 @@ def main():
             "--commit-hash", run("git", "rev-parse", "HEAD", capture=True).strip(),
             "--commit-message", f"Release {tag} (tag source + generated metadata/feed)")
 
-        for attempt in range(12):
-            try:
-                for path in ("releases.json", "appcast.xml", "releases/index.html"):
-                    if fetch(f"{SITE_URL}/{path}?release={tag}&attempt={attempt}") != Path("site", path).read_bytes():
-                        raise ValueError(f"Public {path} does not match the generated release")
-                fetch(SITE_URL + "/")
-                print(f"Verified public website and signed feed for {tag}")
-                break
-            except (OSError, ValueError):
-                if attempt == 11:
-                    raise
-                time.sleep(10)
+        verify_public_site(tag)
 
 
 if __name__ == "__main__":
