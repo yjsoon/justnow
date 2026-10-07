@@ -25,6 +25,129 @@ final class NativeSwiftUIValidationTests: XCTestCase {
         super.tearDown()
     }
 
+    func testSearchCaretScrubRefocusAndSubmitWithoutActivatingWindow() async throws {
+        let panel = NativeValidationNonActivatingPanel(
+            contentRect: NSRect(x: -10000, y: -10000, width: 1280, height: 720),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = false
+        windows.append(panel)
+        try requireNonActivating(panel)
+
+        let directory = try temporaryDirectory()
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        let store = try FrameStore(directory: directory)
+        let now = Date()
+        for index in 0..<4 {
+            let image = try XCTUnwrap(TestImageFactory.makeSolidImage(width: 16, height: 16, level: 100))
+            _ = try await store.saveFrame(image, timestamp: now.addingTimeInterval(Double(index * 10 - 40)),
+                hash: UInt64(index + 1), displayID: nil, displayName: "Synthetic display")
+        }
+        let buffer = try await FrameBuffer(retentionPolicy: .default24Hours, storageDirectory: directory,
+            diagnosticsLog: nil, frameRepository: DiskFrameRepository(frameStore: store), historyStorageMode: .allDisk)
+        let cache = buffer.textCache
+        for entry in buffer.getTimelineEntries() {
+            await buffer.textCache.setText("synthetic focus", for: entry.frame.id, timestamp: entry.frame.timestamp)
+        }
+        let vm = OverlayViewModel(timelineEntries: buffer.getTimelineEntries(), frameBuffer: buffer,
+            recentTimelineWindow: 300, rewindHistoryOption: .twentyFourHours, availableDisplays: [],
+            activeDisplay: nil, primaryDisplayID: nil, timelineReferenceDate: now,
+            onDismiss: {}, onOpenSettings: {})
+        vm.isSearching = true
+        vm.searchQuery = "synthetic"
+        vm.performSearch(immediately: true)
+        let domain = "sg.tk.JustNow.NativeValidation.\(UUID())"
+        preferenceDomains.append(domain)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        let host = NSHostingView(rootView: ContentAreaView(viewModel: vm)
+            .frame(width: 1280, height: 720).defaultAppStorage(defaults))
+        host.sizingOptions = []
+        host.frame = NSRect(x: 0, y: 0, width: 1280, height: 720)
+        panel.contentView = host
+        // Runs after local strong references leave scope and before existing
+        // tearDown deletes the fixture. Wait on ownership, not a fixed delay.
+        addTeardownBlock { @MainActor [weak host, weak vm, weak buffer, weak store, weak cache] in
+            let deadline = ContinuousClock.now.advanced(by: .seconds(6))
+            while (host != nil || vm != nil || buffer != nil || store != nil || cache != nil),
+                  ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertTrue(host == nil && vm == nil && buffer == nil && store == nil && cache == nil,
+                          "Synthetic hosted view and storage must release before fixture cleanup")
+        }
+        defer {
+            vm.prepareForDismissal()
+            vm.setTextGrabCancellationHandler(nil)
+            panel.endEditing(for: nil)
+            panel.orderOut(nil)
+            panel.contentView = nil
+            panel.close()
+        }
+        panel.orderBack(nil)
+        try await waitUntil { vm.searchResults.count == 4 && !vm.isSearchLoading }
+        host.layoutSubtreeIfNeeded()
+        try await waitUntil { self.editableField(in: host) != nil }
+        try requireNonActivating(panel)
+
+        // A non-key panel need not honor initial automatic focus. Set up the
+        // real hosted field once; subsequent transitions must be request-driven.
+        if !(panel.firstResponder is NSTextView) {
+            XCTAssertTrue(panel.makeFirstResponder(try XCTUnwrap(editableField(in: host))))
+        }
+        let editor = try XCTUnwrap(panel.firstResponder as? NSTextView)
+        XCTAssertTrue(editor.isEditable)
+        editor.setSelectedRange(NSRange(location: 6, length: 0))
+        vm.goToEnd()
+        panel.sendEvent(try key(kVK_LeftArrow, window: panel, characters: "\u{F702}"))
+        XCTAssertEqual(editor.selectedRange().location, 5)
+        XCTAssertEqual(vm.selectedIndex, 3, "Editing arrows must not rewind")
+        try requireNonActivating(panel)
+
+        // Real SliderTrack drag at one-quarter: 40-point outer horizontal
+        // padding, 8-point inner padding, bottom padding50 and track offset12.
+        let location = NSPoint(x: 48 + (1280 - 96) * 0.25, y: 58)
+        func mouse(_ type: NSEvent.EventType) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+                context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+        }
+        NSApp.postEvent(try mouse(.leftMouseUp), atStart: false)
+        panel.sendEvent(try mouse(.leftMouseDown))
+        try await waitUntil { vm.selectedIndex == 1 && (panel.firstResponder as? NSTextView)?.isEditable != true }
+        try requireNonActivating(panel)
+        let timelineResponder = try XCTUnwrap(panel.firstResponder)
+
+        vm.focusSearch()
+        try await waitUntil { (panel.firstResponder as? NSTextView)?.isEditable == true }
+        try requireNonActivating(panel)
+        XCTAssertEqual(vm.selectedIndex, 1, "Refocusing must preserve the selected result")
+        panel.sendEvent(try key(kVK_Return, window: panel, characters: "\r"))
+        try await waitUntil { panel.firstResponder === timelineResponder }
+        try requireNonActivating(panel)
+        XCTAssertFalse((panel.firstResponder as? NSTextView)?.isEditable == true)
+        XCTAssertTrue(vm.isSearching, "Submission enters browsing without closing search")
+        XCTAssertEqual(vm.searchQuery, "synthetic")
+        XCTAssertEqual(vm.searchResults.count, 4)
+
+        // No shown controller/monitor: native focus and field submission are
+        // tested here; keyboard resolver dispatch has its own unit tests.
+        await buffer.flushCaches()
+    }
+
+    private func requireNonActivating(_ panel: NSPanel) throws {
+        guard !panel.isKeyWindow, !panel.isMainWindow,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
+            panel.orderOut(nil)
+            throw XCTSkip("Native focus probe requires a non-key/non-main, non-frontmost test host")
+        }
+    }
+
+    private func editableField(in root: NSView) -> NSTextField? {
+        if let field = root as? NSTextField, field.isEditable { return field }
+        for child in root.subviews { if let field = editableField(in: child) { return field } }
+        return nil
+    }
+
     func testNativeOverlayEditorAndOtherWindowEvents() async throws {
         let directory = try temporaryDirectory()
         let store = try FrameStore(directory: directory)
@@ -230,6 +353,11 @@ final class NativeSwiftUIValidationTests: XCTestCase {
             context: nil, characters: characters, charactersIgnoringModifiers: characters,
             isARepeat: false, keyCode: UInt16(code)))
     }
+}
+
+private final class NativeValidationNonActivatingPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
 }
 
 private final class NativeValidationScrollEvent: NSEvent {

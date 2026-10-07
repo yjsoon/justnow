@@ -4,6 +4,17 @@ All notable changes to JustNow will be documented in this file.
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-10-07
+
+### Fixed
+- Match search-highlight recognition to the search index so small text found by search can also be highlighted. Previously cached highlight layouts regenerate without removing indexed text or history.
+- Hand keyboard focus to the timeline after scrubbing, clicking navigation arrows, or submitting a search. Arrow keys continue editing the query while the search field is focused.
+- Keep the rewind overlay at normal window level so other applications and system dialogs remain reachable if the app stalls.
+
+### Changed
+- Use ⌘F to open or refocus search without clearing the query or selected result. The `/` shortcut also refocuses search when not editing text.
+- Keep native Tab traversal while search is open, and show the monitor-switching Tab hint only when search is closed.
+
 ## [1.5.3] - 2026-10-07
 
 ### Fixed

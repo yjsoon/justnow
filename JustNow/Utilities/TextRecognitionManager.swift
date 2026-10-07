@@ -57,10 +57,12 @@ nonisolated enum TextRecognitionManager {
     static func extractSearchLayout(from image: CGImage) async -> SearchTextLayout? {
         guard !Task.isCancelled else { return nil }
 
+        // Highlights must recognise the same text as the search index.
+        // Accurate OCR can omit small text that fast indexing found.
         let request = makeRecogniseTextRequest(
-            recognitionLevel: .accurate,
-            usesLanguageCorrection: true,
-            automaticallyDetectsLanguage: true
+            recognitionLevel: .fast,
+            usesLanguageCorrection: false,
+            automaticallyDetectsLanguage: false
         )
         let handler = VNImageRequestHandler(cgImage: image, options: [:])
 

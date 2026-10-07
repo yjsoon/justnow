@@ -34,6 +34,7 @@ extension View {
 
 struct TimelineSlider: View {
     var viewModel: OverlayViewModel
+    var focus: FocusState<OverlayFocusTarget?>.Binding
 
     private var displayedEntries: [TimelineEntry] { viewModel.displayedEntries }
     private var frameCount: Int { displayedEntries.count }
@@ -63,10 +64,17 @@ struct TimelineSlider: View {
                 markers: timelineMarkers,
                 colourSegments: colourSegments,
                 accessibilityValue: viewModel.accessibilityTimelineValue,
-                onIndexChanged: { viewModel.selectedIndex = $0 },
+                onIndexChanged: {
+                    if focus.wrappedValue != .timeline {
+                        focus.wrappedValue = .timeline
+                    }
+                    viewModel.selectedIndex = $0
+                },
                 onIncrement: viewModel.moveRight,
                 onDecrement: viewModel.moveLeft
             )
+            .focusable()
+            .focused(focus, equals: .timeline)
             .frame(height: timelineMarkers.isEmpty ? 32 : 54)
             .padding(.horizontal, 8)
             .offset(y: 12)

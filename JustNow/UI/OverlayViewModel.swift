@@ -288,6 +288,8 @@ class OverlayViewModel {
     var isSearching = false
     var searchQuery = ""
     var searchTimeScope: SearchTimeScope = .all
+    /// A request to the native focus owner, not a mirror of first-responder state.
+    private(set) var searchFocusRequest = 0
     var searchResults: [TimelineEntry] = []
     var isSearchPending = false
     var isSearchInProgress = false
@@ -502,10 +504,19 @@ class OverlayViewModel {
             clearSearch()
             return
         }
-        isSearching.toggle()
-        if !isSearching {
+        if isSearching {
             clearSearch()
+        } else {
+            focusSearch()
         }
+    }
+
+    func focusSearch() {
+        guard isSearchAvailable else { return }
+        if !isSearching {
+            isSearching = true
+        }
+        searchFocusRequest += 1
     }
 
     func clearSearch() {

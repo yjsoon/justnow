@@ -229,11 +229,12 @@ struct ContentAreaView: View {
 
     private var displayedEntries: [TimelineEntry] { viewModel.displayedEntries }
     @State private var textGrabBannerState: TextGrabBannerState = .hint
+    @FocusState private var focusedControl: OverlayFocusTarget?
 
     var body: some View {
         VStack(spacing: 0) {
             if viewModel.isSearchAvailable && viewModel.isSearching {
-                SearchBarView(viewModel: viewModel)
+                SearchBarView(viewModel: viewModel, focus: $focusedControl)
                     .padding(.top, OverlayChromeMetrics.searchBarTopPadding)
                     .padding(.horizontal, 200)
                     .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
@@ -244,7 +245,7 @@ struct ContentAreaView: View {
                 .padding(.top, viewModel.isSearchAvailable && viewModel.isSearching ? 20 : 40)
                 .offset(y: OverlayChromeMetrics.contentVerticalShift)
 
-            TimelineSlider(viewModel: viewModel)
+            TimelineSlider(viewModel: viewModel, focus: $focusedControl)
                 .padding(.horizontal, 40)
                 .padding(.bottom, OverlayChromeMetrics.timelineBottomPadding)
         }
@@ -281,7 +282,10 @@ struct ContentAreaView: View {
                         accessibilityHint: "Shows the next older captured frame.",
                         toolTip: "Previous frame (Left Arrow)",
                         isEnabled: viewModel.canMoveLeft,
-                        action: viewModel.moveLeft
+                        action: {
+                            focusedControl = .timeline
+                            viewModel.moveLeft()
+                        }
                     )
 
                     FramePreviewView(
@@ -298,7 +302,10 @@ struct ContentAreaView: View {
                         accessibilityHint: "Shows the next newer captured frame.",
                         toolTip: "Next frame (Right Arrow)",
                         isEnabled: viewModel.canMoveRight,
-                        action: viewModel.moveRight
+                        action: {
+                            focusedControl = .timeline
+                            viewModel.moveRight()
+                        }
                     )
                 }
                 .frame(width: row.size.width, height: row.size.height)
@@ -406,17 +413,20 @@ private struct DisplayPickerStrip: View {
                 DisplayChip(
                     display: display,
                     isActive: viewModel.activeDisplay?.id == display.id,
+                    showsCycleShortcut: !viewModel.isSearching,
                     action: { viewModel.switchDisplay(to: display) }
                 )
             }
 
-            Text("Tab")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.white.opacity(0.45))
-                .padding(.leading, 2)
-                .padding(.top, 2)
-                .offset(y: -1)
-                .accessibilityHidden(true)
+            if !viewModel.isSearching {
+                Text("Tab")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .padding(.leading, 2)
+                    .padding(.top, 2)
+                    .offset(y: -1)
+                    .accessibilityHidden(true)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -427,6 +437,7 @@ private struct DisplayPickerStrip: View {
 private struct DisplayChip: View {
     let display: DisplayInfo
     let isActive: Bool
+    let showsCycleShortcut: Bool
     let action: () -> Void
 
     var body: some View {
@@ -446,7 +457,10 @@ private struct DisplayChip: View {
             .background(Capsule().fill(backgroundFill))
         }
         .buttonStyle(.plain)
-        .help(display.isConnected ? "Show \(display.name) (Tab)" : "Show \(display.name) — disconnected, historical only (Tab)")
+        .help(
+            (display.isConnected ? "Show \(display.name)" : "Show \(display.name) — disconnected, historical only")
+                + (showsCycleShortcut ? " (Tab)" : "")
+        )
         .accessibilityLabel(display.isConnected ? "Switch to \(display.name)" : "Switch to \(display.name) (historical)")
     }
 

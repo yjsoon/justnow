@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Observation
 import SQLite3
@@ -107,6 +108,12 @@ final class OverlayTimelineTests: XCTestCase {
         await repository.resumeCurrentTimelineSnapshot()
         await showTask.value
         XCTAssertTrue(controller.isVisible)
+        let overlayWindow = try XCTUnwrap(NSApp.windows.first {
+            $0 is OverlayWindow && $0.isVisible
+        })
+        // A stalled fullscreen app must not sit above system rescue dialogs
+        // or prevent the user from switching to another application's window.
+        XCTAssertEqual(overlayWindow.level, .normal)
         controller.hideOverlay()
         await lease.waitUntilReleaseRequested()
 
@@ -519,6 +526,36 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertEqual(marker.targetDate, now.addingTimeInterval(-300))
         XCTAssertEqual(marker.position, 0.5, accuracy: 0.000_1)
         XCTAssertEqual(marker.id, marker.targetDate.timeIntervalSinceReferenceDate)
+    }
+
+    func testRefocusingSearchPreservesItsFilterAndSelectedResult() async throws {
+        let now = Date(timeIntervalSinceReferenceDate: 1_000_000)
+        let entries = [
+            makeEntry(start: now.addingTimeInterval(-100), end: now.addingTimeInterval(-90)),
+            makeEntry(start: now.addingTimeInterval(-20), end: now.addingTimeInterval(-10))
+        ]
+        let viewModel = try await makeViewModel(entries: entries, referenceDate: now)
+        viewModel.toggleSearch()
+        XCTAssertTrue(viewModel.isSearching)
+        XCTAssertEqual(viewModel.searchFocusRequest, 1)
+        viewModel.searchQuery = "needle"
+        viewModel.searchTimeScope = .oneHour
+        viewModel.searchResults = entries
+        viewModel.selectedIndex = 0
+        let selectedTimestamp = viewModel.selectedTimestamp
+
+        // Each request must be observable, even after clicking back into the
+        // field or returning to browsing without closing the search UI.
+        viewModel.focusSearch()
+        viewModel.focusSearch()
+        XCTAssertEqual(viewModel.searchFocusRequest, 3)
+        XCTAssertTrue(viewModel.isSearching)
+        XCTAssertEqual(viewModel.searchQuery, "needle")
+        XCTAssertEqual(viewModel.searchTimeScope, .oneHour)
+        XCTAssertEqual(viewModel.searchResults.map(\.span.id), entries.map(\.span.id))
+        XCTAssertEqual(viewModel.selectedIndex, 0)
+        XCTAssertEqual(viewModel.selectedTimestamp, selectedTimestamp)
+        viewModel.clearSearch()
     }
 
     func testTimelineDecorationDoesNotInvalidateWhenScrubbingOrSearching() async throws {

@@ -33,6 +33,41 @@ final class TextCacheTests: XCTestCase {
         XCTAssertEqual(count, 1)
     }
 
+    func testLegacyHighlightLayoutIsRegeneratedWithoutLosingIndexedText() async throws {
+        let cache = TextCache(directory: directory)
+        let frameID = UUID()
+        await cache.setText("Menu bar", for: frameID)
+        let linesJSON = String(decoding: try JSONEncoder().encode(makeLayout().lines), as: UTF8.self)
+        let legacyJSON = "{\"lines\":\(linesJSON)}"
+        var connection: OpaquePointer?
+        XCTAssertEqual(sqlite3_open_v2(
+            directory.appendingPathComponent("text_cache.sqlite").path,
+            &connection, SQLITE_OPEN_READWRITE, nil
+        ), SQLITE_OK)
+        let database = try XCTUnwrap(connection)
+        defer { sqlite3_close(database) }
+        var statement: OpaquePointer?
+        XCTAssertEqual(sqlite3_prepare_v2(database,
+            "INSERT INTO frame_search_layout(frame_id, updated_at, layout_json) VALUES (?, 0, ?);",
+            -1, &statement, nil), SQLITE_OK)
+        let insert = try XCTUnwrap(statement)
+        defer { sqlite3_finalize(insert) }
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(insert, 1, frameID.uuidString, -1, transient)
+        sqlite3_bind_text(insert, 2, legacyJSON, -1, transient)
+        XCTAssertEqual(sqlite3_step(insert), SQLITE_DONE)
+
+        let staleLayout = await cache.getSearchLayout(for: frameID)
+        XCTAssertNil(staleLayout, "Old accurate-OCR boxes must not suppress index-matching highlights")
+        let hits = try await cache.searchFrameIDs(matching: "menu", limit: 10)
+        XCTAssertEqual(hits, [frameID], "Discarding derived boxes must preserve the search index")
+        await cache.setSearchLayout(makeLayout(), for: frameID)
+        let freshLayout = await cache.getSearchLayout(for: frameID)
+        XCTAssertEqual(freshLayout?.highlightRects(matching: "menu"), [
+            CGRect(x: 0.1, y: 0.5, width: 0.14, height: 0.1)
+        ])
+    }
+
     func testSearchMatchesTokenPrefixes() async throws {
         let cache = TextCache(directory: directory)
         let frameID = UUID()

@@ -1,8 +1,13 @@
 import SwiftUI
 
+enum OverlayFocusTarget: Hashable {
+    case search
+    case timeline
+}
+
 struct SearchBarView: View {
     var viewModel: OverlayViewModel
-    @FocusState private var isFocused: Bool
+    var focus: FocusState<OverlayFocusTarget?>.Binding
 
     private var indexingStatus: String? {
         Self.indexingStatus(for: viewModel.searchIndexStatus)
@@ -25,12 +30,13 @@ struct SearchBarView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 16))
                 .foregroundStyle(.white)
-                .focused($isFocused)
+                .focused(focus, equals: .search)
                 .onChange(of: viewModel.searchQuery) { _, _ in
                     viewModel.performSearch()
                 }
                 .onSubmit {
                     viewModel.performSearch(immediately: true)
+                    focus.wrappedValue = .timeline
                 }
 
             if viewModel.isSearchLoading {
@@ -101,7 +107,10 @@ struct SearchBarView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .darkBarBackground(in: Capsule())
-        .onAppear { isFocused = true }
+        .onAppear { focus.wrappedValue = .search }
+        .onChange(of: viewModel.searchFocusRequest) { _, _ in
+            focus.wrappedValue = .search
+        }
         .task {
             while !Task.isCancelled {
                 await viewModel.refreshIndexStatus()
