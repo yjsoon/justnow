@@ -11,10 +11,23 @@
   },
   "releases": [
     {
+      "tag": "v1.5.4",
+      "version": "1.5.4",
+      "published_at": "2026-10-07",
+      "status": "Current public build",
+      "notes": [
+        "Match search-highlight recognition to the search index so small text found by search can also be highlighted. Previously cached highlight layouts regenerate without removing indexed text or history.",
+        "Hand keyboard focus to the timeline after scrubbing, clicking navigation arrows, or submitting a search. Arrow keys continue editing the query while the search field is focused.",
+        "Keep the rewind overlay at normal window level so other applications and system dialogs remain reachable if the app stalls.",
+        "Use ⌘F to open or refocus search without clearing the query or selected result. The `/` shortcut also refocuses search when not editing text.",
+        "Keep native Tab traversal while search is open, and show the monitor-switching Tab hint only when search is closed."
+      ]
+    },
+    {
       "tag": "v1.5.3",
       "version": "1.5.3",
       "published_at": "2026-10-07",
-      "status": "Current public build",
+      "status": "Previous release",
       "notes": [
         "Improved search matching and result highlighting, including Unicode text and recovered history.",
         "Unavailable search indexes can recover, with a retry action instead of treating a failed search as an empty result.",
