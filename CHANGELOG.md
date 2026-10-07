@@ -4,6 +4,22 @@ All notable changes to JustNow will be documented in this file.
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-10-07
+
+### Fixed
+- Improved search matching and result highlighting, including Unicode text and recovered history.
+- Recover unavailable search indexes and show a retry action instead of treating a failed search as an empty result.
+- Keep arrow and navigation keys in text fields from moving the rewind timeline while editing.
+- Keep launch-at-login and software-update controls synchronized across Settings windows and external changes.
+- Improved keyboard shortcut recording, modifier handling, and accessibility.
+
+### Changed
+- Reduced repeated timeline work while scrubbing through history.
+- Search animations now respect macOS Reduce Motion.
+
+### Internal
+- Automated universal signed/notarised macOS builds, GitHub releases, website release notes, and signed Sparkle feeds on stable tag pushes.
+
 ## [1.3.1] - 2026-05-22
 
 ### Changed
