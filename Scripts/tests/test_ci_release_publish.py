@@ -63,6 +63,7 @@ class ReleasePublicationTests(unittest.TestCase):
         self.calls = []
         self.deployed = False
         self.public_key = "existing-public-key"
+        self.existing_key = None
         self.bad_signature = False
         self.bad_download = False
         self.release = {"isDraft": True, "isPrerelease": False, "body": "- A new feature\n- A fix",
@@ -96,10 +97,19 @@ class ReleasePublicationTests(unittest.TestCase):
             return "tools\n"
         elif args[0].endswith("generate_keys"):
             if "-f" in args:
+                if self.existing_key is not None:
+                    raise subprocess.CalledProcessError(1, args, stderr="Duplicate keychain item")
                 key = Path(args[-1])
                 self.assertEqual(key.stat().st_mode & 0o777, 0o600)
                 self.assertEqual(key.read_text(), "synthetic-key")
+                self.existing_key = key.read_text()
+            elif "-x" in args:
+                key = Path(args[-1])
+                self.assertEqual(key.stat().st_mode & 0o777, 0o600)
+                key.write_text(self.existing_key)
             else:
+                if self.existing_key is None:
+                    raise subprocess.CalledProcessError(1, args, stderr="Key not found")
                 return self.public_key + "\n"
         elif args[-2] == "Scripts/generate-sparkle-appcast.sh":
             self.assertEqual(args[0], "env")
@@ -156,6 +166,26 @@ class ReleasePublicationTests(unittest.TestCase):
             publisher.main()
         self.assertFalse(any(c[0] == "gh" for c in self.calls))
         self.assert_no_publication()
+
+    def test_existing_matching_key_is_reused_without_import(self):
+        self.existing_key = "synthetic-key"
+        publisher.main()
+        self.assertTrue(self.deployed)
+        self.assertFalse(any(c[0].endswith("generate_keys") and "-f" in c for c in self.calls))
+        exports = [Path(c[-1]) for c in self.calls if c[0].endswith("generate_keys") and "-x" in c]
+        self.assertEqual(len(exports), 1)
+        self.assertFalse(exports[0].exists())
+
+    def test_matching_public_key_does_not_accept_different_supplied_secret(self):
+        self.existing_key = "different-private-key"
+        with self.assertRaisesRegex(SystemExit, "private key does not match"):
+            publisher.main()
+        self.assertFalse(any(c[0] == "gh" for c in self.calls))
+        self.assertFalse(any(c[0].endswith("generate_keys") and "-f" in c for c in self.calls))
+        self.assert_no_publication()
+        exports = [Path(c[-1]) for c in self.calls if c[0].endswith("generate_keys") and "-x" in c]
+        self.assertEqual(len(exports), 1)
+        self.assertFalse(exports[0].exists())
 
     def test_invalid_signature_stops_before_upload_or_deployment(self):
         self.bad_signature = True
