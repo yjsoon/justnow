@@ -20,6 +20,8 @@ struct HotKeyRegistrationPlan: Equatable {
 final class HotKeyController {
     private var overlayHotKey: HotKey?
     private var capturePauseHotKey: HotKey?
+    private var latestConfiguration: HotKeyConfiguration?
+    private var isSuspended = false
 
     private let overlayHandler: () -> Void
     private let capturePauseHandler: () -> Void
@@ -36,8 +38,10 @@ final class HotKeyController {
     }
 
     func register(configuration: HotKeyConfiguration) {
+        latestConfiguration = configuration
         overlayHotKey = nil
         capturePauseHotKey = nil
+        guard !isSuspended else { return }
 
         overlayHotKey = makeHotKey(
             keyCode: configuration.overlayKeyCode,
@@ -58,6 +62,17 @@ final class HotKeyController {
             modifiers: configuration.capturePauseModifiers,
             handler: capturePauseHandler
         )
+    }
+
+    func setSuspended(_ suspended: Bool) {
+        guard isSuspended != suspended else { return }
+        isSuspended = suspended
+        if suspended {
+            overlayHotKey = nil
+            capturePauseHotKey = nil
+        } else if let latestConfiguration {
+            register(configuration: latestConfiguration)
+        }
     }
 
     static func registrationPlan(for configuration: HotKeyConfiguration) -> HotKeyRegistrationPlan {

@@ -80,6 +80,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         onShortcutChanged: { [weak self] in
             self?.keyboardShortcutsDidChange()
         },
+        onShortcutRecordingChanged: { [weak self] isRecording in
+            self?.hotKeyController.setSuspended(isRecording)
+        },
         onRelaunch: { [weak self] in
             self?.relaunchApp()
         }

@@ -13,6 +13,7 @@ struct KeyboardShortcutRecorder: View {
 
     var allowsEscapeShortcut: Bool = false
     var placeholder: String = "Click to set"
+    var onRecordingChanged: (UUID, Bool) -> Void = { _, _ in }
 
     @State private var isRecording = false
     @FocusState private var isFocused: Bool
@@ -24,7 +25,8 @@ struct KeyboardShortcutRecorder: View {
                 modifiers: $modifiers,
                 isRecording: $isRecording,
                 allowsEscapeShortcut: allowsEscapeShortcut,
-                placeholder: placeholder
+                placeholder: placeholder,
+                onRecordingChanged: onRecordingChanged
             )
             .frame(minWidth: 120, maxWidth: 200)
             .frame(height: 24)
@@ -58,6 +60,7 @@ struct RecorderField: NSViewRepresentable {
 
     var allowsEscapeShortcut: Bool
     var placeholder: String
+    var onRecordingChanged: (UUID, Bool) -> Void = { _, _ in }
 
     func makeNSView(context: Context) -> RecorderNSView {
         let view = RecorderNSView()
@@ -68,34 +71,47 @@ struct RecorderField: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: RecorderNSView, context: Context) {
+        context.coordinator.parent = self
         nsView.allowsEscapeShortcut = allowsEscapeShortcut
         nsView.placeholder = placeholder
-        nsView.updateDisplay(keyCode: keyCode, modifiers: modifiers, isRecording: isRecording)
+        nsView.updateDisplay(keyCode: keyCode, modifiers: modifiers)
     }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
 
+    static func dismantleNSView(_ nsView: RecorderNSView, coordinator: Coordinator) {
+        nsView.cancelRecording()
+        nsView.delegate = nil
+    }
+
     class Coordinator: NSObject, RecorderNSViewDelegate {
         var parent: RecorderField
+        private let recorderID = UUID()
+        private var isRecording = false
 
         init(_ parent: RecorderField) {
             self.parent = parent
         }
 
         func recorderDidStartRecording() {
+            guard !isRecording else { return }
+            isRecording = true
+            parent.onRecordingChanged(recorderID, true)
             parent.isRecording = true
         }
 
         func recorderDidEndRecording() {
+            guard isRecording else { return }
+            isRecording = false
+            parent.onRecordingChanged(recorderID, false)
             parent.isRecording = false
         }
 
         func recorderDidCaptureShortcut(keyCode: Int, modifiers: Int) {
             parent.keyCode = keyCode
             parent.modifiers = modifiers
-            parent.isRecording = false
         }
     }
 }
@@ -150,6 +166,26 @@ class RecorderNSView: NSView {
     }
 
     override var acceptsFirstResponder: Bool { true }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if let window {
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didResignKeyNotification, object: window)
+        }
+        if newWindow !== window { stopRecording() }
+        super.viewWillMove(toWindow: newWindow)
+        if let newWindow {
+            NotificationCenter.default.addObserver(self, selector: #selector(windowDidResignKey),
+                name: NSWindow.didResignKeyNotification, object: newWindow)
+        }
+    }
+
+    @objc private func windowDidResignKey(_ notification: Notification) {
+        stopRecording()
+    }
+
+    func cancelRecording() {
+        stopRecording()
+    }
 
     override func mouseDown(with event: NSEvent) {
         if !isRecording {
@@ -236,8 +272,8 @@ class RecorderNSView: NSView {
     }
 
     private func startRecording() {
-        isRecording = true
         window?.makeFirstResponder(self)
+        isRecording = true
         textField.stringValue = "Press shortcut..."
         textField.textColor = .labelColor
         delegate?.recorderDidStartRecording()
@@ -245,18 +281,19 @@ class RecorderNSView: NSView {
     }
 
     private func stopRecording() {
+        guard isRecording else { return }
         isRecording = false
         updateDisplayText()
         delegate?.recorderDidEndRecording()
         NSAccessibility.post(element: self, notification: .valueChanged)
     }
 
-    func updateDisplay(keyCode: Int, modifiers: Int, isRecording: Bool) {
+    func updateDisplay(keyCode: Int, modifiers: Int) {
         self.currentKeyCode = keyCode
         self.currentModifiers = modifiers
-        self.isRecording = isRecording
 
-        if !isRecording {
+        // AppKit owns recording lifetime; a delayed SwiftUI update must not restart/end it.
+        if !self.isRecording {
             updateDisplayText()
         }
     }

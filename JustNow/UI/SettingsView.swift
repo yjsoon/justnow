@@ -42,6 +42,12 @@ struct SettingsView: View {
 
     var context: SettingsContext = SettingsContext()
 
+    enum Tab: Hashable {
+        case general, rewind, capture, shortcuts
+    }
+
+    @State var selectedTab: Tab = .general
+
     @State private var storageStatistics: FrameStorageStatistics = .empty
     @State private var projectionSamples: [FrameStorageSample] = []
     @State private var connectedDisplayIDs: [UUID] = []
@@ -53,11 +59,11 @@ struct SettingsView: View {
     @State private var showRelaunchConfirmation = false
 
     var body: some View {
-        TabView {
-            generalSettingsTab
-            rewindSettingsTab
-            captureSettingsTab
-            shortcutsSettingsTab
+        TabView(selection: $selectedTab) {
+            generalSettingsTab.tag(Tab.general)
+            rewindSettingsTab.tag(Tab.rewind)
+            captureSettingsTab.tag(Tab.capture)
+            shortcutsSettingsTab.tag(Tab.shortcuts)
         }
         .tabViewStyle(.tabBarOnly)
         .frame(width: 660, height: 520)
@@ -490,7 +496,8 @@ struct SettingsView: View {
                 shortcutRow("Open rewind") {
                     KeyboardShortcutRecorder(
                         keyCode: $shortcutKeyCode,
-                        modifiers: $shortcutModifiers
+                        modifiers: $shortcutModifiers,
+                        onRecordingChanged: context.notifyShortcutRecordingChanged
                     )
                     .frame(maxWidth: 240)
                     .onChange(of: shortcutKeyCode) { _, _ in context.notifyShortcutChanged() }
@@ -500,7 +507,8 @@ struct SettingsView: View {
                 shortcutRow("Pause or resume recording") {
                     KeyboardShortcutRecorder(
                         keyCode: $capturePauseShortcutKeyCode,
-                        modifiers: $capturePauseShortcutModifiers
+                        modifiers: $capturePauseShortcutModifiers,
+                        onRecordingChanged: context.notifyShortcutRecordingChanged
                     )
                     .frame(maxWidth: 240)
                     .onChange(of: capturePauseShortcutKeyCode) { _, _ in context.notifyShortcutChanged() }
@@ -512,7 +520,8 @@ struct SettingsView: View {
                         keyCode: $overlayDismissKeyCode,
                         modifiers: $overlayDismissModifiers,
                         allowsEscapeShortcut: true,
-                        placeholder: "Press key"
+                        placeholder: "Press key",
+                        onRecordingChanged: context.notifyShortcutRecordingChanged
                     )
                     .frame(maxWidth: 240)
                     .onChange(of: overlayDismissKeyCode) { _, _ in context.notifyShortcutChanged() }

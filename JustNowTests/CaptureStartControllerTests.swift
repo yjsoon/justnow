@@ -3,6 +3,88 @@ import XCTest
 
 @MainActor
 final class CaptureStartControllerTests: XCTestCase {
+    func testManualResumeInsideOverlayStartsExactlyOnceAfterDismissal() async {
+        let startController = CaptureStartController(sleep: { _ in
+            XCTFail("The overlay must block manual resume before its delay is scheduled")
+        })
+        var isCapturing = true
+        var isOverlayVisible = false
+        var startCount = 0
+        var stopCount = 0
+        var startRequestCount = 0
+        var statuses: [String] = []
+        var eventController: CaptureEventController!
+        eventController = CaptureEventController(
+            context: {
+                CaptureEventContext(
+                    hasCaptureManager: true,
+                    isCapturing: isCapturing,
+                    isSetupCaptureInProgress: false,
+                    hasPendingStart: startController.hasPendingStart,
+                    isOverlayVisible: isOverlayVisible
+                )
+            },
+            scheduleStart: { request in
+                startRequestCount += 1
+                startController.scheduleStart(
+                    request: request,
+                    canStartCapture: { eventController.canStartCapture() },
+                    blockedStatus: { eventController.blockedStatus(includeOverlay: $0) },
+                    updateStatus: { statuses.append($0) },
+                    startCapture: { _ in
+                        XCTAssertFalse(isOverlayVisible)
+                        startCount += 1
+                        isCapturing = true
+                        return .started
+                    }
+                )
+            },
+            cancelPendingStart: { startController.cancelPendingStart() },
+            scheduleStop: { _ in
+                // Model a completed stop, not a stop still racing overlay open.
+                stopCount += 1
+                isCapturing = false
+            },
+            updateStatus: { statuses.append($0) },
+            enableBlackFrameFilter: { _ in },
+            endForegroundActivity: {},
+            updatePauseMenu: { _ in },
+            logger: { _ in }
+        )
+        defer {
+            startController.cancelPendingStart()
+            eventController = nil
+        }
+
+        eventController.toggleCapturePause()
+        XCTAssertTrue(eventController.isUserPaused)
+        XCTAssertFalse(isCapturing)
+        XCTAssertEqual(stopCount, 1)
+        XCTAssertFalse(startController.hasPendingStart)
+
+        isOverlayVisible = true
+        eventController.handleOverlayVisibilityChanged(isVisible: true)
+        eventController.toggleCapturePause()
+        XCTAssertFalse(eventController.isUserPaused)
+        XCTAssertEqual(startRequestCount, 1)
+
+        // Wait for the real start controller to discard the blocked request
+        // before dismissal, so it cannot accidentally start after visibility changes.
+        await waitUntil {
+            statuses.last == "Paused (Overlay)" && !startController.hasPendingStart
+        }
+        XCTAssertEqual(startCount, 0)
+        XCTAssertFalse(isCapturing)
+
+        isOverlayVisible = false
+        eventController.handleOverlayVisibilityChanged(isVisible: false)
+        await waitUntil { !startController.hasPendingStart }
+
+        XCTAssertEqual(startRequestCount, 2, "Dismissal must preserve manual resume intent")
+        XCTAssertEqual(startCount, 1)
+        XCTAssertTrue(isCapturing)
+    }
+
     func testScheduleStartUsesBlockedStatusWithoutStartingCapture() async {
         let controller = CaptureStartController()
         var statuses: [String] = []

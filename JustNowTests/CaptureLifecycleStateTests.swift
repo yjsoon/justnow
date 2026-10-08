@@ -2,6 +2,38 @@ import XCTest
 @testable import JustNow
 
 final class CaptureLifecycleStateTests: XCTestCase {
+    func testManualResumePreservesIntentUntilAllTemporaryGatesClear() {
+        var state = CaptureLifecycleState()
+        XCTAssertTrue(state.toggleUserPause())
+        _ = state.pauseForOverlay(captureWasActive: false, shouldResumeCapture: false)
+        _ = state.pauseForSession(captureWasActive: false, shouldResumeCapture: false)
+        _ = state.pauseForLock(captureWasActive: false, shouldResumeCapture: false)
+
+        XCTAssertFalse(state.toggleUserPause())
+        XCTAssertTrue(state.wasCapturingBeforeOverlay)
+        XCTAssertTrue(state.wasCapturingBeforeSession)
+        XCTAssertTrue(state.wasCapturingBeforeLock)
+        XCTAssertFalse(state.canStartCapture(isOverlayVisible: true))
+        XCTAssertTrue(state.resumeAfterOverlay())
+        XCTAssertFalse(state.canStartCapture(isOverlayVisible: false))
+        XCTAssertTrue(state.resumeAfterSession())
+        XCTAssertFalse(state.canStartCapture(isOverlayVisible: false))
+        XCTAssertTrue(state.resumeAfterLock())
+        XCTAssertFalse(state.canStartCapture(isOverlayVisible: true))
+        XCTAssertTrue(state.canStartCapture(isOverlayVisible: false))
+    }
+
+    func testUserPauseAgainStillBlocksSavedManualResumeIntent() {
+        var state = CaptureLifecycleState()
+        _ = state.toggleUserPause()
+        _ = state.pauseForOverlay(captureWasActive: false, shouldResumeCapture: false)
+        _ = state.toggleUserPause()
+        XCTAssertTrue(state.toggleUserPause())
+        XCTAssertTrue(state.resumeAfterOverlay())
+        XCTAssertFalse(state.canStartCapture(isOverlayVisible: false))
+        XCTAssertEqual(state.blockedStatus(isOverlayVisible: false), "Paused (User)")
+    }
+
     func testBlockedStatusPrefersUserPauseOverOverlayAndSession() {
         var state = CaptureLifecycleState()
 
