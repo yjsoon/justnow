@@ -4,6 +4,19 @@ All notable changes to JustNow will be documented in this file.
 
 ## [Unreleased]
 
+## [1.5.5] - 2026-10-08
+
+### Fixed
+- Make Unicode substring searches case-insensitive and combine accented-word and CJK searches consistently.
+- Preserve subtraction signs and paragraph breaks when copying recognised text, while still joining genuinely hyphenated word wraps.
+- Honour an explicit resume request made while the rewind overlay is open, so recording resumes after the overlay closes.
+- Suspend both global shortcuts while recording a new shortcut, including when shortcut preferences change during recording.
+- Refresh capture when a display's physical identity or configuration changes, and close the capture session cleanly if its last display cannot restart.
+- Save the latest frame from each display when a capture session ends, including pauses and display disconnections.
+- Preserve stored history when the database is temporarily busy or uses a newer schema, instead of treating these conditions as corruption.
+- Remove missing-image history from the timeline, search, and image cache even when its replacement cannot be saved.
+- Clean up empty closed capture sessions while preserving open sessions and sessions with retained history.
+
 ## [1.5.4] - 2026-10-07
 
 ### Fixed
