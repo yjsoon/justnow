@@ -617,6 +617,11 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
             for previousLoop in previousLoops {
                 await previousLoop?.value
             }
+            // A cancelled pass leaves session ownership to its successor or
+            // explicit stop, which also preserves the requested end reason.
+            if !(error is CancellationError), isRunning, !Task.isCancelled, !isCapturing {
+                await endLogicalCaptureSessionIfNeeded(reason: .unexpectedStop)
+            }
             delegate?.captureCoordinatorDidUpdateDisplays(self)
             throw error
         }
