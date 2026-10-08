@@ -344,7 +344,7 @@ actor FrameStore {
         frame: StoredFrame,
         jpegData: Data,
         forceNewSpan: Bool = false
-    ) throws -> FrameStoreCaptureMutation {
+    ) throws -> (mutation: FrameStoreCaptureMutation, invalidation: FrameRepositoryInvalidation) {
         let session: CaptureSession
         do {
             guard let active = try database.activeSession() else {
@@ -357,6 +357,7 @@ actor FrameStore {
             throw FrameStoreError.database(String(describing: error))
         }
 
+        var invalidation = FrameRepositoryInvalidation.none
         do {
             // Compare the persisted Unix-epoch representation. Constructing a
             // `Date` back from SQLite can shift its reference-date value by
@@ -391,9 +392,13 @@ actor FrameStore {
                             observedAt: frame.timestamp,
                             displayName: frame.displayName
                         )
-                        return .extended(extended)
+                        return (.extended(extended), .none)
                     } else if activeData == nil {
-                        _ = try pruneSpans(ids: [activeEntry.span.id])
+                        let removedFrameIDs = try pruneSpans(ids: [activeEntry.span.id])
+                        invalidation = FrameRepositoryInvalidation(
+                            spanIDs: [activeEntry.span.id],
+                            finalPhysicalFrameIDs: removedFrameIDs
+                        )
                     }
                 }
             }
@@ -417,11 +422,19 @@ actor FrameStore {
             guard let insertedEntry else {
                 throw FrameStoreError.database("Inserted timeline entry could not be resolved")
             }
-            return .inserted(insertedEntry)
-        } catch let error as FrameStoreError {
-            throw error
+            return (.inserted(insertedEntry), invalidation)
         } catch {
-            throw FrameStoreError.database(String(describing: error))
+            let underlyingError = (error as? FrameStoreError)
+                ?? FrameStoreError.database(String(describing: error))
+            // The broken-span deletion already committed. A failed replacement
+            // must still remove its identity from the caller's timeline/caches.
+            if invalidation != .none {
+                throw FrameRepositoryMutationFailure(
+                    invalidation: invalidation,
+                    underlyingError: underlyingError
+                )
+            }
+            throw underlyingError
         }
     }
 
@@ -1084,6 +1097,13 @@ actor FrameStore {
             database = candidate
         } catch {
             openedDatabase?.close()
+            // A busy/full/unavailable database, or a newer schema, does not
+            // prove damaged history. Leave its files in place so startup can
+            // retry once the operational problem is resolved.
+            guard let databaseError = error as? FrameDatabaseError,
+                  databaseError.indicatesCorruption else {
+                throw error
+            }
             if let databaseJournalSnapshotURL {
                 if fileManager.fileExists(atPath: databaseJournalURL.path) {
                     try fileManager.removeItem(at: databaseJournalURL)

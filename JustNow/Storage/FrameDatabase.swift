@@ -7,7 +7,7 @@ import Foundation
 import SQLite3
 
 enum FrameDatabaseError: Error {
-    case sqlite(String)
+    case sqlite(String, code: Int32? = nil)
     case corrupt(String)
     case unusableFilename
     case unsupportedSchema(Int)
@@ -16,6 +16,19 @@ enum FrameDatabaseError: Error {
     case captureSessionMismatch(expected: UUID, active: UUID?)
     case invalidPromotion(String)
     case promotionConflict(String)
+
+    nonisolated var indicatesCorruption: Bool {
+        switch self {
+        case .corrupt:
+            return true
+        case .sqlite(_, let code):
+            guard let code else { return false }
+            let primaryCode = code & 0xff
+            return primaryCode == SQLITE_CORRUPT || primaryCode == SQLITE_NOTADB
+        default:
+            return false
+        }
+    }
 }
 
 typealias FrameDatabaseCommitHook = @Sendable (DurablePersistenceOperation) throws -> Void
@@ -122,8 +135,10 @@ nonisolated final class FrameDatabase: @unchecked Sendable {
 
     func quickCheck() throws {
         try withPreparedStatement("PRAGMA quick_check(1);") { statement in
-            guard sqlite3_step(statement) == SQLITE_ROW,
-                  let text = sqlite3_column_text(statement, 0),
+            guard sqlite3_step(statement) == SQLITE_ROW else {
+                throw sqliteError(message: "Failed to run SQLite quick check")
+            }
+            guard let text = sqlite3_column_text(statement, 0),
                   String(cString: text) == "ok" else {
                 throw FrameDatabaseError.corrupt("SQLite quick check failed")
             }
@@ -649,6 +664,7 @@ nonisolated final class FrameDatabase: @unchecked Sendable {
                     }
                 }
             }
+            try deleteUnreferencedClosedSessions()
         }
     }
 
@@ -666,8 +682,21 @@ nonisolated final class FrameDatabase: @unchecked Sendable {
                 }
                 try deleteRows(table: "frames", column: "id", ids: Set([frameID]))
             }
+            try deleteUnreferencedClosedSessions()
         }
         return removedAssets
+    }
+
+    private func deleteUnreferencedClosedSessions() throws {
+        try execute(
+            """
+            DELETE FROM capture_sessions
+            WHERE ended_at IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM frame_spans WHERE session_id = capture_sessions.id
+              );
+            """
+        )
     }
 
     /// Returns only candidate physical IDs that still have at least one
@@ -2014,8 +2043,13 @@ nonisolated final class FrameDatabase: @unchecked Sendable {
 
     private func foreignKeyCheck() throws {
         try withPreparedStatement("PRAGMA foreign_key_check;") { statement in
-            guard sqlite3_step(statement) == SQLITE_DONE else {
+            switch sqlite3_step(statement) {
+            case SQLITE_DONE:
+                return
+            case SQLITE_ROW:
                 throw FrameDatabaseError.corrupt("Frame database foreign-key check failed")
+            default:
+                throw sqliteError(message: "Failed to run frame database foreign-key check")
             }
         }
     }
@@ -2250,10 +2284,12 @@ nonisolated final class FrameDatabase: @unchecked Sendable {
     }
 
     private static func sqliteError(message: String, on db: OpaquePointer?) -> FrameDatabaseError {
-        guard let db, let text = sqlite3_errmsg(db) else {
-            return .sqlite(message)
+        guard let db else { return .sqlite(message) }
+        let code = sqlite3_extended_errcode(db)
+        if let text = sqlite3_errmsg(db) {
+            return .sqlite("\(message) (\(String(cString: text)))", code: code)
         }
-        return .sqlite("\(message) (\(String(cString: text)))")
+        return .sqlite(message, code: code)
     }
 
     private func sqliteError(message: String) -> FrameDatabaseError {

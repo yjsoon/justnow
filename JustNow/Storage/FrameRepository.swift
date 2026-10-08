@@ -36,6 +36,13 @@ nonisolated struct FrameRepositoryInvalidation: Sendable, Equatable {
     static let none = FrameRepositoryInvalidation(spanIDs: [], finalPhysicalFrameIDs: [])
 }
 
+/// Removals that committed before a later part of a mutation failed. Apply
+/// these under the same reconciliation gate as successful repository effects.
+nonisolated struct FrameRepositoryMutationFailure: Error {
+    let invalidation: FrameRepositoryInvalidation
+    let underlyingError: any Error
+}
+
 nonisolated enum FrameMemoryPressureLevel: Sendable, Equatable {
     case warning
     case critical
@@ -156,8 +163,8 @@ nonisolated struct FrameRepositorySaveOutcome: Sendable, Equatable {
     )
 }
 
-/// Why one physical JPEG became durable. Hybrid history uses the first five
-/// cases; `allDisk` preserves the existing repository path without pretending
+/// Why one physical JPEG became durable. Hybrid history uses every case except
+/// `allDisk`, which preserves the existing repository path without pretending
 /// that its older admission policy made a hybrid anchor decision.
 nonisolated enum FrameRepositoryDurableAnchorReason: Sendable, Equatable {
     case firstInSession
@@ -165,6 +172,7 @@ nonisolated enum FrameRepositoryDurableAnchorReason: Sendable, Equatable {
     case majorChange
     case capacitySpill
     case termination
+    case sessionEnd
     case allDisk
 }
 
@@ -495,12 +503,12 @@ nonisolated final class DiskFrameRepository: HybridDurableRepository, Sendable {
         jpegData: Data,
         forceNewSpan: Bool
     ) async throws -> FrameRepositorySaveResult {
-        let mutation = try await frameStore.recordEncodedCapture(
+        let result = try await frameStore.recordEncodedCapture(
             frame: frame,
             jpegData: jpegData,
             forceNewSpan: forceNewSpan
         )
-        switch mutation {
+        switch result.mutation {
         case .inserted(let entry):
             let metadataByteCount = FrameDatabase.logicalByteCount(for: entry)
             return FrameRepositorySaveResult(
@@ -510,7 +518,7 @@ nonisolated final class DiskFrameRepository: HybridDurableRepository, Sendable {
                 ),
                 effects: FrameRepositoryEffects(
                     timelineUpserts: [entry],
-                    invalidation: .none,
+                    invalidation: result.invalidation,
                     newlyDurableEntries: [entry],
                     persistenceEvents: [
                         .durableAnchor(

@@ -24,6 +24,18 @@ enum DiagnosticsLogFormat {
     /// TCC failures hides the error domain/code needed to tell transient OS
     /// denials apart from real permission revocations.
     static func describe(_ error: Error) -> String {
+        if let databaseError = error as? FrameDatabaseError {
+            // Stored values, SQL and filesystem paths do not belong in diagnostics.
+            switch databaseError {
+            case .sqlite(_, let code):
+                let primaryCode = code.map { String($0 & 0xff) } ?? "unknown"
+                return "FrameDatabaseError.sqlite(primaryCode=\(primaryCode))"
+            case .unsupportedSchema(let version):
+                return "FrameDatabaseError.unsupportedSchema(version=\(version))"
+            default:
+                return "FrameDatabaseError.validationFailure"
+            }
+        }
         let nsError = error as NSError
         return "\(nsError.localizedDescription) [\(nsError.domain) code=\(nsError.code)]"
     }

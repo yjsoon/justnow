@@ -272,6 +272,124 @@ final class FrameStoreTests: XCTestCase {
         XCTAssertEqual(metadata.first?.displayName, "Test Display")
     }
 
+    func testBusyStartupPreservesHealthyStoreAndCanReopenAfterWriterReleases() async throws {
+        let databaseURL = directory.appendingPathComponent("frames.sqlite")
+        let saved: FrameMetadata
+        let session: CaptureSession
+        do {
+            let store = try FrameStore(directory: directory)
+            session = try await store.beginCaptureSession(at: Date(timeIntervalSince1970: 2_000))
+            saved = try await store.saveFrame(
+                makeImage(), timestamp: session.startedAt, hash: 7,
+                displayID: nil, displayName: nil
+            )
+            await store.flush()
+        }
+        let storeID = try sqliteText(databaseURL: databaseURL, sql: "SELECT value FROM store_meta WHERE key='store_id';")
+        let payloadURL = directory.appendingPathComponent("frames/\(saved.filename)")
+        let originalPayload = try Data(contentsOf: payloadURL)
+        var writer: OpaquePointer?
+        XCTAssertEqual(sqlite3_open_v2(databaseURL.path, &writer, SQLITE_OPEN_READWRITE, nil), SQLITE_OK)
+        let connection = try XCTUnwrap(writer)
+        defer { sqlite3_close(connection) }
+        XCTAssertEqual(sqlite3_exec(connection, "BEGIN IMMEDIATE;", nil, nil, nil), SQLITE_OK)
+        defer { sqlite3_exec(connection, "ROLLBACK;", nil, nil, nil) }
+        XCTAssertEqual(try sqliteText(databaseURL: databaseURL, sql: "PRAGMA quick_check;"), "ok")
+
+        XCTAssertThrowsError(try FrameStore(directory: directory)) { error in
+            guard case FrameDatabaseError.sqlite(_, let code) = error else {
+                return XCTFail("Expected SQLite writer contention, not \(error)")
+            }
+            XCTAssertEqual(code.map { $0 & 0xff }, SQLITE_BUSY)
+        }
+        XCTAssertTrue(try recoveryBundleURLs().isEmpty, "An operational lock is not corruption")
+        XCTAssertEqual(sqlite3_exec(connection, "ROLLBACK;", nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(try sqliteText(databaseURL: databaseURL, sql: "SELECT value FROM store_meta WHERE key='store_id';"), storeID)
+        XCTAssertEqual(try Data(contentsOf: payloadURL), originalPayload)
+
+        let reopened = try FrameStore(directory: directory)
+        let frames = await reopened.getAllMetadata()
+        let sessions = await reopened.getCaptureSessions()
+        XCTAssertEqual(frames.map(\.id), [saved.id])
+        XCTAssertEqual(sessions.map(\.id), [session.id])
+        XCTAssertEqual(sessions.first?.endReason, .interrupted)
+        XCTAssertTrue(try recoveryBundleURLs().isEmpty)
+    }
+
+    func testUnsupportedSchemaDoesNotQuarantineHealthyStore() async throws {
+        let databaseURL = directory.appendingPathComponent("frames.sqlite")
+        let saved: FrameMetadata
+        do {
+            let store = try FrameStore(directory: directory)
+            saved = try await store.saveFrame(
+                makeImage(), timestamp: Date(timeIntervalSince1970: 2_000), hash: 7,
+                displayID: nil, displayName: nil
+            )
+            await store.flush()
+        }
+        let futureVersion = FrameDatabase.schemaVersion + 1
+        try executeSQLite(databaseURL: databaseURL, sql: "PRAGMA user_version=\(futureVersion);")
+        let storeID = try sqliteText(databaseURL: databaseURL, sql: "SELECT value FROM store_meta WHERE key='store_id';")
+
+        XCTAssertThrowsError(try FrameStore(directory: directory)) { error in
+            guard case FrameDatabaseError.unsupportedSchema(let version) = error else {
+                return XCTFail("Expected unsupportedSchema, got \(error)")
+            }
+            XCTAssertEqual(version, futureVersion)
+        }
+        XCTAssertTrue(try recoveryBundleURLs().isEmpty)
+        XCTAssertEqual(try sqliteInt(databaseURL: databaseURL, sql: "PRAGMA user_version;"), futureVersion)
+        XCTAssertEqual(try sqliteText(databaseURL: databaseURL, sql: "SELECT value FROM store_meta WHERE key='store_id';"), storeID)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("frames/\(saved.filename)").path))
+
+        // Restore only this synthetic schema version to prove the original store still opens.
+        try executeSQLite(databaseURL: databaseURL, sql: "PRAGMA user_version=\(FrameDatabase.schemaVersion);")
+        let reopened = try FrameStore(directory: directory)
+        let frames = await reopened.getAllMetadata()
+        XCTAssertEqual(frames.map(\.id), [saved.id])
+    }
+
+    func testDatabaseRecoveryRequiresCorruptionRatherThanOperationalErrors() {
+        XCTAssertTrue(FrameDatabaseError.corrupt("Invalid stored schema").indicatesCorruption)
+        for code in [SQLITE_CORRUPT, SQLITE_NOTADB, SQLITE_CORRUPT | (1 << 8)] {
+            XCTAssertTrue(FrameDatabaseError.sqlite("synthetic", code: code).indicatesCorruption)
+        }
+        for code in [SQLITE_BUSY, SQLITE_LOCKED, SQLITE_FULL, SQLITE_READONLY,
+                     SQLITE_CANTOPEN, SQLITE_IOERR, SQLITE_IOERR | (1 << 8), SQLITE_ERROR] {
+            XCTAssertFalse(FrameDatabaseError.sqlite("synthetic", code: code).indicatesCorruption)
+        }
+        XCTAssertFalse(FrameDatabaseError.sqlite("No result code").indicatesCorruption)
+        XCTAssertFalse(FrameDatabaseError.unsupportedSchema(99).indicatesCorruption)
+    }
+
+    func testPruningFinalSpanRemovesOnlyUnreferencedClosedSessions() async throws {
+        let store = try FrameStore(directory: directory)
+        let expired = try await store.beginCaptureSession(at: Date(timeIntervalSince1970: 1_000))
+        let expiredFrame = try await store.saveFrame(
+            makeImage(), timestamp: expired.startedAt, hash: 1, displayID: nil, displayName: nil
+        )
+        try await store.endCaptureSession(id: expired.id, reason: .paused)
+        let referenced = try await store.beginCaptureSession(at: Date(timeIntervalSince1970: 2_000))
+        let retainedFrame = try await store.saveFrame(
+            makeImage(), timestamp: referenced.startedAt, hash: 2, displayID: nil, displayName: nil
+        )
+        try await store.endCaptureSession(id: referenced.id, reason: .overlay)
+        let emptyClosed = try await store.beginCaptureSession(at: Date(timeIntervalSince1970: 3_000))
+        try await store.endCaptureSession(id: emptyClosed.id, reason: .screenLock)
+        let emptyOpen = try await store.beginCaptureSession(at: Date(timeIntervalSince1970: 4_000))
+        let entries = await store.getTimelineEntries()
+        let expiredEntry = try XCTUnwrap(entries.first { $0.frame.id == expiredFrame.id })
+
+        _ = try await store.pruneSpans(ids: [expiredEntry.span.id])
+
+        let sessions = await store.getCaptureSessions()
+        XCTAssertEqual(sessions.map(\.id), [referenced.id, emptyOpen.id])
+        XCTAssertEqual(sessions.first?.endReason, .overlay)
+        XCTAssertNil(sessions.last?.endedAt)
+        let remainingFrames = await store.getAllMetadata()
+        XCTAssertEqual(remainingFrames.map(\.id), [retainedFrame.id])
+    }
+
     func testSQLitePreservesSubSecondTimestamps() async throws {
         let timestamp = Date(timeIntervalSince1970: 2_000.125)
         do {
@@ -1273,10 +1391,10 @@ final class FrameStoreTests: XCTestCase {
         let inserted = try await store.recordEncodedCapture(frame: first, jpegData: jpeg)
         let extended = try await store.recordEncodedCapture(frame: second, jpegData: jpeg)
 
-        guard case .inserted(let initialEntry) = inserted else {
+        guard case .inserted(let initialEntry) = inserted.mutation else {
             return XCTFail("Expected initial physical frame")
         }
-        guard case .extended(let span) = extended else {
+        guard case .extended(let span) = extended.mutation else {
             return XCTFail("Expected exact bytes to extend the active span")
         }
         XCTAssertEqual(span.id, initialEntry.span.id)
@@ -1320,14 +1438,17 @@ final class FrameStoreTests: XCTestCase {
             at: framesDirectoryURL().appendingPathComponent("\(first.id.uuidString).jpg")
         )
 
-        guard case .inserted(let entry) = try await store.recordEncodedCapture(
+        let result = try await store.recordEncodedCapture(
             frame: second,
             jpegData: jpeg
-        ) else {
+        )
+        guard case .inserted(let entry) = result.mutation else {
             return XCTFail("An unreadable comparison payload must not wedge capture")
         }
 
         XCTAssertEqual(entry.frame.id, second.id)
+        XCTAssertEqual(result.invalidation.spanIDs, [first.id])
+        XCTAssertEqual(result.invalidation.finalPhysicalFrameIDs, [first.id])
         let timeline = await store.getTimelineEntries()
         XCTAssertEqual(timeline.map(\.frame.id), [second.id])
         let metadata = await store.getAllMetadata()
@@ -1354,7 +1475,7 @@ final class FrameStoreTests: XCTestCase {
                 displayID: nil,
                 displayName: nil
             )
-            guard case .inserted = try await store.recordEncodedCapture(frame: frame, jpegData: jpeg) else {
+            guard case .inserted = try await store.recordEncodedCapture(frame: frame, jpegData: jpeg).mutation else {
                 return XCTFail("Perceptual equality must not coalesce different bytes")
             }
         }
@@ -1381,7 +1502,7 @@ final class FrameStoreTests: XCTestCase {
         )
 
         _ = try await store.recordEncodedCapture(frame: first, jpegData: jpeg)
-        guard case .extended(let span) = try await store.recordEncodedCapture(frame: second, jpegData: jpeg) else {
+        guard case .extended(let span) = try await store.recordEncodedCapture(frame: second, jpegData: jpeg).mutation else {
             return XCTFail("Exact comparison must not have an observer-size cap")
         }
 
@@ -1405,7 +1526,7 @@ final class FrameStoreTests: XCTestCase {
             displayID: nil, displayName: nil
         )
 
-        guard case .inserted = try await store.recordEncodedCapture(frame: second, jpegData: jpeg) else {
+        guard case .inserted = try await store.recordEncodedCapture(frame: second, jpegData: jpeg).mutation else {
             return XCTFail("A new session must start a new span")
         }
 
@@ -1535,7 +1656,7 @@ final class FrameStoreTests: XCTestCase {
             id: UUID(), timestamp: base.addingTimeInterval(100), hash: 2,
             displayID: nil, displayName: nil
         )
-        guard case .inserted = try await reopened.recordEncodedCapture(frame: next, jpegData: jpeg) else {
+        guard case .inserted = try await reopened.recordEncodedCapture(frame: next, jpegData: jpeg).mutation else {
             return XCTFail("Restart must not bridge the interrupted session")
         }
         let metadata = await reopened.getAllMetadata()
@@ -1632,7 +1753,7 @@ final class FrameStoreTests: XCTestCase {
         _ = try await store.beginCaptureSession(at: base)
         let frame = StoredFrame(id: UUID(), timestamp: base, hash: 1, displayID: nil, displayName: nil)
         let firstMutation = try await store.recordEncodedCapture(frame: frame, jpegData: jpeg)
-        guard case .inserted(let firstEntry) = firstMutation else {
+        guard case .inserted(let firstEntry) = firstMutation.mutation else {
             return XCTFail("Expected initial timeline entry")
         }
         try await store.endCaptureSession(reason: .paused)

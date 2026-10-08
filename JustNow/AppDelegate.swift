@@ -426,6 +426,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     private func handleFrameBufferInitializationFailure(_ error: Error) {
         guard !(error is CancellationError), !Task.isCancelled else { return }
         captureLogger.error("Failed to initialize frame buffer: \(error.localizedDescription, privacy: .public)")
+        if error is FrameDatabaseError {
+            DiagnosticsLog.shared.log("Storage", "Startup failed: \(DiagnosticsLogFormat.describe(error))")
+        }
         // Show error but don't quit
         showErrorAlert(error)
     }
