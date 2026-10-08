@@ -682,6 +682,57 @@ final class CaptureRequestBrokerTests: XCTestCase {
         }
     }
 
+    func testCancelledDisplayReplacementLeavesSessionToNewerPassOrExplicitStop() async throws {
+        for explicitStop in [false, true] {
+            let discovery = CoordinatorDisplayDiscoveryProbe(displays: [coordinatorDisplayA])
+            let factory = CoordinatorCaptureManagerFactoryProbe()
+            let coordinator = makeCoordinator(
+                discovery: discovery,
+                factory: factory,
+                scheduler: CaptureCooldownRestartScheduler()
+            )
+            let delegate = CoordinatorDelegateProbe()
+            coordinator.delegate = delegate
+            try await coordinator.startCapture()
+
+            let startGate = BrokerTestGate()
+            factory.startGates[3] = startGate
+            discovery.displays = [DisplayInfo(
+                id: coordinatorDisplayA.id,
+                displayID: 3,
+                name: coordinatorDisplayA.name
+            )]
+            coordinator.scheduleReconcile()
+            await waitUntil { startGate.waiterCount == 1 }
+            XCTAssertFalse(coordinator.isCapturing)
+            factory.startGates[3] = nil
+
+            if explicitStop {
+                var stopRequested = false
+                let stop = Task { @MainActor in
+                    stopRequested = true
+                    await coordinator.stopCapture(reason: .sleep)
+                }
+                await waitUntil { stopRequested }
+                startGate.resumeNext()
+                await stop.value
+                XCTAssertEqual(delegate.endReasons, [.sleep], "Cancellation must not replace the requested end reason")
+                XCTAssertFalse(coordinator.isCapturing)
+            } else {
+                let updateCount = delegate.displayUpdateCount
+                coordinator.scheduleReconcile()
+                startGate.resumeNext()
+                await waitUntil { delegate.displayUpdateCount >= updateCount + 2 }
+                XCTAssertTrue(coordinator.isCapturing)
+                XCTAssertTrue(delegate.endReasons.isEmpty, "A superseding pass must preserve session continuity")
+                await coordinator.stopCapture()
+                XCTAssertEqual(delegate.endReasons, [.paused])
+            }
+            XCTAssertEqual(delegate.beginCount, 1)
+            XCTAssertEqual(delegate.unexpectedStopCount, 0)
+        }
+    }
+
     func testUnexpectedStopQueuedDuringDurableBeginClosesPublishedSessionUnderGate() async throws {
         let beginGate = BrokerTestGate()
         let discovery = CoordinatorDisplayDiscoveryProbe(displays: [coordinatorDisplayA])
@@ -1613,6 +1664,7 @@ private enum CoordinatorManagerProbeError: Error {
 @MainActor
 private final class CoordinatorCaptureManagerFactoryProbe {
     var outcomes: [CGDirectDisplayID: CoordinatorManagerStartOutcome] = [:]
+    var startGates: [CGDirectDisplayID: BrokerTestGate] = [:]
     private(set) var managers: [CGDirectDisplayID: CoordinatorCaptureManagerProbe] = [:]
 
     func make(
@@ -1622,7 +1674,8 @@ private final class CoordinatorCaptureManagerFactoryProbe {
         let manager = CoordinatorCaptureManagerProbe(
             targetDisplayID: displayID,
             captureRequestBroker: broker,
-            startOutcome: outcomes[displayID] ?? .success
+            startOutcome: outcomes[displayID] ?? .success,
+            startGate: startGates[displayID]
         )
         managers[displayID] = manager
         return manager
@@ -1632,6 +1685,7 @@ private final class CoordinatorCaptureManagerFactoryProbe {
 @MainActor
 private final class CoordinatorCaptureManagerProbe: ScreenCaptureManager {
     private let startOutcome: CoordinatorManagerStartOutcome
+    private let startGate: BrokerTestGate?
     private var captureState = false
     private(set) var startCount = 0
     private(set) var stopCount = 0
@@ -1639,9 +1693,11 @@ private final class CoordinatorCaptureManagerProbe: ScreenCaptureManager {
     init(
         targetDisplayID: CGDirectDisplayID,
         captureRequestBroker: CaptureRequestBroker,
-        startOutcome: CoordinatorManagerStartOutcome
+        startOutcome: CoordinatorManagerStartOutcome,
+        startGate: BrokerTestGate? = nil
     ) {
         self.startOutcome = startOutcome
+        self.startGate = startGate
         super.init(targetDisplayID: targetDisplayID, captureRequestBroker: captureRequestBroker)
     }
 
@@ -1649,6 +1705,10 @@ private final class CoordinatorCaptureManagerProbe: ScreenCaptureManager {
 
     override func startCapture() async throws {
         startCount += 1
+        if let startGate {
+            await startGate.wait()
+            try Task.checkCancellation()
+        }
         switch startOutcome {
         case .success:
             captureState = true
