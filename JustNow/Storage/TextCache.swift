@@ -56,6 +56,23 @@ nonisolated private func textCacheProgressHandler(_ context: UnsafeMutableRawPoi
     return state.isCancelled() ? 1 : 0
 }
 
+/// SQLite's built-in lower() only folds ASCII. Keep Unicode matching aligned
+/// with Foundation without changing the stored OCR text or FTS tokenizer.
+nonisolated private func textCacheUnicodeContains(
+    _ context: OpaquePointer?,
+    _ argumentCount: Int32,
+    _ arguments: UnsafeMutablePointer<OpaquePointer?>?
+) {
+    guard argumentCount == 2, let arguments,
+          let text = sqlite3_value_text(arguments[0]),
+          let token = sqlite3_value_text(arguments[1]) else {
+        sqlite3_result_int(context, 0)
+        return
+    }
+    let contains = String(cString: text).range(of: String(cString: token), options: .caseInsensitive) != nil
+    sqlite3_result_int(context, contains ? 1 : 0)
+}
+
 /// Caches OCR-extracted text for frames to speed up subsequent searches
 actor TextCache {
     nonisolated private static let logger = Logger(subsystem: "sg.tk.JustNow", category: "TextCache")
@@ -324,10 +341,11 @@ actor TextCache {
         let sinceEpoch = since?.timeIntervalSince1970
 
         let matchQuery = ftsQuery(from: query)
-        let literalTokens = query
+        let originalTokens = query
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { !$0.isEmpty && !$0.allSatisfy(\.isASCII) }
-        let asciiMatchQuery = ftsQuery(from: query, including: { $0.allSatisfy(\.isASCII) })
+            .filter { !$0.isEmpty }
+        let literalTokens = originalTokens.filter { !$0.allSatisfy(\.isASCII) }
+        let asciiMatchQuery = ftsQuery(from: originalTokens.filter { $0.allSatisfy(\.isASCII) }.joined(separator: " "))
 
         try reconnectIfNeeded()
         guard db != nil else {
@@ -459,6 +477,12 @@ actor TextCache {
         PrivateStorageProtection.apply(to: appDir)
         let connection = try openDatabase(at: databaseURL)
         do {
+            guard sqlite3_create_function_v2(
+                connection, "unicode_contains", 2, SQLITE_UTF8 | SQLITE_DETERMINISTIC,
+                nil, textCacheUnicodeContains, nil, nil, nil
+            ) == SQLITE_OK else {
+                throw sqliteError(message: "Failed to register Unicode text search", on: connection)
+            }
             try createSchema(on: connection)
             try repairIndexIfNeeded(on: connection)
         } catch {
@@ -837,7 +861,12 @@ actor TextCache {
                 // Preserve the established punctuation-only literal search.
                 literalPredicates = "instr(lower(text), lower(?)) > 0"
             } else {
-                literalPredicates = Array(repeating: "instr(lower(text), lower(?)) > 0", count: literalTokens.count)
+                // Each Unicode token can independently use a substring or an
+                // accent-folded FTS prefix; ASCII tokens remain FTS-only.
+                literalPredicates = Array(
+                    repeating: "(unicode_contains(text, ?) OR frame_id IN (SELECT frame_id FROM frame_text_fts WHERE frame_text_fts MATCH ?))",
+                    count: literalTokens.count
+                )
                     .joined(separator: " AND ")
             }
             let asciiPredicate = asciiMatchQuery == nil
@@ -874,10 +903,12 @@ actor TextCache {
                     bindIndex += 1
                 } else {
                     for token in literalTokens {
-                        guard bindText(token, to: statement, index: bindIndex) else {
+                        guard let tokenMatchQuery = ftsQuery(from: token),
+                              bindText(token, to: statement, index: bindIndex),
+                              bindText(tokenMatchQuery, to: statement, index: bindIndex + 1) else {
                             throw sqliteError(message: "Text search query failed to bind")
                         }
-                        bindIndex += 1
+                        bindIndex += 2
                     }
                 }
                 if let asciiMatchQuery {

@@ -404,7 +404,9 @@ nonisolated final class CapturePersistenceInstrumentation: @unchecked Sendable {
                         next = next.replacing(
                             terminationAnchorRepositorySaves: next.terminationAnchorRepositorySaves + 1
                         )
-                    case .allDisk:
+                    case .sessionEnd, .allDisk:
+                        // Session tails use aggregate durable/JPEG/metadata
+                        // accounting without inflating termination anchors.
                         break
                     }
                     snapshot = next

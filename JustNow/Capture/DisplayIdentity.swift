@@ -8,6 +8,14 @@ import CoreGraphics
 import Foundation
 import ScreenCaptureKit
 
+/// Inputs cached by a capture manager, separate from stable history identity.
+struct DisplayCaptureConfiguration: Sendable, Equatable, Hashable {
+    let width: Int
+    let height: Int
+    let backingScale: CGFloat
+    let rotation: Double
+}
+
 /// Stable identifier + friendly name for a physical display.
 ///
 /// `id` is derived from `CGDisplayCreateUUIDFromDisplayID` so it survives
@@ -20,13 +28,41 @@ struct DisplayInfo: Sendable, Equatable, Hashable {
     /// connected.
     let displayID: CGDirectDisplayID?
     let name: String
+    let captureConfiguration: DisplayCaptureConfiguration?
+
+    init(
+        id: UUID,
+        displayID: CGDirectDisplayID?,
+        name: String,
+        captureConfiguration: DisplayCaptureConfiguration? = nil
+    ) {
+        self.id = id
+        self.displayID = displayID
+        self.name = name
+        self.captureConfiguration = captureConfiguration
+    }
 
     var isConnected: Bool { displayID != nil }
 }
 
 enum DisplayIdentity {
     static func info(for scDisplay: SCDisplay) -> DisplayInfo {
-        info(for: scDisplay.displayID)
+        let identity = info(for: scDisplay.displayID)
+        return DisplayInfo(
+            id: identity.id,
+            displayID: identity.displayID,
+            name: identity.name,
+            captureConfiguration: captureConfiguration(for: scDisplay)
+        )
+    }
+
+    static func captureConfiguration(for display: SCDisplay) -> DisplayCaptureConfiguration {
+        DisplayCaptureConfiguration(
+            width: display.width,
+            height: display.height,
+            backingScale: max(1, screen(for: display.displayID)?.backingScaleFactor ?? 1),
+            rotation: CGDisplayRotation(display.displayID)
+        )
     }
 
     static func info(for displayID: CGDirectDisplayID) -> DisplayInfo {

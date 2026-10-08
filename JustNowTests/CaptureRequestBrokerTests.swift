@@ -624,6 +624,115 @@ final class CaptureRequestBrokerTests: XCTestCase {
         await coordinator.stopCapture()
     }
 
+    func testFatalDisplayReplacementEndsSessionOnlyWhenNoDisplaySurvives() async throws {
+        for hasSurvivingDisplay in [false, true] {
+            let discovery = CoordinatorDisplayDiscoveryProbe(
+                displays: hasSurvivingDisplay
+                    ? [coordinatorDisplayA, coordinatorDisplayB]
+                    : [coordinatorDisplayA]
+            )
+            let factory = CoordinatorCaptureManagerFactoryProbe()
+            let coordinator = makeCoordinator(
+                discovery: discovery,
+                factory: factory,
+                scheduler: CaptureCooldownRestartScheduler()
+            )
+            let delegate = CoordinatorDelegateProbe()
+            coordinator.delegate = delegate
+            try await coordinator.startCapture()
+            let oldManager = try XCTUnwrap(factory.managers[1])
+            XCTAssertEqual(delegate.beginCount, 1)
+
+            let replacement = DisplayInfo(
+                id: coordinatorDisplayA.id,
+                displayID: 3,
+                name: coordinatorDisplayA.name
+            )
+            factory.outcomes[3] = .permissionDenied
+            discovery.displays = hasSurvivingDisplay
+                ? [replacement, coordinatorDisplayB]
+                : [replacement]
+            coordinator.scheduleReconcile()
+            await waitUntil { delegate.unexpectedStopCount == 1 }
+
+            XCTAssertEqual(oldManager.stopCount, 1)
+            XCTAssertFalse(oldManager.isCapturing)
+            XCTAssertEqual(factory.managers[3]?.startCount, 1)
+            XCTAssertFalse(factory.managers[3]?.isCapturing ?? true)
+            XCTAssertEqual(coordinator.isCapturing, hasSurvivingDisplay)
+            let expectedEnds: [CaptureSessionEndReason] = hasSurvivingDisplay ? [] : [.unexpectedStop]
+            XCTAssertEqual(delegate.endReasons, expectedEnds, "Only loss of the last live display ends the session")
+            XCTAssertEqual(delegate.beginCount, 1)
+            if hasSurvivingDisplay {
+                XCTAssertEqual(factory.managers[2]?.startCount, 1)
+                XCTAssertEqual(factory.managers[2]?.stopCount, 0)
+            }
+
+            // Recovery must begin a fresh session only if capture actually stopped.
+            factory.outcomes[3] = .success
+            let updateCount = delegate.displayUpdateCount
+            coordinator.scheduleReconcile()
+            await waitUntil { delegate.displayUpdateCount > updateCount }
+            XCTAssertTrue(factory.managers[3]?.isCapturing ?? false)
+            XCTAssertEqual(delegate.beginCount, hasSurvivingDisplay ? 1 : 2)
+            XCTAssertEqual(delegate.endReasons, expectedEnds)
+
+            await coordinator.stopCapture()
+            XCTAssertEqual(delegate.endReasons, expectedEnds + [.paused], "Cleanup must not publish duplicate closes")
+        }
+    }
+
+    func testCancelledDisplayReplacementLeavesSessionToNewerPassOrExplicitStop() async throws {
+        for explicitStop in [false, true] {
+            let discovery = CoordinatorDisplayDiscoveryProbe(displays: [coordinatorDisplayA])
+            let factory = CoordinatorCaptureManagerFactoryProbe()
+            let coordinator = makeCoordinator(
+                discovery: discovery,
+                factory: factory,
+                scheduler: CaptureCooldownRestartScheduler()
+            )
+            let delegate = CoordinatorDelegateProbe()
+            coordinator.delegate = delegate
+            try await coordinator.startCapture()
+
+            let startGate = BrokerTestGate()
+            factory.startGates[3] = startGate
+            discovery.displays = [DisplayInfo(
+                id: coordinatorDisplayA.id,
+                displayID: 3,
+                name: coordinatorDisplayA.name
+            )]
+            coordinator.scheduleReconcile()
+            await waitUntil { startGate.waiterCount == 1 }
+            XCTAssertFalse(coordinator.isCapturing)
+            factory.startGates[3] = nil
+
+            if explicitStop {
+                var stopRequested = false
+                let stop = Task { @MainActor in
+                    stopRequested = true
+                    await coordinator.stopCapture(reason: .sleep)
+                }
+                await waitUntil { stopRequested }
+                startGate.resumeNext()
+                await stop.value
+                XCTAssertEqual(delegate.endReasons, [.sleep], "Cancellation must not replace the requested end reason")
+                XCTAssertFalse(coordinator.isCapturing)
+            } else {
+                let updateCount = delegate.displayUpdateCount
+                coordinator.scheduleReconcile()
+                startGate.resumeNext()
+                await waitUntil { delegate.displayUpdateCount >= updateCount + 2 }
+                XCTAssertTrue(coordinator.isCapturing)
+                XCTAssertTrue(delegate.endReasons.isEmpty, "A superseding pass must preserve session continuity")
+                await coordinator.stopCapture()
+                XCTAssertEqual(delegate.endReasons, [.paused])
+            }
+            XCTAssertEqual(delegate.beginCount, 1)
+            XCTAssertEqual(delegate.unexpectedStopCount, 0)
+        }
+    }
+
     func testUnexpectedStopQueuedDuringDurableBeginClosesPublishedSessionUnderGate() async throws {
         let beginGate = BrokerTestGate()
         let discovery = CoordinatorDisplayDiscoveryProbe(displays: [coordinatorDisplayA])
@@ -658,6 +767,114 @@ final class CaptureRequestBrokerTests: XCTestCase {
 
         XCTAssertEqual(delegate.unexpectedStopCount, 1)
         XCTAssertFalse(coordinator.isCapturing)
+        await coordinator.stopCapture()
+    }
+
+    func testReconcileReplacesManagerForChangedPhysicalDisplayIDWithoutRestartingUnchangedDisplay() async throws {
+        let discovery = CoordinatorDisplayDiscoveryProbe(
+            displays: [coordinatorDisplayA, coordinatorDisplayB]
+        )
+        let factory = CoordinatorCaptureManagerFactoryProbe()
+        let coordinator = makeCoordinator(
+            discovery: discovery,
+            factory: factory,
+            scheduler: CaptureCooldownRestartScheduler()
+        )
+        let delegate = CoordinatorDelegateProbe()
+        coordinator.delegate = delegate
+        try await coordinator.startCapture()
+        let oldManager = try XCTUnwrap(factory.managers[1])
+        let unchangedManager = try XCTUnwrap(factory.managers[2])
+        let changedDisplay = DisplayInfo(
+            id: coordinatorDisplayA.id,
+            displayID: 3,
+            name: coordinatorDisplayA.name
+        )
+        let updateCountBeforeReconcile = delegate.displayUpdateCount
+
+        // A stable UUID can outlive its per-session CoreGraphics display ID.
+        // Keep B identical to distinguish refresh from restarting all managers.
+        discovery.displays = [changedDisplay, coordinatorDisplayB]
+        coordinator.scheduleReconcile()
+        await waitUntil { delegate.displayUpdateCount > updateCountBeforeReconcile }
+
+        XCTAssertEqual(oldManager.startCount, 1)
+        XCTAssertEqual(oldManager.stopCount, 1, "The manager bound to the old physical ID must stop")
+        XCTAssertFalse(oldManager.isCapturing)
+        XCTAssertEqual(factory.managers[3]?.startCount, 1, "Capture must target the new physical ID")
+        XCTAssertTrue(factory.managers[3]?.isCapturing == true)
+        XCTAssertTrue(factory.managers[2] === unchangedManager)
+        XCTAssertEqual(unchangedManager.startCount, 1)
+        XCTAssertEqual(unchangedManager.stopCount, 0)
+        XCTAssertTrue(unchangedManager.isCapturing)
+        XCTAssertEqual(Set(coordinator.activeDisplays), Set([changedDisplay, coordinatorDisplayB]))
+        XCTAssertNil(coordinator.display(forDisplayID: 1))
+        XCTAssertEqual(coordinator.display(forDisplayID: 3), changedDisplay)
+        XCTAssertTrue(coordinator.isCapturing)
+        XCTAssertEqual(delegate.beginCount, 1)
+        XCTAssertTrue(delegate.endReasons.isEmpty, "Refreshing one display must preserve the logical session")
+
+        await coordinator.stopCapture()
+    }
+
+    func testReconcileReplacesOnlyChangedCaptureConfigurationWithStableIdentity() async throws {
+        // Inject discovered snapshots, not live monitor mutations. These are
+        // the same inputs production discovery gets from SCDisplay/NSScreen.
+        let configurations = [
+            DisplayCaptureConfiguration(width: 1920, height: 1080, backingScale: 1, rotation: 0),
+            DisplayCaptureConfiguration(width: 2560, height: 1440, backingScale: 1, rotation: 0),
+            DisplayCaptureConfiguration(width: 2560, height: 1440, backingScale: 2, rotation: 0),
+            DisplayCaptureConfiguration(width: 2560, height: 1440, backingScale: 2, rotation: 180)
+        ]
+        func display(_ configuration: DisplayCaptureConfiguration) -> DisplayInfo {
+            DisplayInfo(
+                id: coordinatorDisplayA.id,
+                displayID: coordinatorDisplayA.displayID,
+                name: coordinatorDisplayA.name,
+                captureConfiguration: configuration
+            )
+        }
+        let discovery = CoordinatorDisplayDiscoveryProbe(
+            displays: [display(configurations[0]), coordinatorDisplayB]
+        )
+        let factory = CoordinatorCaptureManagerFactoryProbe()
+        let coordinator = makeCoordinator(
+            discovery: discovery,
+            factory: factory,
+            scheduler: CaptureCooldownRestartScheduler()
+        )
+        let delegate = CoordinatorDelegateProbe()
+        coordinator.delegate = delegate
+        try await coordinator.startCapture()
+        let unchangedManager = try XCTUnwrap(factory.managers[2])
+
+        for configuration in configurations {
+            let oldManager = try XCTUnwrap(factory.managers[1])
+            let previousInfo = coordinator.display(forDisplayID: 1)
+            let desired = display(configuration)
+            discovery.displays = [desired, coordinatorDisplayB]
+            let updateCount = delegate.displayUpdateCount
+            coordinator.scheduleReconcile()
+            await waitUntil { delegate.displayUpdateCount > updateCount }
+
+            let currentManager = try XCTUnwrap(factory.managers[1])
+            if previousInfo?.captureConfiguration == configuration {
+                XCTAssertTrue(currentManager === oldManager, "Identical configuration must reuse capture")
+                XCTAssertEqual(oldManager.stopCount, 0)
+            } else {
+                XCTAssertFalse(currentManager === oldManager)
+                XCTAssertEqual(oldManager.stopCount, 1)
+                XCTAssertFalse(oldManager.isCapturing)
+            }
+            XCTAssertEqual(currentManager.startCount, 1)
+            XCTAssertTrue(currentManager.isCapturing)
+            XCTAssertEqual(coordinator.display(forDisplayID: 1), desired)
+            XCTAssertTrue(factory.managers[2] === unchangedManager)
+            XCTAssertEqual(unchangedManager.startCount, 1)
+            XCTAssertEqual(unchangedManager.stopCount, 0)
+            XCTAssertEqual(delegate.beginCount, 1)
+            XCTAssertTrue(delegate.endReasons.isEmpty)
+        }
         await coordinator.stopCapture()
     }
 
@@ -1447,6 +1664,7 @@ private enum CoordinatorManagerProbeError: Error {
 @MainActor
 private final class CoordinatorCaptureManagerFactoryProbe {
     var outcomes: [CGDirectDisplayID: CoordinatorManagerStartOutcome] = [:]
+    var startGates: [CGDirectDisplayID: BrokerTestGate] = [:]
     private(set) var managers: [CGDirectDisplayID: CoordinatorCaptureManagerProbe] = [:]
 
     func make(
@@ -1456,7 +1674,8 @@ private final class CoordinatorCaptureManagerFactoryProbe {
         let manager = CoordinatorCaptureManagerProbe(
             targetDisplayID: displayID,
             captureRequestBroker: broker,
-            startOutcome: outcomes[displayID] ?? .success
+            startOutcome: outcomes[displayID] ?? .success,
+            startGate: startGates[displayID]
         )
         managers[displayID] = manager
         return manager
@@ -1466,6 +1685,7 @@ private final class CoordinatorCaptureManagerFactoryProbe {
 @MainActor
 private final class CoordinatorCaptureManagerProbe: ScreenCaptureManager {
     private let startOutcome: CoordinatorManagerStartOutcome
+    private let startGate: BrokerTestGate?
     private var captureState = false
     private(set) var startCount = 0
     private(set) var stopCount = 0
@@ -1473,9 +1693,11 @@ private final class CoordinatorCaptureManagerProbe: ScreenCaptureManager {
     init(
         targetDisplayID: CGDirectDisplayID,
         captureRequestBroker: CaptureRequestBroker,
-        startOutcome: CoordinatorManagerStartOutcome
+        startOutcome: CoordinatorManagerStartOutcome,
+        startGate: BrokerTestGate? = nil
     ) {
         self.startOutcome = startOutcome
+        self.startGate = startGate
         super.init(targetDisplayID: targetDisplayID, captureRequestBroker: captureRequestBroker)
     }
 
@@ -1483,6 +1705,10 @@ private final class CoordinatorCaptureManagerProbe: ScreenCaptureManager {
 
     override func startCapture() async throws {
         startCount += 1
+        if let startGate {
+            await startGate.wait()
+            try Task.checkCancellation()
+        }
         switch startOutcome {
         case .success:
             captureState = true
@@ -1511,6 +1737,7 @@ private final class CoordinatorDelegateProbe: CaptureCoordinatorDelegate {
     private(set) var beginCount = 0
     private(set) var endReasons: [CaptureSessionEndReason] = []
     private(set) var unexpectedStopCount = 0
+    private(set) var displayUpdateCount = 0
 
     init(beginGate: BrokerTestGate? = nil) {
         self.beginGate = beginGate
@@ -1525,6 +1752,10 @@ private final class CoordinatorDelegateProbe: CaptureCoordinatorDelegate {
 
     func captureCoordinatorDidStopUnexpectedly(_ coordinator: CaptureCoordinator) {
         unexpectedStopCount += 1
+    }
+
+    func captureCoordinatorDidUpdateDisplays(_ coordinator: CaptureCoordinator) {
+        displayUpdateCount += 1
     }
 
     func captureCoordinatorDidBeginCaptureSession(_ coordinator: CaptureCoordinator) async throws {

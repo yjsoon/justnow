@@ -1549,10 +1549,19 @@ class FrameBuffer {
                       repositoryGeneration == self.repositoryEffectGeneration else {
                     return SyncIngestResult.retryAfterClear
                 }
-                let saveResult = try await self.frameRepository.recordEncodedCapture(
-                    frame,
-                    jpegData: jpegData
-                )
+                let saveResult: FrameRepositorySaveResult
+                do {
+                    saveResult = try await self.frameRepository.recordEncodedCapture(
+                        frame,
+                        jpegData: jpegData
+                    )
+                } catch let failure as FrameRepositoryMutationFailure {
+                    guard repositoryGeneration == self.repositoryEffectGeneration else {
+                        return SyncIngestResult.retryAfterClear
+                    }
+                    await self.applyRepositoryInvalidation(failure.invalidation)
+                    throw failure.underlyingError
+                }
                 guard repositoryGeneration == self.repositoryEffectGeneration else {
                     return SyncIngestResult.retryAfterClear
                 }

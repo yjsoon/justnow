@@ -2346,6 +2346,119 @@ final class FrameBufferTests: XCTestCase {
         XCTAssertFalse(buffer.hasLegacyFrames)
     }
 
+    func testAllDiskMissingActivePayloadReplacementReconcilesProjectionAndOCR() async throws {
+        try await assertMissingActivePayloadReconciliation(failReplacement: false)
+    }
+
+    func testAllDiskMissingActivePayloadFailedReplacementReconcilesCommittedDeletion() async throws {
+        try await assertMissingActivePayloadReconciliation(failReplacement: true)
+    }
+
+    func testHybridMissingActivePayloadFailedReplacementReconcilesCommittedDeletion() async throws {
+        try await assertMissingActivePayloadReconciliation(failReplacement: true, hybrid: true)
+    }
+
+    func testHybridMissingActivePayloadReplacementReconcilesProjectionAndOCR() async throws {
+        try await assertMissingActivePayloadReconciliation(failReplacement: false, hybrid: true)
+    }
+
+    private func assertMissingActivePayloadReconciliation(failReplacement: Bool, hybrid: Bool = false) async throws {
+        let image = try makeStructuredImage(seed: 113)
+        let jpeg = try XCTUnwrap(ImageEncoder.jpegData(from: image, quality: 0.8))
+        let encoder = JPEGEncoderProbe(data: jpeg)
+        let store = try FrameStore(directory: directory)
+        let repository: any FrameRepository
+        if hybrid {
+            // Force durable-only residency without evicting any live user's data.
+            repository = HybridFrameRepository(frameStore: store, byteCap: 1)
+        } else {
+            repository = DiskFrameRepository(frameStore: store)
+        }
+        let buffer = try await FrameBuffer(
+            retentionPolicy: .default24Hours,
+            storageDirectory: directory,
+            diagnosticsLog: nil,
+            frameRepository: repository,
+            historyStorageMode: hybrid ? .hybridRAM(byteCap: 1) : .allDisk,
+            jpegEncoder: FrameJPEGEncoder { source, quality in
+                encoder.encode(image: source, quality: quality)
+            }
+        )
+        let base = Date()
+        try await buffer.beginCaptureSession(at: base)
+        await buffer.addFrameSync(image, timestamp: base, display: nil)
+        let oldEntry = try XCTUnwrap(buffer.getTimelineEntries().only)
+        let cached = await buffer.cacheOCRTextIfCurrent("phantom synthetic OCR", for: oldEntry.frame)
+        XCTAssertTrue(cached)
+        _ = try await buffer.getFullImage(for: oldEntry.frame)
+        let metadata = await store.getAllMetadata()
+        let oldMetadata = try XCTUnwrap(metadata.only)
+        XCTAssertEqual(oldMetadata.id, oldEntry.frame.id)
+        let payloadURL = directory.appendingPathComponent("frames", isDirectory: true)
+            .appendingPathComponent(oldMetadata.filename)
+        try FileManager.default.removeItem(at: payloadURL)
+
+        if failReplacement {
+            // The existing durableCommitHook only covers promotion/checkpoint,
+            // not insertCapture. Fail only the replacement INSERT; the earlier
+            // broken-span prune must remain committed and readable.
+            try executeSQLite(
+                databaseURL: directory.appendingPathComponent("frames.sqlite"),
+                sql: """
+                    CREATE TRIGGER fail_s4_replacement BEFORE INSERT ON frames
+                    BEGIN SELECT RAISE(ABORT, 'injected replacement failure'); END;
+                    """
+            )
+        }
+
+        // Equal images have equal pHashes, so explicitly cross the all-disk
+        // duplicate cadence rather than relying on admission by hash distance.
+        let replacementTimestamp = base.addingTimeInterval(
+            DuplicateFramePolicy.standard.minimumSpacing + 1
+        )
+        await buffer.addFrameSync(image, timestamp: replacementTimestamp, display: nil)
+        XCTAssertEqual(encoder.observation().invocationCount, 2, "Both captures must reach encoding")
+
+        let canonicalEntries = await store.getTimelineEntries()
+        let canonicalMetadata = await store.getAllMetadata()
+        XCTAssertEqual(canonicalEntries.count, failReplacement ? 0 : 1)
+        XCTAssertEqual(Set(canonicalMetadata.map(\.id)), Set(canonicalEntries.map(\.frame.id)))
+        XCTAssertFalse(canonicalEntries.contains { $0.span.id == oldEntry.span.id })
+        XCTAssertFalse(canonicalMetadata.contains { $0.id == oldEntry.frame.id })
+        XCTAssertEqual(
+            Set(buffer.getTimelineEntries().map(\.span.id)),
+            Set(canonicalEntries.map(\.span.id))
+        )
+        XCTAssertEqual(Set(buffer.getFrames().map(\.id)), Set(canonicalMetadata.map(\.id)))
+        XCTAssertFalse(buffer.containsTimelineSpan(id: oldEntry.span.id))
+        XCTAssertFalse(buffer.containsFrame(id: oldEntry.frame.id))
+        let oldTextCached = await buffer.textCache.hasCachedText(for: oldEntry.frame.id)
+        XCTAssertFalse(oldTextCached, "Committed payload removal must evict the OCR row")
+        let oldMatches = try await buffer.textCache.searchFrameIDs(matching: "phantom", limit: 10)
+        XCTAssertTrue(oldMatches.isEmpty)
+        let staleWriteAccepted = await buffer.cacheOCRTextIfCurrent("phantom stale write", for: oldEntry.frame)
+        XCTAssertFalse(staleWriteAccepted)
+        do {
+            _ = try await buffer.getFullImage(for: oldEntry.frame)
+            XCTFail("Deleted identity must not remain readable from the decoded-image cache")
+        } catch {
+            // The unlinked payload cannot be loaded once its cached image is evicted.
+        }
+
+        if !failReplacement {
+            let replacement = try XCTUnwrap(canonicalEntries.only)
+            XCTAssertNotEqual(replacement.frame.id, oldEntry.frame.id)
+            let replacementCached = await buffer.cacheOCRTextIfCurrent(
+                "replacement synthetic OCR", for: replacement.frame
+            )
+            XCTAssertTrue(replacementCached)
+            let replacementMatches = try await buffer.textCache.searchFrameIDs(
+                matching: "replacement", limit: 10
+            )
+            XCTAssertEqual(replacementMatches, [replacement.frame.id])
+        }
+    }
+
     func testReopenPreservesLogicalRecencyDisplaysAndSearchTimestampForExtendedSpan() async throws {
         let base = Date()
         let displayA = DisplayInfo(id: UUID(), displayID: 1, name: "A")

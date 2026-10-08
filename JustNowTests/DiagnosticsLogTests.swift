@@ -32,6 +32,26 @@ final class DiagnosticsLogTests: XCTestCase {
         )
     }
 
+    func testDescribeDatabaseStartupFailureKeepsCodesWithoutStoredContent() {
+        let privateDetail = "synthetic private SQL and /private/history/path"
+        XCTAssertEqual(
+            DiagnosticsLogFormat.describe(FrameDatabaseError.sqlite(privateDetail, code: 5 | (1 << 8))),
+            "FrameDatabaseError.sqlite(primaryCode=5)"
+        )
+        XCTAssertEqual(
+            DiagnosticsLogFormat.describe(FrameDatabaseError.sqlite(privateDetail)),
+            "FrameDatabaseError.sqlite(primaryCode=unknown)"
+        )
+        XCTAssertEqual(
+            DiagnosticsLogFormat.describe(FrameDatabaseError.unsupportedSchema(99)),
+            "FrameDatabaseError.unsupportedSchema(version=99)"
+        )
+        XCTAssertEqual(
+            DiagnosticsLogFormat.describe(FrameDatabaseError.corrupt(privateDetail)),
+            "FrameDatabaseError.validationFailure"
+        )
+    }
+
     func testLogWritesLine() throws {
         let directory = makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

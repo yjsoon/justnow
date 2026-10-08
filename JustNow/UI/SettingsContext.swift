@@ -24,6 +24,8 @@ final class SettingsContext {
     @ObservationIgnored private var updaterObservations: [NSKeyValueObservation] = []
     private let onCheckForUpdates: @MainActor () -> Void
     private let onShortcutChanged: @MainActor () -> Void
+    private let onShortcutRecordingChanged: @MainActor (Bool) -> Void
+    @ObservationIgnored private var activeRecorders: Set<UUID> = []
     private let onRelaunch: @MainActor () -> Void
 
     init(
@@ -32,6 +34,7 @@ final class SettingsContext {
         updater: SPUUpdater? = nil,
         onCheckForUpdates: @escaping @MainActor () -> Void = {},
         onShortcutChanged: @escaping @MainActor () -> Void = {},
+        onShortcutRecordingChanged: @escaping @MainActor (Bool) -> Void = { _ in },
         onRelaunch: @escaping @MainActor () -> Void = {}
     ) {
         self.frameBuffer = frameBuffer
@@ -39,6 +42,7 @@ final class SettingsContext {
         self.updater = updater
         self.onCheckForUpdates = onCheckForUpdates
         self.onShortcutChanged = onShortcutChanged
+        self.onShortcutRecordingChanged = onShortcutRecordingChanged
         self.onRelaunch = onRelaunch
         observeUpdater()
         refreshLaunchAtLoginState()
@@ -88,6 +92,20 @@ final class SettingsContext {
 
     func notifyShortcutChanged() {
         onShortcutChanged()
+    }
+
+    func notifyShortcutRecordingChanged(recorderID: UUID, isRecording: Bool) {
+        let wasRecording = !activeRecorders.isEmpty
+        if isRecording {
+            activeRecorders.insert(recorderID)
+        } else {
+            activeRecorders.remove(recorderID)
+        }
+        let recording = !activeRecorders.isEmpty
+        guard wasRecording != recording else { return }
+        // Refresh persisted chords before resuming; SwiftUI onChange may arrive later.
+        if !recording { onShortcutChanged() }
+        onShortcutRecordingChanged(recording)
     }
 
     func relaunch() {

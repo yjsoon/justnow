@@ -80,6 +80,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         onShortcutChanged: { [weak self] in
             self?.keyboardShortcutsDidChange()
         },
+        onShortcutRecordingChanged: { [weak self] isRecording in
+            self?.hotKeyController.setSuspended(isRecording)
+        },
         onRelaunch: { [weak self] in
             self?.relaunchApp()
         }
@@ -423,6 +426,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     private func handleFrameBufferInitializationFailure(_ error: Error) {
         guard !(error is CancellationError), !Task.isCancelled else { return }
         captureLogger.error("Failed to initialize frame buffer: \(error.localizedDescription, privacy: .public)")
+        if error is FrameDatabaseError {
+            DiagnosticsLog.shared.log("Storage", "Startup failed: \(DiagnosticsLogFormat.describe(error))")
+        }
         // Show error but don't quit
         showErrorAlert(error)
     }

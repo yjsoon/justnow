@@ -144,7 +144,7 @@ actor HybridFrameRepository: FrameRepository {
     /// removed only when that result can be delivered to FrameBuffer.
     private var pendingCaptureEffects: [ActiveCaptureKey: FrameRepositoryEffects] = [:]
     private var durableEntriesBySpanID: [UUID: TimelineEntry] = [:]
-    /// Successful termination effects are retained until the durable session
+    /// Successful session-end effects are retained until the durable session
     /// close also succeeds. A retry then returns every effect once without
     /// repeating promotions or checkpoints which already committed.
     private var pendingSessionEndEffects: [UUID: FrameRepositoryEffects] = [:]
@@ -255,32 +255,33 @@ actor HybridFrameRepository: FrameRepository {
                 self.pendingSessionEndEffects[id] = accumulated
             }
 
-            if reason == .termination {
-                for key in keys {
-                    guard let active = self.policyStates[key]?.active else { continue }
-                    switch active.residency {
-                    case .ringOnly:
-                        guard let jpegData = await self.ring.data(frameID: active.entry.frame.id) else {
-                            continue
-                        }
-                        self.pendingPromotions[key] = PendingPromotion(
-                            entry: active.entry,
-                            jpegData: jpegData,
-                            reason: .termination,
-                            acceptedAt: active.entry.span.observedThroughAt,
-                            acceptedHash: active.entry.frame.hash
-                        )
-                        let completion = try await self.completePendingPromotion(for: key)
-                        accumulated.merge(completion.effects)
-                        self.pendingSessionEndEffects[id] = accumulated
+            // Close only after each display's latest payload is durable. Once
+            // policy state is removed, a later quit cannot recover this tail.
+            // Older, non-active ring detail remains temporary.
+            for key in keys {
+                guard let active = self.policyStates[key]?.active else { continue }
+                switch active.residency {
+                case .ringOnly:
+                    guard let jpegData = await self.ring.data(frameID: active.entry.frame.id) else {
+                        continue
+                    }
+                    self.pendingPromotions[key] = PendingPromotion(
+                        entry: active.entry,
+                        jpegData: jpegData,
+                        reason: reason == .termination ? .termination : .sessionEnd,
+                        acceptedAt: active.entry.span.observedThroughAt,
+                        acceptedHash: active.entry.frame.hash
+                    )
+                    let completion = try await self.completePendingPromotion(for: key)
+                    accumulated.merge(completion.effects)
+                    self.pendingSessionEndEffects[id] = accumulated
 
-                    case .mirrored, .durableOnly:
-                        if let canonical = active.canonicalDurableEntry,
-                           self.requiresDurableCheckpoint(active.entry, than: canonical) {
-                            let effects = try await self.checkpointActivePayload(for: key)
-                            accumulated.merge(effects)
-                            self.pendingSessionEndEffects[id] = accumulated
-                        }
+                case .mirrored, .durableOnly:
+                    if let canonical = active.canonicalDurableEntry,
+                       self.requiresDurableCheckpoint(active.entry, than: canonical) {
+                        let effects = try await self.checkpointActivePayload(for: key)
+                        accumulated.merge(effects)
+                        self.pendingSessionEndEffects[id] = accumulated
                     }
                 }
             }
@@ -303,7 +304,21 @@ actor HybridFrameRepository: FrameRepository {
         jpegData: Data
     ) async throws -> FrameRepositorySaveResult {
         try await withMutationPermit {
-            try await self.recordEncodedCaptureWithPermit(frame, jpegData: jpegData)
+            do {
+                return try await self.recordEncodedCaptureWithPermit(frame, jpegData: jpegData)
+            } catch {
+                guard let session = self.activeSession,
+                      let invalidation = self.pendingCaptureEffects[
+                        ActiveCaptureKey(sessionID: session.id, displayID: frame.displayID)
+                      ]?.invalidation,
+                      invalidation != .none else { throw error }
+                // Keep the outbox for retry accounting, but committed removals
+                // must reach the projection even when a later promotion fails.
+                throw FrameRepositoryMutationFailure(
+                    invalidation: invalidation,
+                    underlyingError: error
+                )
+            }
         }
     }
 

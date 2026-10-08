@@ -41,6 +41,13 @@ struct CaptureLifecycleState {
 
     mutating func toggleUserPause() -> Bool {
         isUserPaused.toggle()
+        if !isUserPaused {
+            // A blocked start request is consumed, so keep explicit resume
+            // intent with each temporary pause owner until its gate clears.
+            if isPausedForOverlay { wasCapturingBeforeOverlay = true }
+            if isPausedForSession { wasCapturingBeforeSession = true }
+            if isPausedForLock { wasCapturingBeforeLock = true }
+        }
         return isUserPaused
     }
 
