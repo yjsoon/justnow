@@ -368,8 +368,9 @@ class ScreenCaptureManager: NSObject {
             throw CaptureError.noDisplay
         }
 
-        let dimensions = (width: display.width, height: display.height)
-        displayBackingScale = Self.backingScale(for: targetDisplayID)
+        let snapshot = DisplayIdentity.captureConfiguration(for: display)
+        let dimensions = (width: snapshot.width, height: snapshot.height)
+        displayBackingScale = snapshot.backingScale
         let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
 
         let outputDimensions = captureDimensions(for: dimensions)
@@ -679,13 +680,6 @@ class ScreenCaptureManager: NSObject {
             desiredScale: captureScale,
             displayBackingScale: displayBackingScale
         )
-    }
-
-    private static func backingScale(for displayID: CGDirectDisplayID) -> CGFloat {
-        if let screen = DisplayIdentity.screen(for: displayID) {
-            return max(1, screen.backingScaleFactor)
-        }
-        return 1
     }
 
     private static func monotonicTime() -> TimeInterval {

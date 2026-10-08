@@ -512,15 +512,28 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
             desired[info.id] = info
         }
 
-        // Remove managers for displays that are no longer connected.
-        let removedIDs = managed.keys.filter { desired[$0] == nil }
+        // Stable history identity does not imply a reusable capture filter or
+        // cached sizing. Replace only managers whose physical target or capture
+        // configuration changed; logical-session ownership stays continuous.
+        let removedIDs = managed.keys.filter { id in
+            guard let desiredInfo = desired[id], let entry = managed[id] else { return true }
+            return entry.info.displayID != desiredInfo.displayID
+                || entry.info.captureConfiguration != desiredInfo.captureConfiguration
+        }
         let removedEntries = removedIDs.compactMap { managed.removeValue(forKey: $0) }
         let previousLoops = removedEntries.map { $0.manager.beginStoppingCapture() }
         for (entry, previousLoop) in zip(removedEntries, previousLoops) {
             await previousLoop?.value
             guard isRunning, !Task.isCancelled else { throw CancellationError() }
-            captureLogger.info("Capture stopped for removed display: \(entry.info.name, privacy: .public)")
-            DiagnosticsLog.shared.log("Capture", "Capture stopped for removed display: \(entry.info.name)")
+            captureLogger.info("Capture stopped for removed or reconfigured display: \(entry.info.name, privacy: .public)")
+            DiagnosticsLog.shared.log("Capture", "Capture stopped for removed or reconfigured display: \(entry.info.name)")
+        }
+
+        // Refresh friendly metadata without restarting unchanged capture.
+        for (id, info) in desired {
+            if let entry = managed[id] {
+                managed[id] = ManagedDisplay(info: info, manager: entry.manager)
+            }
         }
 
         do {
