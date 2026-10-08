@@ -624,6 +624,64 @@ final class CaptureRequestBrokerTests: XCTestCase {
         await coordinator.stopCapture()
     }
 
+    func testFatalDisplayReplacementEndsSessionOnlyWhenNoDisplaySurvives() async throws {
+        for hasSurvivingDisplay in [false, true] {
+            let discovery = CoordinatorDisplayDiscoveryProbe(
+                displays: hasSurvivingDisplay
+                    ? [coordinatorDisplayA, coordinatorDisplayB]
+                    : [coordinatorDisplayA]
+            )
+            let factory = CoordinatorCaptureManagerFactoryProbe()
+            let coordinator = makeCoordinator(
+                discovery: discovery,
+                factory: factory,
+                scheduler: CaptureCooldownRestartScheduler()
+            )
+            let delegate = CoordinatorDelegateProbe()
+            coordinator.delegate = delegate
+            try await coordinator.startCapture()
+            let oldManager = try XCTUnwrap(factory.managers[1])
+            XCTAssertEqual(delegate.beginCount, 1)
+
+            let replacement = DisplayInfo(
+                id: coordinatorDisplayA.id,
+                displayID: 3,
+                name: coordinatorDisplayA.name
+            )
+            factory.outcomes[3] = .permissionDenied
+            discovery.displays = hasSurvivingDisplay
+                ? [replacement, coordinatorDisplayB]
+                : [replacement]
+            coordinator.scheduleReconcile()
+            await waitUntil { delegate.unexpectedStopCount == 1 }
+
+            XCTAssertEqual(oldManager.stopCount, 1)
+            XCTAssertFalse(oldManager.isCapturing)
+            XCTAssertEqual(factory.managers[3]?.startCount, 1)
+            XCTAssertFalse(factory.managers[3]?.isCapturing ?? true)
+            XCTAssertEqual(coordinator.isCapturing, hasSurvivingDisplay)
+            let expectedEnds: [CaptureSessionEndReason] = hasSurvivingDisplay ? [] : [.unexpectedStop]
+            XCTAssertEqual(delegate.endReasons, expectedEnds, "Only loss of the last live display ends the session")
+            XCTAssertEqual(delegate.beginCount, 1)
+            if hasSurvivingDisplay {
+                XCTAssertEqual(factory.managers[2]?.startCount, 1)
+                XCTAssertEqual(factory.managers[2]?.stopCount, 0)
+            }
+
+            // Recovery must begin a fresh session only if capture actually stopped.
+            factory.outcomes[3] = .success
+            let updateCount = delegate.displayUpdateCount
+            coordinator.scheduleReconcile()
+            await waitUntil { delegate.displayUpdateCount > updateCount }
+            XCTAssertTrue(factory.managers[3]?.isCapturing ?? false)
+            XCTAssertEqual(delegate.beginCount, hasSurvivingDisplay ? 1 : 2)
+            XCTAssertEqual(delegate.endReasons, expectedEnds)
+
+            await coordinator.stopCapture()
+            XCTAssertEqual(delegate.endReasons, expectedEnds + [.paused], "Cleanup must not publish duplicate closes")
+        }
+    }
+
     func testUnexpectedStopQueuedDuringDurableBeginClosesPublishedSessionUnderGate() async throws {
         let beginGate = BrokerTestGate()
         let discovery = CoordinatorDisplayDiscoveryProbe(displays: [coordinatorDisplayA])
