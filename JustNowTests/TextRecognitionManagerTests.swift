@@ -70,6 +70,33 @@ final class TextRecognitionManagerTests: XCTestCase {
         )
     }
 
+    func testNormaliseClipboardTextPreservesSubtractionAcrossWrappedLines() {
+        let input = "result = alpha -\nbeta"
+
+        XCTAssertEqual(
+            TextRecognitionManager.normaliseClipboardText(input),
+            "result = alpha - beta",
+            "A standalone subtraction operator is not a word-wrap hyphen"
+        )
+    }
+
+    func testNormaliseClipboardTextDoesNotDehyphenateAcrossParagraphBreak() {
+        let input = "word-\n\nNext paragraph"
+
+        XCTAssertEqual(
+            TextRecognitionManager.normaliseClipboardText(input),
+            "word-\nNext paragraph",
+            "Keep the hyphen and a paragraph boundary, using the normaliser's single-newline convention"
+        )
+    }
+
+    func testNormaliseClipboardTextRequiresLettersOnBothSidesOfWrapHyphen() {
+        XCTAssertEqual(TextRecognitionManager.normaliseClipboardText("123-\nword"), "123- word")
+        XCTAssertEqual(TextRecognitionManager.normaliseClipboardText("word-\n123"), "word- 123")
+        XCTAssertEqual(TextRecognitionManager.normaliseClipboardText("-\nword"), "- word")
+        XCTAssertEqual(TextRecognitionManager.normaliseClipboardText("word-\n \t\nNext"), "word-\nNext")
+    }
+
     func testNormaliseClipboardTextHandlesEmptyAndWhitespaceInput() {
         XCTAssertEqual(TextRecognitionManager.normaliseClipboardText(""), "")
         XCTAssertEqual(TextRecognitionManager.normaliseClipboardText("   "), "")

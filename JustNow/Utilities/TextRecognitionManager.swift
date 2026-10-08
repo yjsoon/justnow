@@ -108,7 +108,10 @@ nonisolated enum TextRecognitionManager {
                 continue
             }
 
-            if previousLine.hasSuffix("-"), line.first?.isLetter == true {
+            if !shouldPreserveParagraphBreak,
+               previousLine.hasSuffix("-"),
+               previousLine.dropLast().last?.isLetter == true,
+               line.first?.isLetter == true {
                 result.removeLast()
                 result.append(contentsOf: line)
             } else if shouldPreserveParagraphBreak || shouldKeepLineBreak(between: previousLine, and: line) {

@@ -458,6 +458,67 @@ final class TextCacheTests: XCTestCase {
         XCTAssertEqual(prefixHits, [asciiPrefix])
     }
 
+    /// Mid-token matches cannot be rescued by FTS prefixes. Unicode case
+    /// folding must therefore work in the substring path itself.
+    func testUnicodeSubstringSearchMatchesBothCasesAcrossLatinAndCyrillic() async throws {
+        let cache = TextCache(directory: directory)
+        let latinLowercase = UUID()
+        let latinUppercase = UUID()
+        let cyrillicMixedCase = UUID()
+        let cyrillicUppercase = UUID()
+        await cache.setText("xcafé", for: latinLowercase, timestamp: Date(timeIntervalSince1970: 100))
+        await cache.setText("xCAFÉ", for: latinUppercase, timestamp: Date(timeIntervalSince1970: 200))
+        await cache.setText("xxПривет", for: cyrillicMixedCase, timestamp: Date(timeIntervalSince1970: 300))
+        await cache.setText("xxПРИВЕТ", for: cyrillicUppercase, timestamp: Date(timeIntervalSince1970: 400))
+
+        for query in ["café", "CAFÉ"] {
+            let hits = try await cache.searchFrameIDs(matching: query, limit: 10)
+            XCTAssertEqual(hits, [latinUppercase, latinLowercase], "Query: \(query)")
+        }
+        for query in ["привет", "Привет", "ПРИВЕТ"] {
+            let hits = try await cache.searchFrameIDs(matching: query, limit: 10)
+            XCTAssertEqual(hits, [cyrillicUppercase, cyrillicMixedCase], "Query: \(query)")
+        }
+    }
+
+    /// Each token may match by prefix or Unicode substring independently;
+    /// a whole-query FTS union cannot supply this mixed match.
+    func testMixedUnicodeQueryCombinesAccentFoldedPrefixAndSubstring() async throws {
+        let cache = TextCache(directory: directory)
+        let mixedMatch = UUID()
+        let asciiMidTokenMiss = UUID()
+        let asciiPrefixMatch = UUID()
+        let missingUnicodeToken = UUID()
+        await cache.setText("cafeteria 東京都", for: mixedMatch, timestamp: Date(timeIntervalSince1970: 100))
+        await cache.setText("xchrome 東京都", for: asciiMidTokenMiss, timestamp: Date(timeIntervalSince1970: 200))
+        await cache.setText("chromebook 東京都", for: asciiPrefixMatch, timestamp: Date(timeIntervalSince1970: 300))
+        await cache.setText("cafeteria chrome", for: missingUnicodeToken, timestamp: Date(timeIntervalSince1970: 400))
+
+        let accentedHits = try await cache.searchFrameIDs(matching: "café 京都", limit: 10)
+        XCTAssertEqual(accentedHits, [mixedMatch])
+        let unaccentedHits = try await cache.searchFrameIDs(matching: "cafe 京都", limit: 10)
+        XCTAssertEqual(unaccentedHits, [mixedMatch])
+        let asciiHits = try await cache.searchFrameIDs(matching: "chrome 京都", limit: 10)
+        XCTAssertEqual(
+            asciiHits,
+            [asciiPrefixMatch],
+            "ASCII tokens remain prefix-only, and every query token is required"
+        )
+    }
+
+    func testUnicodeTokenClassificationPrecedesCaseFolding() async throws {
+        let cache = TextCache(directory: directory)
+        let frameID = UUID()
+        await cache.setText("xxkelvin 東京都", for: frameID)
+
+        // The Kelvin sign lowercases to ASCII k, but remains a Unicode token
+        // eligible for substring matching. An actual ASCII k stays FTS-only.
+        let unicodeHits = try await cache.searchFrameIDs(matching: "K 京都", limit: 10)
+        let asciiHits = try await cache.searchFrameIDs(matching: "k 京都", limit: 10)
+        XCTAssertEqual(unicodeHits, [frameID])
+        XCTAssertEqual(asciiHits, [])
+    }
+
     func testLiteralFallbackPreservesPunctuationAndOriginalUnicodeCase() async throws {
         let cache = TextCache(directory: directory)
         let punctuation = UUID()
@@ -703,6 +764,11 @@ final class TextCacheTests: XCTestCase {
         await cache.setText("post-recovery needle", for: frameID)
         let hits = try await cache.searchFrameIDs(matching: "needle", limit: 10)
         XCTAssertEqual(hits, [frameID])
+
+        let unicodeFrameID = UUID()
+        await cache.setText("xxCAFÉ 東京都", for: unicodeFrameID)
+        let unicodeHits = try await cache.searchFrameIDs(matching: "café 京都", limit: 10)
+        XCTAssertEqual(unicodeHits, [unicodeFrameID], "Lazy reconnect must register Unicode matching too")
     }
 
     /// A persistently broken store gets a bounded number of reconnect
