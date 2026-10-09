@@ -3,6 +3,26 @@
     <channel>
         <title>JustNow</title>
         <item>
+            <title>1.5.5</title>
+            <pubDate>Thu, 08 Oct 2026 23:55:46 +0000</pubDate>
+            <link>https://justnow.tk.sg</link>
+            <sparkle:fullReleaseNotesLink>https://justnow.tk.sg/releases/</sparkle:fullReleaseNotesLink>
+            <sparkle:version>25</sparkle:version>
+            <sparkle:shortVersionString>1.5.5</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown">- Make Unicode substring searches case-insensitive and combine accented-word and CJK searches consistently.
+- Preserve subtraction signs and paragraph breaks when copying recognised text, while still joining genuinely hyphenated word wraps.
+- Honour an explicit resume request made while the rewind overlay is open, so recording resumes after the overlay closes.
+- Suspend both global shortcuts while recording a new shortcut, including when shortcut preferences change during recording.
+- Refresh capture when a display's physical identity or configuration changes, and close the capture session cleanly if its last display cannot restart.
+- Save the latest frame from each display when a capture session ends, including pauses and display disconnections.
+- Preserve stored history when the database is temporarily busy or uses a newer schema, instead of treating these conditions as corruption.
+- Remove missing-image history from the timeline, search, and image cache even when its replacement cannot be saved.
+- Clean up empty closed capture sessions while preserving open sessions and sessions with retained history.
+</description>
+            <enclosure url="https://github.com/yjsoon/justnow/releases/download/v1.5.5/JustNow-v1.5.5-macos.zip" length="7103538" type="application/octet-stream" sparkle:edSignature="OxdvBKdgfAgWdo8Ck3WhRzDsdq2drqmxg4hG65r879YPmyWWXiF9QLGrBRkdLKrpra3f4lx9+pbmMItl4exeDw==" />
+        </item>
+        <item>
             <title>1.5.4</title>
             <pubDate>Wed, 07 Oct 2026 07:58:49 +0000</pubDate>
             <link>https://justnow.tk.sg</link>
