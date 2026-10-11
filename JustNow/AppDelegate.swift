@@ -276,6 +276,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        // While the overlay is open JustNow has a Dock icon; clicking it should
+        // return to the overlay rather than open Settings over it.
+        guard !isOverlayVisible else { return true }
         showSettings()
         return false
     }
