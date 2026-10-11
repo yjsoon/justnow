@@ -11,10 +11,19 @@
   },
   "releases": [
     {
+      "tag": "v1.5.6",
+      "version": "1.5.6",
+      "published_at": "2026-10-11",
+      "status": "Current public build",
+      "notes": [
+        "Hide the menu bar and Dock again while the rewind overlay is open, while keeping other apps and Force Quit reachable if the overlay stops responding."
+      ]
+    },
+    {
       "tag": "v1.5.5",
       "version": "1.5.5",
       "published_at": "2026-10-08",
-      "status": "Current public build",
+      "status": "Previous release",
       "notes": [
         "Make Unicode substring searches case-insensitive and combine accented-word and CJK searches consistently.",
         "Preserve subtraction signs and paragraph breaks when copying recognised text, while still joining genuinely hyphenated word wraps.",

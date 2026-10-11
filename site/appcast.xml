@@ -3,6 +3,18 @@
     <channel>
         <title>JustNow</title>
         <item>
+            <title>1.5.6</title>
+            <pubDate>Sun, 11 Oct 2026 08:50:29 +0000</pubDate>
+            <link>https://justnow.tk.sg</link>
+            <sparkle:fullReleaseNotesLink>https://justnow.tk.sg/releases/</sparkle:fullReleaseNotesLink>
+            <sparkle:version>26</sparkle:version>
+            <sparkle:shortVersionString>1.5.6</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown">- Hide the menu bar and Dock again while the rewind overlay is open, while keeping other apps and Force Quit reachable if the overlay stops responding.
+</description>
+            <enclosure url="https://github.com/yjsoon/justnow/releases/download/v1.5.6/JustNow-v1.5.6-macos.zip" length="7108118" type="application/octet-stream" sparkle:edSignature="AMmTj8hULYKD4YKLp96xzQA6R51JZ535A99WW+w5iCuZGnNMrCzf51EE8tepY09JyH3l7ZhmrdPLfMgRbmtYDA==" />
+        </item>
+        <item>
             <title>1.5.5</title>
             <pubDate>Thu, 08 Oct 2026 23:55:46 +0000</pubDate>
             <link>https://justnow.tk.sg</link>
