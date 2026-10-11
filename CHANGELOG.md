@@ -4,6 +4,9 @@ All notable changes to JustNow will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- Hide the menu bar and Dock again while the rewind overlay is open, while keeping other apps and Force Quit reachable if the overlay stops responding.
+
 ## [1.5.5] - 2026-10-08
 
 ### Fixed

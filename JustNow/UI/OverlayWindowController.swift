@@ -195,8 +195,10 @@ class OverlayWindowController: NSObject {
 
         // Keep system dialogs and other apps reachable if the overlay stalls.
         // The menu bar and Dock sit above normal windows, so hide them through
-        // presentation options instead; AppKit applies these only while
-        // JustNow is active, so switching away still reveals them.
+        // presentation options instead. AppKit applies these only while
+        // JustNow is active, so switching away still reveals them, and
+        // ignores .hideMenuBar for accessory apps, so the overlay runs as a
+        // regular app (which also lists it in Force Quit).
         window.level = .normal
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.isOpaque = false
@@ -226,6 +228,7 @@ class OverlayWindowController: NSObject {
         if presentationOptionsBeforeOverlay == nil {
             presentationOptionsBeforeOverlay = NSApp.presentationOptions
         }
+        NSApp.setActivationPolicy(.regular)
         NSApp.presentationOptions = [.hideDock, .hideMenuBar]
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
@@ -329,10 +332,11 @@ class OverlayWindowController: NSObject {
         onVisibilityChanged?(true)
     }
 
-    private func restorePresentationOptions() {
+    private func restoreMenuBarApp() {
         guard let options = presentationOptionsBeforeOverlay else { return }
         presentationOptionsBeforeOverlay = nil
         NSApp.presentationOptions = options
+        NSApp.setActivationPolicy(.accessory)
     }
 
     func hideOverlay() {
@@ -367,7 +371,7 @@ class OverlayWindowController: NSObject {
         window?.orderOut(nil)
         window = nil
         viewModel = nil
-        restorePresentationOptions()
+        restoreMenuBarApp()
         let lease = payloadLease
         payloadLease = nil
         let generation = visibleGeneration
@@ -436,7 +440,7 @@ class OverlayWindowController: NSObject {
         window?.orderOut(nil)
         window = nil
         viewModel = nil
-        restorePresentationOptions()
+        restoreMenuBarApp()
 
         let lease = payloadLease
         payloadLease = nil
