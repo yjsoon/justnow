@@ -201,6 +201,11 @@ final class NativeSwiftUIValidationTests: XCTestCase {
         NSApp.sendEvent(overlayScroll)
         XCTAssertNotEqual(vm.selectedIndex, selected, "Positive control proves the scroll monitor ran")
         controller.hideOverlay()
+        // Dismissal returns JustNow to an accessory app, which deactivates the
+        // host. Reactivate it as before so the focus probe, which needs a
+        // non-frontmost host and also fails in hosted VMs on earlier revisions,
+        // keeps its existing skip instead of depending on this test's order.
+        NSApp.activate(ignoringOtherApps: true)
         await buffer.flushCaches()
     }
 
