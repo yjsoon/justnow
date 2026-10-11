@@ -52,6 +52,7 @@ class OverlayWindowController: NSObject {
     private var scrollEventMonitor: Any?
     private var timelineScrollAccumulator = TimelineScrollAccumulator()
     private var flagsChangedMonitor: Any?
+    private var presentationOptionsBeforeOverlay: NSApplication.PresentationOptions?
     private(set) var viewModel: OverlayViewModel?
     private var payloadLease: (any FrameRepositoryPayloadLease)?
     private let payloadLeaseReleaseGate = OverlayPayloadLeaseReleaseGate()
@@ -193,6 +194,9 @@ class OverlayWindowController: NSObject {
         )
 
         // Keep system dialogs and other apps reachable if the overlay stalls.
+        // The menu bar and Dock sit above normal windows, so hide them through
+        // presentation options instead; AppKit applies these only while
+        // JustNow is active, so switching away still reveals them.
         window.level = .normal
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.isOpaque = false
@@ -219,6 +223,10 @@ class OverlayWindowController: NSObject {
         window.contentView = hostingView
 
         window.setFrame(screen.frame, display: true)
+        if presentationOptionsBeforeOverlay == nil {
+            presentationOptionsBeforeOverlay = NSApp.presentationOptions
+        }
+        NSApp.presentationOptions = [.hideDock, .hideMenuBar]
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
 
@@ -321,6 +329,12 @@ class OverlayWindowController: NSObject {
         onVisibilityChanged?(true)
     }
 
+    private func restorePresentationOptions() {
+        guard let options = presentationOptionsBeforeOverlay else { return }
+        presentationOptionsBeforeOverlay = nil
+        NSApp.presentationOptions = options
+    }
+
     func hideOverlay() {
         if let pendingPresentationGeneration,
            window == nil,
@@ -353,6 +367,7 @@ class OverlayWindowController: NSObject {
         window?.orderOut(nil)
         window = nil
         viewModel = nil
+        restorePresentationOptions()
         let lease = payloadLease
         payloadLease = nil
         let generation = visibleGeneration
@@ -421,6 +436,7 @@ class OverlayWindowController: NSObject {
         window?.orderOut(nil)
         window = nil
         viewModel = nil
+        restorePresentationOptions()
 
         let lease = payloadLease
         payloadLease = nil
