@@ -32,7 +32,7 @@ final class NativeSwiftUIValidationTests: XCTestCase {
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
         windows.append(panel)
-        try requireNonActivating(panel)
+        assertNonActivating(panel)
 
         let directory = try temporaryDirectory()
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
@@ -59,7 +59,7 @@ final class NativeSwiftUIValidationTests: XCTestCase {
         let domain = "sg.tk.JustNow.NativeValidation.\(UUID())"
         preferenceDomains.append(domain)
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
-        let host = NSHostingView(rootView: ContentAreaView(viewModel: vm)
+        let host = NativeValidationFirstMouseHostingView(rootView: ContentAreaView(viewModel: vm)
             .frame(width: 1280, height: 720).defaultAppStorage(defaults))
         host.sizingOptions = []
         host.frame = NSRect(x: 0, y: 0, width: 1280, height: 720)
@@ -87,7 +87,7 @@ final class NativeSwiftUIValidationTests: XCTestCase {
         try await waitUntil { vm.searchResults.count == 4 && !vm.isSearchLoading }
         host.layoutSubtreeIfNeeded()
         try await waitUntil { self.editableField(in: host) != nil }
-        try requireNonActivating(panel)
+        assertNonActivating(panel)
 
         // A non-key panel need not honor initial automatic focus. Set up the
         // real hosted field once; subsequent transitions must be request-driven.
@@ -101,7 +101,7 @@ final class NativeSwiftUIValidationTests: XCTestCase {
         panel.sendEvent(try key(kVK_LeftArrow, window: panel, characters: "\u{F702}"))
         XCTAssertEqual(editor.selectedRange().location, 5)
         XCTAssertEqual(vm.selectedIndex, 3, "Editing arrows must not rewind")
-        try requireNonActivating(panel)
+        assertNonActivating(panel)
 
         // Real SliderTrack drag at one-quarter: 40-point outer horizontal
         // padding, 8-point inner padding, bottom padding50 and track offset12.
@@ -114,16 +114,16 @@ final class NativeSwiftUIValidationTests: XCTestCase {
         NSApp.postEvent(try mouse(.leftMouseUp), atStart: false)
         panel.sendEvent(try mouse(.leftMouseDown))
         try await waitUntil { vm.selectedIndex == 1 && (panel.firstResponder as? NSTextView)?.isEditable != true }
-        try requireNonActivating(panel)
+        assertNonActivating(panel)
         let timelineResponder = try XCTUnwrap(panel.firstResponder)
 
         vm.focusSearch()
         try await waitUntil { (panel.firstResponder as? NSTextView)?.isEditable == true }
-        try requireNonActivating(panel)
+        assertNonActivating(panel)
         XCTAssertEqual(vm.selectedIndex, 1, "Refocusing must preserve the selected result")
         panel.sendEvent(try key(kVK_Return, window: panel, characters: "\r"))
         try await waitUntil { panel.firstResponder === timelineResponder }
-        try requireNonActivating(panel)
+        assertNonActivating(panel)
         XCTAssertFalse((panel.firstResponder as? NSTextView)?.isEditable == true)
         XCTAssertTrue(vm.isSearching, "Submission enters browsing without closing search")
         XCTAssertEqual(vm.searchQuery, "synthetic")
@@ -134,12 +134,9 @@ final class NativeSwiftUIValidationTests: XCTestCase {
         await buffer.flushCaches()
     }
 
-    private func requireNonActivating(_ panel: NSPanel) throws {
-        guard !panel.isKeyWindow, !panel.isMainWindow,
-              NSWorkspace.shared.frontmostApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
-            panel.orderOut(nil)
-            throw XCTSkip("Native focus probe requires a non-key/non-main, non-frontmost test host")
-        }
+    private func assertNonActivating(_ panel: NSPanel, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertFalse(panel.isKeyWindow, "Native focus probe must not make its panel key", file: file, line: line)
+        XCTAssertFalse(panel.isMainWindow, "Native focus probe must not make its panel main", file: file, line: line)
     }
 
     private func editableField(in root: NSView) -> NSTextField? {
@@ -201,11 +198,6 @@ final class NativeSwiftUIValidationTests: XCTestCase {
         NSApp.sendEvent(overlayScroll)
         XCTAssertNotEqual(vm.selectedIndex, selected, "Positive control proves the scroll monitor ran")
         controller.hideOverlay()
-        // Dismissal returns JustNow to an accessory app, which deactivates the
-        // host. Reactivate it as before so the focus probe, which needs a
-        // non-frontmost host and also fails in hosted VMs on earlier revisions,
-        // keeps its existing skip instead of depending on this test's order.
-        NSApp.activate(ignoringOtherApps: true)
         await buffer.flushCaches()
     }
 
@@ -363,6 +355,13 @@ final class NativeSwiftUIValidationTests: XCTestCase {
 private final class NativeValidationNonActivatingPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+}
+
+/// The probe panel can never become key, so AppKit delivers every click as a
+/// window-activation (first-mouse) click, which SwiftUI gestures ignore unless
+/// the host accepts it. The real overlay is key when clicked.
+private final class NativeValidationFirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 private final class NativeValidationScrollEvent: NSEvent {
