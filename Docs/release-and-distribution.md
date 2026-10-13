@@ -10,6 +10,16 @@ GitHub Actions builds and publishes stable releases, the website, and the signed
 
 The active [Release workflow](../.github/workflows/release.yml) runs on `macos-26`. It checks out the release tag, checks version/build consistency, runs Python release tests and Xcode unit tests, builds a universal Apple Silicon/Intel app, and signs/notarises the artifacts. Then [the CI publisher](../Scripts/ci-release-publish.py) prepares the release/site/feed, verifies the Sparkle key and signature, uploads/downloads and compares both artifacts, publishes the GitHub release, and deploys the existing Cloudflare Pages site. It fails rather than falling back to unsigned builds or deploying after feed-generation failure. Credentials use a temporary keychain with always-run cleanup.
 
+### Dependency reuse
+
+Release tests and the universal build share `$RUNNER_TEMP/justnow-swiftpm` through `SWIFTPM_PACKAGE_DIRECTORY`, while retaining separate, uncached build products. Both Xcode invocations require the committed `Package.resolved` pins (HotKey and Sparkle); a stale lockfile fails instead of silently updating dependencies. Ordinary local packaging keeps its existing defaults unless this environment variable is set. Unit Tests already reuses its default package directory between scheme listing and testing, so that workflow needs no change.
+
+Cross-run caching was evaluated but is not enabled. A native Mac prototype produced a 63 MB source-only archive: local cold resolution varied from 3.84 to 9.42 seconds, versus about 1.9–2.1 seconds for decompression plus restored resolution, before any GitHub transfer/action overhead. That leaves as little as 1.94 seconds of margin and does not establish a net hosted-runner saving. Including binary artifacts enlarged the archive without avoiding Sparkle's download; including resolver metadata avoided that download but introduced absolute-path compatibility requirements. Keeping the live package directory within one job avoids those archive costs and retains valid metadata without sharing state between runners, toolchains, architectures, or tags. No DerivedData, app products, signing credentials, or keychains are cached.
+
+Homebrew, Pillow, and Wrangler remain uncached. In [release run 38125999960](https://github.com/yjsoon/justnow/actions/runs/38125999960), Homebrew plus Pillow took 8 seconds and Wrangler took 10 seconds. Populating them on every main-branch test just to support occasional releases would add work; caching only on release tags would mostly help same-tag retries. Wrangler currently pins its top-level version but has no committed transitive npm lockfile, so skipping installation from a completed-tree cache would also freeze an otherwise floating dependency graph. These small installs do not justify that policy change. No extra cache-primer job is needed for these single-job workflows.
+
+### Repository configuration
+
 Before the first run:
 
 1. Land the workflow and scripts on the default branch. The tagged source must contain this workflow and the current scripts/tests. Tags must be `vX.Y.Z` and match the project's `MARKETING_VERSION`; increment `CURRENT_PROJECT_VERSION` for new Sparkle updates.

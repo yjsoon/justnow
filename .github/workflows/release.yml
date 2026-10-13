@@ -81,6 +81,8 @@ jobs:
           PY
           xcodebuild -version
           xcrun swift --version
+          # Reuse dependencies across unsigned tests and the universal build, not build products.
+          echo "SWIFTPM_PACKAGE_DIRECTORY=$RUNNER_TEMP/justnow-swiftpm" >> "$GITHUB_ENV"
 
       - name: Install packaging dependencies
         run: |
@@ -97,6 +99,8 @@ jobs:
           xcodebuild test \
             -project JustNow.xcodeproj -scheme JustNow \
             -destination 'platform=macOS' -derivedDataPath build-tests-unsigned \
+            -clonedSourcePackagesDirPath "$SWIFTPM_PACKAGE_DIRECTORY" \
+            -onlyUsePackageVersionsFromResolvedFile -disableAutomaticPackageResolution -skipPackageUpdates \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM=""
 
