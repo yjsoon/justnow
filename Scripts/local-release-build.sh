@@ -45,6 +45,9 @@ Options:
   --api-key         Path to an App Store Connect API key (.p8)
   --api-key-id      App Store Connect API key ID
   --api-issuer      App Store Connect issuer ID (omit for Individual API keys)
+
+Environment:
+  SWIFTPM_PACKAGE_DIRECTORY  Opt-in shared dependencies with locked resolution (CI)
 EOF
 }
 
@@ -213,6 +216,13 @@ fi
 
 ./Scripts/generate-appicon-icns.sh
 XCODEBUILD_CMD=(xcodebuild -scheme "${SCHEME}" -configuration "${CONFIGURATION}" -derivedDataPath "${DERIVED_DATA_PATH}")
+
+if [ -n "${SWIFTPM_PACKAGE_DIRECTORY:-}" ]; then
+  XCODEBUILD_CMD+=(
+    -clonedSourcePackagesDirPath "${SWIFTPM_PACKAGE_DIRECTORY}"
+    -onlyUsePackageVersionsFromResolvedFile -disableAutomaticPackageResolution -skipPackageUpdates
+  )
+fi
 
 if [ "${USE_DISTRIBUTION_SIGNING}" = "true" ]; then
   if [ -z "${SIGNING_IDENTITY}" ] || [ -z "${DEVELOPMENT_TEAM}" ]; then
