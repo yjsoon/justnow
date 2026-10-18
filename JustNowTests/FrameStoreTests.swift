@@ -382,6 +382,12 @@ final class FrameStoreTests: XCTestCase {
         XCTAssertNil(sessions.last?.endedAt)
         let remainingFrames = await store.getAllMetadata()
         XCTAssertEqual(remainingFrames.map(\.id), [retainedFrame.id])
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: framesDirectoryURL().appendingPathComponent(expiredFrame.filename).path
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: framesDirectoryURL().appendingPathComponent(retainedFrame.filename).path
+        ))
     }
 
     func testSQLitePreservesSubSecondTimestamps() async throws {
