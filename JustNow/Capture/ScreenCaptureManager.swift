@@ -317,10 +317,6 @@ class ScreenCaptureManager: NSObject {
         CGPreflightScreenCaptureAccess()
     }
 
-    static func requestScreenRecordingPermission() -> Bool {
-        CGRequestScreenCaptureAccess()
-    }
-
     func startCapture() async throws {
         // Stop any existing capture
         let previousLoop = stopCaptureLoop()

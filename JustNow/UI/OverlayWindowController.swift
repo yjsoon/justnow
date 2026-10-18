@@ -246,7 +246,6 @@ class OverlayWindowController: NSObject {
                 dismissShortcutKeyCode: self.dismissShortcutKeyCode,
                 dismissShortcutModifiers: self.dismissShortcutModifiers,
                 state: OverlayKeyboardState(
-                    isSearchAvailable: vm.isSearchAvailable,
                     isSearching: vm.isSearching,
                     isTextGrabActive: vm.isTextGrabActive,
                     isEditingText: (window.firstResponder as? NSTextView)?.isEditable == true

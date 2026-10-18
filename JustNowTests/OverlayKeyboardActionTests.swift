@@ -7,7 +7,7 @@ final class OverlayKeyboardActionTests: XCTestCase {
     func testReturnBelongsToTheNativeResponderWhileSearchIsOpen() {
         for editing in [true, false] {
             let state = OverlayKeyboardState(
-                isSearchAvailable: true, isSearching: true,
+                isSearching: true,
                 isTextGrabActive: false, isEditingText: editing
             )
             XCTAssertEqual(resolveOverlayKeyboardAction(
@@ -20,7 +20,7 @@ final class OverlayKeyboardActionTests: XCTestCase {
 
     func testConfiguredArrowDismissalStillWorksWhileEditing() {
         let state = OverlayKeyboardState(
-            isSearchAvailable: true, isSearching: true,
+            isSearching: true,
             isTextGrabActive: false, isEditingText: true
         )
         for (modifiers, expected): (NSEvent.ModifierFlags, OverlayKeyboardAction) in [
@@ -37,7 +37,7 @@ final class OverlayKeyboardActionTests: XCTestCase {
 
     func testTextEditingKeepsNavigationKeysButUnfocusedSearchStillNavigatesFrames() {
         let editing = OverlayKeyboardState(
-            isSearchAvailable: true, isSearching: true,
+            isSearching: true,
             isTextGrabActive: false, isEditingText: true
         )
         var unfocused = editing
@@ -74,7 +74,7 @@ final class OverlayKeyboardActionTests: XCTestCase {
                 modifiers: pressed,
                 dismissShortcutKeyCode: Int(kVK_ANSI_J),
                 dismissShortcutModifiers: Int(saved.rawValue),
-                state: .init(isSearchAvailable: true, isSearching: false, isTextGrabActive: false)
+                state: .init(isSearching: false, isTextGrabActive: false)
             ), .dismissOverlay)
         }
     }
@@ -85,7 +85,7 @@ final class OverlayKeyboardActionTests: XCTestCase {
             modifiers: [.command, .option],
             dismissShortcutKeyCode: Int(kVK_ANSI_J),
             dismissShortcutModifiers: Int((NSEvent.ModifierFlags.command.union(.option)).rawValue),
-            state: .init(isSearchAvailable: true, isSearching: false, isTextGrabActive: false)
+            state: .init(isSearching: false, isTextGrabActive: false)
         )
 
         XCTAssertEqual(action, .dismissOverlay)
@@ -97,7 +97,7 @@ final class OverlayKeyboardActionTests: XCTestCase {
             modifiers: [],
             dismissShortcutKeyCode: Int(kVK_Escape),
             dismissShortcutModifiers: 0,
-            state: .init(isSearchAvailable: true, isSearching: true, isTextGrabActive: true)
+            state: .init(isSearching: true, isTextGrabActive: true)
         )
 
         XCTAssertEqual(action, .cancelTextGrab)
@@ -109,7 +109,7 @@ final class OverlayKeyboardActionTests: XCTestCase {
             modifiers: [],
             dismissShortcutKeyCode: Int(kVK_Escape),
             dismissShortcutModifiers: 0,
-            state: .init(isSearchAvailable: true, isSearching: false, isTextGrabActive: false)
+            state: .init(isSearching: false, isTextGrabActive: false)
         )
 
         XCTAssertEqual(action, .focusSearch)
@@ -121,7 +121,7 @@ final class OverlayKeyboardActionTests: XCTestCase {
             modifiers: [],
             dismissShortcutKeyCode: Int(kVK_Escape),
             dismissShortcutModifiers: 0,
-            state: .init(isSearchAvailable: true, isSearching: true, isTextGrabActive: false, isEditingText: true)
+            state: .init(isSearching: true, isTextGrabActive: false, isEditingText: true)
         )
 
         XCTAssertEqual(action, .passthrough)
@@ -130,7 +130,7 @@ final class OverlayKeyboardActionTests: XCTestCase {
     func testSearchFocusShortcutsPreserveNativeEditingAndTabTraversal() {
         for editing in [false, true] {
             let state = OverlayKeyboardState(
-                isSearchAvailable: true, isSearching: true,
+                isSearching: true,
                 isTextGrabActive: false, isEditingText: editing
             )
             for (key, flags, expected): (Int, NSEvent.ModifierFlags, OverlayKeyboardAction) in [
@@ -156,7 +156,7 @@ final class OverlayKeyboardActionTests: XCTestCase {
             modifiers: [.command],
             dismissShortcutKeyCode: Int(kVK_Escape),
             dismissShortcutModifiers: 0,
-            state: .init(isSearchAvailable: true, isSearching: false, isTextGrabActive: false)
+            state: .init(isSearching: false, isTextGrabActive: false)
         )
 
         XCTAssertEqual(action, .saveScreenshot)
@@ -168,7 +168,7 @@ final class OverlayKeyboardActionTests: XCTestCase {
             modifiers: [],
             dismissShortcutKeyCode: Int(kVK_Escape),
             dismissShortcutModifiers: 0,
-            state: .init(isSearchAvailable: true, isSearching: false, isTextGrabActive: false)
+            state: .init(isSearching: false, isTextGrabActive: false)
         )
 
         XCTAssertEqual(action, .passthrough)
@@ -180,7 +180,7 @@ final class OverlayKeyboardActionTests: XCTestCase {
             modifiers: [.command],
             dismissShortcutKeyCode: Int(kVK_Escape),
             dismissShortcutModifiers: 0,
-            state: .init(isSearchAvailable: true, isSearching: false, isTextGrabActive: false)
+            state: .init(isSearching: false, isTextGrabActive: false)
         )
 
         XCTAssertEqual(action, .openSettings)
@@ -192,7 +192,7 @@ final class OverlayKeyboardActionTests: XCTestCase {
             modifiers: [],
             dismissShortcutKeyCode: Int(kVK_Escape),
             dismissShortcutModifiers: 0,
-            state: .init(isSearchAvailable: true, isSearching: false, isTextGrabActive: false)
+            state: .init(isSearching: false, isTextGrabActive: false)
         )
 
         XCTAssertEqual(action, .passthrough)
@@ -207,7 +207,7 @@ final class OverlayKeyboardActionTests: XCTestCase {
                 modifiers: [.option],
                 dismissShortcutKeyCode: Int(kVK_Escape),
                 dismissShortcutModifiers: dismissModifiers,
-                state: .init(isSearchAvailable: true, isSearching: false, isTextGrabActive: false)
+                state: .init(isSearching: false, isTextGrabActive: false)
             ),
             .jumpLeft
         )
@@ -218,7 +218,7 @@ final class OverlayKeyboardActionTests: XCTestCase {
                 modifiers: [.command],
                 dismissShortcutKeyCode: Int(kVK_Escape),
                 dismissShortcutModifiers: dismissModifiers,
-                state: .init(isSearchAvailable: true, isSearching: false, isTextGrabActive: false)
+                state: .init(isSearching: false, isTextGrabActive: false)
             ),
             .goToEnd
         )
@@ -226,7 +226,6 @@ final class OverlayKeyboardActionTests: XCTestCase {
 
     func testPageAndBoundaryKeysMapToElapsedNavigation() {
         let state = OverlayKeyboardState(
-            isSearchAvailable: true,
             isSearching: false,
             isTextGrabActive: false
         )

@@ -7,7 +7,6 @@ import AppKit
 import Carbon.HIToolbox
 
 struct OverlayKeyboardState: Equatable {
-    let isSearchAvailable: Bool
     let isSearching: Bool
     let isTextGrabActive: Bool
     var isEditingText: Bool = false
@@ -63,18 +62,17 @@ func resolveOverlayKeyboardAction(
         if state.isTextGrabActive {
             return .cancelTextGrab
         }
-        if state.isSearchAvailable && state.isSearching {
+        if state.isSearching {
             return .clearSearch
         }
         return .dismissOverlay
 
     case UInt16(kVK_ANSI_Slash):
         guard !state.isEditingText, pressedModifiers.isEmpty else { return .passthrough }
-        guard state.isSearchAvailable else { return .consume }
         return .focusSearch
 
     case UInt16(kVK_ANSI_F):
-        return pressedModifiers == .command && state.isSearchAvailable ? .focusSearch : .passthrough
+        return pressedModifiers == .command ? .focusSearch : .passthrough
 
     case UInt16(kVK_LeftArrow):
         if pressedModifiers.contains(.command) {
@@ -107,7 +105,7 @@ func resolveOverlayKeyboardAction(
         return .goToEnd
 
     case UInt16(kVK_Tab):
-        if state.isSearchAvailable && state.isSearching {
+        if state.isSearching {
             return .passthrough
         }
         return pressedModifiers.contains(.shift) ? .cycleDisplayBackward : .cycleDisplayForward
