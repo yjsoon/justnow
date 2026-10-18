@@ -2129,7 +2129,7 @@ final class FrameBufferTests: XCTestCase {
 
         XCTAssertEqual(entries.map(\.span.id), [recentSpan.span.id])
         XCTAssertEqual(entries.only?.frame.id, physical.id)
-        XCTAssertEqual(entries.only.map { timelineSpanBounds(for: $0).end }, recentSpan.span.observedThroughAt)
+        XCTAssertEqual(buffer.getFrames().only?.timestamp, recentSpan.span.observedThroughAt)
     }
 
     func testRollbackSpanUsesNormalisedEndForFiltering() async throws {
@@ -3120,18 +3120,10 @@ private actor FrameRepositoryProbe: FrameRepository {
             ]
         case .volatileFrame:
             effects.persistenceEvents = [.volatileAdmission]
-        case .duplicateFrame:
-            effects.persistenceEvents = [.exactDuplicate]
-        case .spanCheckpoint:
-            effects.persistenceEvents = [
-                .spanCheckpoint(
-                    frameID: entry.frame.id,
-                    metadataByteCount: outcome.metadataWriteByteCounts.reduce(0, +)
-                )
-            ]
-        case .pressureDrop:
-            effects.timelineUpserts = []
-            effects.persistenceEvents = [.pressureDrop]
+        case .duplicateFrame, .spanCheckpoint, .pressureDrop:
+            // Production does not insert a new span for these outcomes, so
+            // this insertion path cannot model them faithfully.
+            preconditionFailure("FrameRepositoryProbe only models inserted captures")
         }
         return effects
     }

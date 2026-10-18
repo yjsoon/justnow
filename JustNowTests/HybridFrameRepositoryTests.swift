@@ -748,6 +748,8 @@ final class HybridFrameRepositoryTests: XCTestCase {
 
         XCTAssertEqual(timeline.map(\.frame.id), [first.id])
         XCTAssertEqual(timeline.first?.frame.timestamp, first.timestamp)
+        XCTAssertEqual(timeline.first?.span.observedThroughAt, repeated.timestamp)
+        XCTAssertEqual(timeline.first?.span.observationCount, 2)
     }
 
     func testPolicyUsesFirstMajorAndOrdinaryAnchorsWhileHashZeroNeverTriggersMajor() async throws {
