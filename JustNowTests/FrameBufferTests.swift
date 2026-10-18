@@ -1578,9 +1578,7 @@ final class FrameBufferTests: XCTestCase {
         let saves = await repository.saveRequests()
         XCTAssertEqual(saves.count, 1)
         XCTAssertEqual(saves.first?.frame.timestamp, base.addingTimeInterval(19))
-        while buffer.frameCount < 1 {
-            await Task.yield()
-        }
+        try await yieldUntil("the recovered frame to be admitted") { buffer.frameCount >= 1 }
         try await buffer.endCaptureSession(reason: .paused)
     }
 
@@ -1614,8 +1612,8 @@ final class FrameBufferTests: XCTestCase {
         let replacementClear = Task { @MainActor in
             try await buffer.clear()
         }
-        while buffer.repositoryEffectGenerationForTesting == priorRepositoryGeneration {
-            await Task.yield()
+        try await yieldUntil("the clear to advance the repository epoch") {
+            buffer.repositoryEffectGenerationForTesting != priorRepositoryGeneration
         }
         await repository.resumeSuspendedBegin()
         try await replacementClear.value
@@ -1676,8 +1674,8 @@ final class FrameBufferTests: XCTestCase {
         let firstReplacementClear = Task { @MainActor in
             try await buffer.clear()
         }
-        while buffer.repositoryEffectGenerationForTesting == priorRepositoryGeneration {
-            await Task.yield()
+        try await yieldUntil("the clear to advance the repository epoch") {
+            buffer.repositoryEffectGenerationForTesting != priorRepositoryGeneration
         }
 
         await repository.suspendNextEnd()
@@ -2760,6 +2758,26 @@ final class FrameBufferTests: XCTestCase {
         }
         return sqlite3_column_double(statement, 0)
     }
+
+    /// Yields until `condition` holds, failing instead of hanging CI if a
+    /// regression means it never does.
+    private func yieldUntil(
+        _ description: String,
+        timeout: Duration = .seconds(5),
+        _ condition: () -> Bool
+    ) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !condition() {
+            guard clock.now < deadline else {
+                XCTFail("Timed out waiting for \(description)")
+                throw YieldTimeout()
+            }
+            await Task.yield()
+        }
+    }
+
+    private struct YieldTimeout: Error {}
 
     private func waitForSearchIndexStatus(
         _ buffer: FrameBuffer,

@@ -115,18 +115,6 @@ final class OverlayKeyboardActionTests: XCTestCase {
         XCTAssertEqual(action, .focusSearch)
     }
 
-    func testSlashPassesThroughWhileTypingIntoSearch() {
-        let action = resolveOverlayKeyboardAction(
-            keyCode: UInt16(kVK_ANSI_Slash),
-            modifiers: [],
-            dismissShortcutKeyCode: Int(kVK_Escape),
-            dismissShortcutModifiers: 0,
-            state: .init(isSearching: true, isTextGrabActive: false, isEditingText: true)
-        )
-
-        XCTAssertEqual(action, .passthrough)
-    }
-
     func testSearchFocusShortcutsPreserveNativeEditingAndTabTraversal() {
         for editing in [false, true] {
             let state = OverlayKeyboardState(

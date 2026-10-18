@@ -13,6 +13,13 @@ final class DiagnosticsLogTests: XCTestCase {
         )
     }
 
+    func testHostedTestsNeverWriteTheUsersDiagnosticsLog() {
+        XCTAssertNotEqual(DiagnosticsLog.sharedDirectory, DiagnosticsLog.defaultDirectory)
+        XCTAssertTrue(
+            DiagnosticsLog.sharedDirectory.path.hasPrefix(FileManager.default.temporaryDirectory.path)
+        )
+    }
+
     func testShouldRotateOnlyAtOrAboveLimit() {
         XCTAssertFalse(DiagnosticsLogFormat.shouldRotate(fileSize: 0, maximumSize: 100))
         XCTAssertFalse(DiagnosticsLogFormat.shouldRotate(fileSize: 99, maximumSize: 100))

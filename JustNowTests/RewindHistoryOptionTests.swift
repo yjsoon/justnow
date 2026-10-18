@@ -20,32 +20,47 @@ final class RewindHistoryOptionTests: XCTestCase {
     /// covers it, so tiers must be strictly ascending with non-negative spacing,
     /// and the deepest tier must reach the full retained duration — otherwise
     /// retained frames would be silently pruned as "beyond all tiers".
+    /// Covers every recent-detail window, as the app passes the user's
+    /// configured window rather than the default.
     func testEveryOptionProducesWellFormedRetentionTiers() throws {
         for option in RewindHistoryOption.allCases {
-            let tiers = option.retentionPolicy.tiers
-            XCTAssertFalse(tiers.isEmpty, "\(option) has no tiers")
-
-            for (previous, next) in zip(tiers, tiers.dropFirst()) {
-                XCTAssertLessThan(
-                    previous.maxAge,
-                    next.maxAge,
-                    "\(option) tiers must be strictly ascending"
+            for window in RecentTimelineWindow.allCases {
+                try assertWellFormedTiers(
+                    RetentionPolicy.rewindHistory(option, fullDetailWindow: window.rawValue).tiers,
+                    option: option,
+                    label: "\(option)/\(window)"
                 )
             }
-            for (index, tier) in tiers.enumerated() {
-                if index == 0 {
-                    XCTAssertEqual(tier.minimumSpacing, 0, "\(option) must keep full detail")
-                } else {
-                    XCTAssertGreaterThan(tier.minimumSpacing, 0, "\(option) has non-positive falloff spacing")
-                }
-            }
+        }
+    }
 
-            let deepest = try XCTUnwrap(tiers.last)
-            XCTAssertEqual(
-                deepest.maxAge,
-                option.retainedDuration,
-                "\(option) deepest tier must cover the retained duration"
+    private func assertWellFormedTiers(
+        _ tiers: [RetentionTier],
+        option: RewindHistoryOption,
+        label: String
+    ) throws {
+        XCTAssertFalse(tiers.isEmpty, "\(label) has no tiers")
+
+        for (previous, next) in zip(tiers, tiers.dropFirst()) {
+            XCTAssertLessThan(
+                previous.maxAge,
+                next.maxAge,
+                "\(label) tiers must be strictly ascending"
             )
         }
+        for (index, tier) in tiers.enumerated() {
+            if index == 0 {
+                XCTAssertEqual(tier.minimumSpacing, 0, "\(label) must keep full detail")
+            } else {
+                XCTAssertGreaterThan(tier.minimumSpacing, 0, "\(label) has non-positive falloff spacing")
+            }
+        }
+
+        let deepest = try XCTUnwrap(tiers.last)
+        XCTAssertEqual(
+            deepest.maxAge,
+            option.retainedDuration,
+            "\(label) deepest tier must cover the retained duration"
+        )
     }
 }

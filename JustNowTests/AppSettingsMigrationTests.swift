@@ -4,7 +4,6 @@ import XCTest
 final class AppSettingsMigrationTests: XCTestCase {
     func testReducedDiskWritesDefaultsOnWhenPreferenceIsMissing() {
         let defaults = makeDefaults()
-        defaults.set(true, forKey: "hiddenHybridRAMHistory")
 
         XCTAssertEqual(
             HistoryStorageMode.launchDefault(defaults: defaults),
