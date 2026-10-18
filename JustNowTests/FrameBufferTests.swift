@@ -473,7 +473,7 @@ final class FrameBufferTests: XCTestCase {
 
         let retainedEntries = buffer.getTimelineEntries()
         XCTAssertEqual(retainedEntries.count, 2)
-        XCTAssertTrue(buffer.containsTimelineSpan(id: firstEntry.span.id))
+        XCTAssertTrue(retainedEntries.contains { $0.span.id == firstEntry.span.id })
         XCTAssertTrue(buffer.containsFrame(id: firstEntry.frame.id))
         XCTAssertEqual(buffer.getFrames().map(\.id), retainedEntries.map(\.frame.id))
         _ = try await buffer.getFullImage(for: firstEntry.frame)
@@ -2056,7 +2056,7 @@ final class FrameBufferTests: XCTestCase {
         XCTAssertEqual(buffer.frameCount, 2)
     }
 
-    func testGetFilteredFramesFiltersByDisplayAndIncludesLegacyOnRequest() async throws {
+    func testFilteredTimelineFiltersByDisplayAndIncludesLegacyOnRequest() async throws {
         let buffer = try await makeBuffer()
         let base = Date().addingTimeInterval(-10)
         let displayA = DisplayInfo(id: UUID(), displayID: 1, name: "A")
@@ -2074,15 +2074,17 @@ final class FrameBufferTests: XCTestCase {
             display: nil
         )
 
-        let displayAOnly = buffer.getFilteredFrames(displayID: displayA.id)
-        XCTAssertEqual(displayAOnly.map(\.displayID), [displayA.id])
+        let entries = buffer.getTimelineEntries()
+        let displayAOnly = buffer.filteredTimelineEntries(from: entries, displayID: displayA.id)
+        XCTAssertEqual(displayAOnly.map(\.span.displayID), [displayA.id])
 
-        let displayAWithLegacy = buffer.getFilteredFrames(
+        let displayAWithLegacy = buffer.filteredTimelineEntries(
+            from: entries,
             displayID: displayA.id,
             includeLegacyFrames: true
         )
         XCTAssertEqual(displayAWithLegacy.count, 2)
-        XCTAssertEqual(displayAWithLegacy.compactMap(\.displayID), [displayA.id])
+        XCTAssertEqual(displayAWithLegacy.compactMap(\.span.displayID), [displayA.id])
     }
 
     func testFilteredTimelineUsesObservedThroughForAgeAndPreservesSpanIdentity() async throws {
@@ -2120,7 +2122,8 @@ final class FrameBufferTests: XCTestCase {
             frameRepository: repository
         )
 
-        let entries = buffer.getFilteredTimelineEntries(
+        let entries = buffer.filteredTimelineEntries(
+            from: buffer.getTimelineEntries(),
             recentWindow: 30,
             maximumAge: 60,
             now: now
@@ -2128,10 +2131,10 @@ final class FrameBufferTests: XCTestCase {
 
         XCTAssertEqual(entries.map(\.span.id), [recentSpan.span.id])
         XCTAssertEqual(entries.only?.frame.id, physical.id)
-        XCTAssertEqual(buffer.getFilteredFrames(maximumAge: 60, now: now).only?.timestamp, recentSpan.span.observedThroughAt)
+        XCTAssertEqual(entries.only.map { timelineSpanBounds(for: $0).end }, recentSpan.span.observedThroughAt)
     }
 
-    func testRollbackSpanUsesNormalisedEndForFilteringAndSearchCutoff() async throws {
+    func testRollbackSpanUsesNormalisedEndForFiltering() async throws {
         let now = Date()
         let physical = StoredFrame(
             id: UUID(),
@@ -2167,68 +2170,8 @@ final class FrameBufferTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            buffer.getFilteredTimelineEntries(maximumAge: 60, now: now).map(\.span.id),
+            buffer.filteredTimelineEntries(from: buffer.getTimelineEntries(), maximumAge: 60, now: now).map(\.span.id),
             [rollback.span.id]
-        )
-        XCTAssertEqual(
-            buffer.timelineEntries(
-                matchingPhysicalFrameIDs: [physical.id],
-                since: now.addingTimeInterval(-60)
-            ).map(\.span.id),
-            [rollback.span.id]
-        )
-    }
-
-    func testTimelineSearchMapsOnePhysicalCacheIDToEveryQualifyingLogicalSpan() async throws {
-        let now = Date()
-        let physical = StoredFrame(
-            id: UUID(),
-            timestamp: now.addingTimeInterval(-120),
-            hash: 10,
-            displayID: nil,
-            displayName: nil
-        )
-        let sessionID = UUID()
-        func entry(startOffset: TimeInterval, endOffset: TimeInterval) -> TimelineEntry {
-            TimelineEntry(
-                span: TimelineSpan(
-                    id: UUID(),
-                    frameID: physical.id,
-                    sessionID: sessionID,
-                    startedAt: now.addingTimeInterval(startOffset),
-                    observedThroughAt: now.addingTimeInterval(endOffset),
-                    observationCount: 2,
-                    displayID: nil,
-                    displayName: nil
-                ),
-                frame: physical
-            )
-        }
-        let old = entry(startOffset: -120, endOffset: -110)
-        let recent = entry(startOffset: -20, endOffset: -10)
-        let repository = FrameRepositoryProbe(
-            frames: [physical],
-            image: try makeStructuredImage(seed: 181),
-            exportedURL: directory.appendingPathComponent("unused.jpg"),
-            timeline: [old, recent]
-        )
-        let buffer = try await FrameBuffer(
-            retentionPolicy: .default24Hours,
-            storageDirectory: directory,
-            diagnosticsLog: nil,
-            frameRepository: repository
-        )
-
-        XCTAssertEqual(
-            buffer.timelineEntries(matchingPhysicalFrameIDs: [physical.id]).map(\.span.id),
-            [old.span.id, recent.span.id]
-        )
-        XCTAssertEqual(
-            buffer.timelineEntries(
-                matchingPhysicalFrameIDs: [physical.id],
-                since: now.addingTimeInterval(-60)
-            ).map(\.span.id),
-            [recent.span.id]
         )
     }
 
@@ -2272,7 +2215,7 @@ final class FrameBufferTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            buffer.getFilteredTimelineEntries(recentWindow: 60, now: now).map(\.span.id),
+            buffer.filteredTimelineEntries(from: buffer.getTimelineEntries(), recentWindow: 60, now: now).map(\.span.id),
             [entries[0].span.id, entries[2].span.id, entries[3].span.id]
         )
     }
@@ -2324,7 +2267,7 @@ final class FrameBufferTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            buffer.getFilteredTimelineEntries(recentWindow: 60, now: now).map(\.span.id),
+            buffer.filteredTimelineEntries(from: buffer.getTimelineEntries(), recentWindow: 60, now: now).map(\.span.id),
             [firstA.span.id, firstB.span.id, firstLegacy.span.id]
         )
     }
@@ -2343,7 +2286,6 @@ final class FrameBufferTests: XCTestCase {
         )
 
         XCTAssertEqual(buffer.knownDisplays().map(\.name), ["B", "A"])
-        XCTAssertFalse(buffer.hasLegacyFrames)
     }
 
     func testAllDiskMissingActivePayloadReplacementReconcilesProjectionAndOCR() async throws {
@@ -2430,7 +2372,6 @@ final class FrameBufferTests: XCTestCase {
             Set(canonicalEntries.map(\.span.id))
         )
         XCTAssertEqual(Set(buffer.getFrames().map(\.id)), Set(canonicalMetadata.map(\.id)))
-        XCTAssertFalse(buffer.containsTimelineSpan(id: oldEntry.span.id))
         XCTAssertFalse(buffer.containsFrame(id: oldEntry.frame.id))
         let oldTextCached = await buffer.textCache.hasCachedText(for: oldEntry.frame.id)
         XCTAssertFalse(oldTextCached, "Committed payload removal must evict the OCR row")
@@ -2625,7 +2566,6 @@ final class FrameBufferTests: XCTestCase {
         for frame in frames {
             XCTAssertTrue(buffer.containsFrame(id: frame.id))
         }
-        XCTAssertEqual(buffer.frames(withIDs: frames.map(\.id)).map(\.id), frames.map(\.id))
 
         let snapshot = buffer.captureInstrumentationSnapshot()
         XCTAssertEqual(snapshot.capturedFrames, 20)
@@ -3104,10 +3044,17 @@ private actor FrameRepositoryProbe: FrameRepository {
                 displayID: prior.span.displayID,
                 displayName: frame.displayName ?? prior.span.displayName
             )
-            spans[priorIndex] = TimelineEntry(span: extended, frame: prior.frame)
+            let extendedEntry = TimelineEntry(span: extended, frame: prior.frame)
+            spans[priorIndex] = extendedEntry
+            var effects = FrameRepositoryEffects.empty
+            effects.timelineUpserts = [extendedEntry]
+            effects.persistenceEvents = [
+                .spanCheckpoint(frameID: extended.frameID, metadataByteCount: 8)
+            ]
             return FrameRepositorySaveResult(
                 mutation: .extended(extended),
-                outcome: .spanCheckpoint(metadataByteCount: 8)
+                outcome: .spanCheckpoint(metadataByteCount: 8),
+                effects: effects
             )
         }
         frames.append(frame)
@@ -3127,7 +3074,51 @@ private actor FrameRepositoryProbe: FrameRepository {
         )
         spans.append(entry)
         jpegByFrameID[frame.id] = jpegData
-        return FrameRepositorySaveResult(mutation: .inserted(entry), outcome: saveOutcome)
+        return FrameRepositorySaveResult(
+            mutation: .inserted(entry),
+            outcome: saveOutcome,
+            effects: Self.insertionEffects(for: entry, outcome: saveOutcome, jpegData: jpegData)
+        )
+    }
+
+    /// Mirrors the effects production repositories emit for an accepted
+    /// insertion, so FrameBuffer exercises its real effects path.
+    private static func insertionEffects(
+        for entry: TimelineEntry,
+        outcome: FrameRepositorySaveOutcome,
+        jpegData: Data
+    ) -> FrameRepositoryEffects {
+        var effects = FrameRepositoryEffects.empty
+        effects.timelineUpserts = [entry]
+        switch outcome.disposition {
+        case .durableFrame:
+            effects.newlyDurableEntries = [entry]
+            effects.persistenceEvents = [
+                .durableAnchor(
+                    reason: .allDisk,
+                    wroteDurableJPEG: outcome.wroteDurableJPEG,
+                    jpegData: outcome.wroteDurableJPEG ? jpegData : nil,
+                    frameID: entry.frame.id,
+                    displayID: entry.span.displayID,
+                    metadataByteCount: outcome.metadataWriteByteCounts.reduce(0, +)
+                )
+            ]
+        case .volatileFrame:
+            effects.persistenceEvents = [.volatileAdmission]
+        case .duplicateFrame:
+            effects.persistenceEvents = [.exactDuplicate]
+        case .spanCheckpoint:
+            effects.persistenceEvents = [
+                .spanCheckpoint(
+                    frameID: entry.frame.id,
+                    metadataByteCount: outcome.metadataWriteByteCounts.reduce(0, +)
+                )
+            ]
+        case .pressureDrop:
+            effects.timelineUpserts = []
+            effects.persistenceEvents = [.pressureDrop]
+        }
+        return effects
     }
 
     func loadFullImage(id: UUID) async -> CGImage {

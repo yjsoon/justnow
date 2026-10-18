@@ -504,58 +504,6 @@ class FrameBuffer {
         frameLookup[id] != nil
     }
 
-    /// Physical payload IDs can be shared by more than one logical span. UI
-    /// snapshots therefore validate their span identity, not merely whether a
-    /// different span still references the same JPEG.
-    func containsTimelineSpan(id: UUID) -> Bool {
-        timelineEntries.contains { $0.span.id == id }
-    }
-
-    /// Return frames for the provided IDs in the same order as the IDs.
-    func frames(withIDs ids: [UUID]) -> [StoredFrame] {
-        guard !ids.isEmpty else { return [] }
-
-        var matchedFrames: [StoredFrame] = []
-        matchedFrames.reserveCapacity(ids.count)
-
-        for id in ids {
-            guard let frame = frameLookup[id] else { continue }
-            matchedFrames.append(frame)
-        }
-
-        return matchedFrames
-    }
-
-    /// Return every logical span whose physical JPEG is one of `ids`.
-    ///
-    /// OCR remains keyed by the physical frame ID, while browsing is keyed by
-    /// the logical span ID. A physical payload may therefore produce more than
-    /// one result here. Results retain the durable timeline order rather than
-    /// the cache's relevance/recency ordering.
-    func timelineEntries(
-        matchingPhysicalFrameIDs ids: [UUID],
-        since cutoff: Date? = nil,
-        displayID: UUID? = nil,
-        includeLegacyFrames: Bool = false
-    ) -> [TimelineEntry] {
-        guard !ids.isEmpty else { return [] }
-        let matchedIDs = Set(ids)
-
-        return timelineEntries.filter { entry in
-            guard matchedIDs.contains(entry.frame.id) else { return false }
-            if let cutoff, timelineSpanBounds(for: entry).end < cutoff {
-                return false
-            }
-            if let displayID {
-                if let entryDisplayID = entry.span.displayID {
-                    return entryDisplayID == displayID
-                }
-                return includeLegacyFrames
-            }
-            return true
-        }
-    }
-
     func cacheOCRTextIfCurrent(_ text: String, for frame: StoredFrame) async -> Bool {
         guard let currentTimestamp = currentOCRCacheTimestamp(for: frame) else { return false }
         await textCache.setText(text, for: frame.id, timestamp: currentTimestamp)
@@ -586,28 +534,9 @@ class FrameBuffer {
         return shouldContinueOCR(for: frame)
     }
 
-    /// Get logical timeline spans with near-duplicates removed for smoother
+    /// Logical timeline spans with near-duplicates removed for smoother
     /// browsing. Recency and maximum age use the span's latest proved
     /// observation, not the physical JPEG's original capture date.
-    func getFilteredTimelineEntries(
-        hashThreshold: Int = 3,
-        recentWindow: TimeInterval = 300,
-        maximumAge: TimeInterval? = nil,
-        displayID: UUID? = nil,
-        includeLegacyFrames: Bool = false,
-        now: Date = Date()
-    ) -> [TimelineEntry] {
-        filteredTimelineEntries(
-            from: timelineEntries,
-            hashThreshold: hashThreshold,
-            recentWindow: recentWindow,
-            maximumAge: maximumAge,
-            displayID: displayID,
-            includeLegacyFrames: includeLegacyFrames,
-            now: now
-        )
-    }
-
     func filteredTimelineEntries(
         from sourceEntries: [TimelineEntry],
         hashThreshold: Int = 3,
@@ -676,27 +605,6 @@ class FrameBuffer {
         return filtered
     }
 
-    /// Compatibility projection for callers that still consume physical
-    /// frames. New timeline UI should use `getFilteredTimelineEntries` so span
-    /// identity and coverage are not lost.
-    func getFilteredFrames(
-        hashThreshold: Int = 3,
-        recentWindow: TimeInterval = 300,
-        maximumAge: TimeInterval? = nil,
-        displayID: UUID? = nil,
-        includeLegacyFrames: Bool = false,
-        now: Date = Date()
-    ) -> [StoredFrame] {
-        getFilteredTimelineEntries(
-            hashThreshold: hashThreshold,
-            recentWindow: recentWindow,
-            maximumAge: maximumAge,
-            displayID: displayID,
-            includeLegacyFrames: includeLegacyFrames,
-            now: now
-        ).map(Self.browsingFrame(from:))
-    }
-
     /// Displays that have at least one frame in the buffer. Ordered by most
     /// recent capture first so the overlay can surface active displays before
     /// ones that have gone quiet.
@@ -710,10 +618,6 @@ class FrameBuffer {
             }
         }
         return ordered
-    }
-
-    var hasLegacyFrames: Bool {
-        frames.contains { $0.displayID == nil }
     }
 
     var frameCount: Int {
@@ -1565,41 +1469,11 @@ class FrameBuffer {
                 guard repositoryGeneration == self.repositoryEffectGeneration else {
                     return SyncIngestResult.retryAfterClear
                 }
-                if saveResult.effects.persistenceEvents.isEmpty {
-                    // Compatibility for injected repositories which still return
-                    // the pre-effects shape. Production repositories emit an
-                    // explicit event for every accepted operation.
-                    self.captureInstrumentation.recordRepositorySaveOutcome(
-                        saveResult.outcome,
-                        jpegData: jpegData,
-                        displayID: displayID
-                    )
-                    await self.applyRepositoryInvalidation(saveResult.invalidation)
-                    switch saveResult.mutation {
-                    case .none:
-                        break
-                    case .inserted(let entry):
-                        self.recordTimelineEntry(entry)
-                        if saveResult.outcome.disposition == .durableFrame,
-                           self.durablePhysicalFrameIDs.insert(entry.frame.id).inserted {
-                            self.enqueueFrameForBackgroundOCR(entry.frame)
-                        }
-                    case .extended(let span):
-                        self.recordExtendedSpan(span)
-                        if self.durablePhysicalFrameIDs.contains(span.frameID) {
-                            await self.textCache.updateTimestamp(
-                                for: span.frameID,
-                                timestamp: max(span.startedAt, span.observedThroughAt)
-                            )
-                        }
-                    }
-                } else {
-                    await self.applyRepositoryEffects(
-                        saveResult.effects,
-                        acceptedJPEGData: admissionMode == .hybridEveryCapture ? jpegData : nil,
-                        acceptedDisplayID: displayID
-                    )
-                }
+                await self.applyRepositoryEffects(
+                    saveResult.effects,
+                    acceptedJPEGData: admissionMode == .hybridEveryCapture ? jpegData : nil,
+                    acceptedDisplayID: displayID
+                )
                 self.recordAcceptedObservation(
                     hash: frame.hash,
                     timestamp: frame.timestamp,
@@ -1692,24 +1566,6 @@ class FrameBuffer {
         guard timeSinceLast < duplicatePolicy.minimumSpacing else { return true }
         let distance = PerceptualHash.hammingDistance(hash, candidate.hash)
         return distance > duplicatePolicy.hashThreshold
-    }
-
-    private func recordTimelineEntry(_ entry: TimelineEntry) {
-        if timelineOrderBySpanID[entry.span.id] == nil {
-            timelineOrderBySpanID[entry.span.id] = nextTimelineOrder
-            nextTimelineOrder += 1
-        }
-        timelineEntries.append(entry)
-        sortTimelineEntries()
-        rebuildBrowsingProjection()
-    }
-
-    private func recordExtendedSpan(_ span: TimelineSpan) {
-        guard let index = timelineEntries.firstIndex(where: { $0.span.id == span.id }) else {
-            return
-        }
-        timelineEntries[index] = TimelineEntry(span: span, frame: timelineEntries[index].frame)
-        rebuildBrowsingProjection()
     }
 
     /// Applies absolute, source-neutral repository effects. A compound save

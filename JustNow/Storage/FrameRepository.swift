@@ -254,39 +254,6 @@ nonisolated struct FrameRepositorySaveResult: Sendable, Equatable {
     let effects: FrameRepositoryEffects
 
     var invalidation: FrameRepositoryInvalidation { effects.invalidation }
-
-    init(
-        mutation: FrameRepositoryMutation,
-        outcome: FrameRepositorySaveOutcome,
-        invalidation: FrameRepositoryInvalidation = .none,
-        effects: FrameRepositoryEffects? = nil
-    ) {
-        self.mutation = mutation
-        self.outcome = outcome
-        if let effects {
-            self.effects = effects
-        } else {
-            let upserts: [TimelineEntry]
-            let newlyDurable: [TimelineEntry]
-            switch mutation {
-            case .none:
-                upserts = []
-                newlyDurable = []
-            case .inserted(let entry):
-                upserts = [entry]
-                newlyDurable = outcome.disposition == .durableFrame ? [entry] : []
-            case .extended:
-                upserts = []
-                newlyDurable = []
-            }
-            self.effects = FrameRepositoryEffects(
-                timelineUpserts: upserts,
-                invalidation: invalidation,
-                newlyDurableEntries: newlyDurable,
-                persistenceEvents: []
-            )
-        }
-    }
 }
 
 /// The durable metadata effect produced by one promotion/checkpoint call.
