@@ -59,10 +59,6 @@ final class CapturePolicyController {
     private let ocrIndexBatteryConcurrentJobs: Int = 2
     private let ocrIndexIdleConcurrentJobs: Int = 2
     private let ocrIndexThermalConcurrentJobs: Int = 1
-    private let ocrIndexBaseImageMaxPixelSize: Int = 1_200
-    private let ocrIndexBatteryImageMaxPixelSize: Int = 1_000
-    private let ocrIndexIdleImageMaxPixelSize: Int = 900
-    private let ocrIndexThermalImageMaxPixelSize: Int = 800
     private let idleMultiplier: Double = 4
 
     private(set) var lastAppliedPolicy: CapturePolicy?
@@ -135,7 +131,6 @@ final class CapturePolicyController {
         var ocrIndexQueueDepth = ocrIndexBaseQueueDepth
         var ocrIndexMaxAge = ocrIndexMaxFrameAge
         var ocrIndexConcurrentJobs = ocrIndexBaseConcurrentJobs
-        var ocrIndexImageMaxPixelSize = ocrIndexBaseImageMaxPixelSize
 
         if onBattery || lowPowerMode {
             scale = 1
@@ -147,7 +142,6 @@ final class CapturePolicyController {
             ocrIndexQueueDepth = ocrIndexBatteryQueueDepth
             ocrIndexMaxAge = ocrIndexBatteryMaxFrameAge
             ocrIndexConcurrentJobs = ocrIndexBatteryConcurrentJobs
-            ocrIndexImageMaxPixelSize = ocrIndexBatteryImageMaxPixelSize
         }
 
         if let batteryCharge {
@@ -167,7 +161,6 @@ final class CapturePolicyController {
                 ocrIndexQueueDepth = min(ocrIndexQueueDepth, ocrIndexBatteryQueueDepth)
                 ocrIndexMaxAge = min(ocrIndexMaxAge, ocrIndexBatteryMaxFrameAge)
                 ocrIndexConcurrentJobs = min(ocrIndexConcurrentJobs, ocrIndexBatteryConcurrentJobs)
-                ocrIndexImageMaxPixelSize = min(ocrIndexImageMaxPixelSize, ocrIndexBatteryImageMaxPixelSize)
             }
         }
 
@@ -180,7 +173,6 @@ final class CapturePolicyController {
             ocrIndexInterval = max(ocrIndexInterval, ocrIndexIdleInterval)
             ocrIndexQueueDepth = min(ocrIndexQueueDepth, ocrIndexIdleQueueDepth)
             ocrIndexConcurrentJobs = min(ocrIndexConcurrentJobs, ocrIndexIdleConcurrentJobs)
-            ocrIndexImageMaxPixelSize = min(ocrIndexImageMaxPixelSize, ocrIndexIdleImageMaxPixelSize)
         }
 
         if isThermalConstrained {
@@ -197,7 +189,6 @@ final class CapturePolicyController {
                 ocrIndexQueueDepth = min(ocrIndexQueueDepth, ocrIndexThermalQueueDepth)
                 ocrIndexMaxAge = min(ocrIndexMaxAge, ocrIndexBatteryMaxFrameAge)
                 ocrIndexConcurrentJobs = min(ocrIndexConcurrentJobs, ocrIndexThermalConcurrentJobs)
-                ocrIndexImageMaxPixelSize = min(ocrIndexImageMaxPixelSize, ocrIndexThermalImageMaxPixelSize)
             }
         }
 
@@ -208,8 +199,7 @@ final class CapturePolicyController {
             minimumInterval: ocrIndexInterval,
             maxQueueDepth: ocrIndexQueueDepth,
             maxFrameAge: ocrIndexMaxAge,
-            concurrentJobs: ocrIndexConcurrentJobs,
-            searchImageMaxPixelSize: ocrIndexImageMaxPixelSize
+            concurrentJobs: ocrIndexConcurrentJobs
         )
 
         let batteryCanRelaxCadence = onBattery || lowPowerMode

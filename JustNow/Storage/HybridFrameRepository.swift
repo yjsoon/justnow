@@ -21,13 +21,6 @@ nonisolated enum FramePayloadResolver {
         guard let image = ImageEncoder.cgImage(from: jpegData) else { return nil }
         return ImageEncoder.generateThumbnail(from: image)
     }
-
-    static func searchImage(from jpegData: Data, maxPixelSize: Int) throws -> CGImage {
-        guard let image = ImageEncoder.cgImage(from: jpegData, maxPixelSize: maxPixelSize) else {
-            throw FrameStoreError.imageDecodingFailed
-        }
-        return image
-    }
 }
 
 private actor HybridPayloadLease: FrameRepositoryPayloadLease {
@@ -495,16 +488,6 @@ actor HybridFrameRepository: FrameRepository {
         }
         let image = await disk.loadThumbnail(id: id)
         if image != nil { durablePayloadResolutions += 1 }
-        return image
-    }
-
-    func loadSearchIndexImage(id: UUID, maxPixelSize: Int) async throws -> CGImage {
-        if let data = await ring.data(frameID: id) {
-            volatilePayloadResolutions += 1
-            return try FramePayloadResolver.searchImage(from: data, maxPixelSize: maxPixelSize)
-        }
-        let image = try await disk.loadSearchIndexImage(id: id, maxPixelSize: maxPixelSize)
-        durablePayloadResolutions += 1
         return image
     }
 

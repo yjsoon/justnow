@@ -36,19 +36,18 @@
 
 7. **First-Run OCR Speed-up** (`FrameBuffer.swift`, `FrameStore.swift`, `ThumbnailGenerator.swift`, `AppDelegate.swift`)
    - Background OCR now processes multiple frames per pass (`concurrentJobs`) instead of one-at-a-time
-   - Search indexing decodes an OCR-specific image directly from disk at 800–1200px depending on device state
-   - Full-resolution JPEG decode is no longer required for search indexing
-   - Concurrency and decode size scale down on battery, idle, and thermal pressure
+   - Search indexing decodes each frame at its captured resolution. An earlier 800–1200px downscaled decode was removed because fast OCR could not read normal-size UI text at that size
+   - Concurrency scales down on battery, idle, and thermal pressure
 
 ## Current Behavior
 
 ### How Indexing Works
 - **When**: Continuously in background via `Task(priority: .utility)`
 - **Where**: `runBackgroundOCRIndexingLoop()` in `FrameBuffer.swift`
-- **What**: Processes small batches of frames concurrently with configurable interval and OCR image size
+- **What**: Processes small batches of frames concurrently with a configurable interval
 - **Restart**: Self-restarting — when queue empties, loop restarts if new frames arrive
 - **Pause conditions**: Only stops when battery is critically low OR thermal state is `.critical`
-- **Throttle conditions**: Slows down and reduces OCR parallelism / decode size on battery, idle, or thermal `.serious`
+- **Throttle conditions**: Slows down and reduces OCR parallelism on battery, idle, or thermal `.serious`
 
 ### Search Flow
 1. User types query, presses Return
@@ -60,20 +59,20 @@
 
 ### First-Run Experience
 - On first launch with existing history: indexes ALL retained frames
-- Initial indexing is materially faster than before due to batched OCR and downscaled decode
+- Initial indexing is faster than before due to batched OCR
 - Once caught up: stays near 100% indexed with minimal CPU
 
 ## Known Limitations / User Concerns
 
 1. **Thumbnails are 200px** — too small for reliable OCR (confirmed in `ThumbnailGenerator.swift`)
 2. **Initial catch-up still depends on backlog size** — faster, but very large histories will still take time
-3. **No persistent OCR-specific image cache yet** — current approach is on-the-fly reduced decode from the saved JPEG
+3. **1x captures read small text poorly** — idle, low-battery and thermal policies capture at scale 1, where fast OCR misses some 11–12pt text
 
 ## What Was Chosen
 
 - **Parallel OCR**: implemented with background batches of up to 3 frames in normal conditions
-- **Separate OCR cache at 800–1200px**: not implemented as a stored cache
-- **On-the-fly downscaling**: implemented more efficiently as reduced-size decode from disk
+- **Separate OCR cache at 800–1200px**: not implemented
+- **Downscaled decode for OCR**: tried and removed; fast OCR needs about two pixels per point
 - **Use existing thumbnails**: rejected, still too small (200px max)
 
 ## Files Modified (Summary)
@@ -82,8 +81,6 @@
 |------|-------------|
 | `JustNow/Capture/FrameBuffer.swift` | Unbounded OCR queue, alternating dequeue, `SearchIndexStatus`, full-history indexing, batched background OCR |
 | `JustNow/AppDelegate.swift` | Ungated search, always-enable OCR indexing, OCR batch size / image size policy |
-| `JustNow/Storage/FrameStore.swift` | Reduced-size image decode path for search indexing |
-| `JustNow/Storage/ThumbnailGenerator.swift` | ImageIO helper for OCR-friendly downscaled decode |
 | `JustNow/UI/OverlayView.swift` | Index-only `performSearch()`, chronological result ordering, index status UI |
 | `JustNow/UI/OverlayWindowController.swift` | Arrow key handling (always navigate), simplified `showOverlay()` |
 | `JustNow/Storage/TextCache.swift` | Recency-first search ordering |

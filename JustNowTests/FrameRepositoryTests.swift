@@ -66,8 +66,6 @@ final class FrameRepositoryTests: XCTestCase {
         XCTAssertEqual(fullImage.width, image.width)
         XCTAssertEqual(fullImage.height, image.height)
 
-        let searchImage = try await repository.loadSearchIndexImage(id: frame.id, maxPixelSize: 8)
-        XCTAssertLessThanOrEqual(max(searchImage.width, searchImage.height), 8)
         let thumbnail = await repository.loadThumbnail(id: frame.id)
         XCTAssertEqual(thumbnail?.width, image.width)
         XCTAssertEqual(thumbnail?.height, image.height)

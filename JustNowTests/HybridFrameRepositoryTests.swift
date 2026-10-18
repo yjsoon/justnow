@@ -298,17 +298,15 @@ final class HybridFrameRepositoryTests: XCTestCase {
 
         let full = try await source.loadFullImage(id: frame.id)
         let thumbnail = await source.loadThumbnail(id: frame.id)
-        let search = try await source.loadSearchIndexImage(id: frame.id, maxPixelSize: 12)
         let exported = try await source.exportFrame(id: frame.id, timestamp: timestamp)
 
         XCTAssertEqual(full.width, image.width)
         XCTAssertEqual(thumbnail?.width, image.width)
-        XCTAssertLessThanOrEqual(max(search.width, search.height), 12)
         XCTAssertEqual(try Data(contentsOf: exported), jpeg)
         let statistics = await repository.storageStatistics()
         let resolutionStatistics = await source.payloadResolutionStatistics()
         XCTAssertGreaterThan(statistics.durableJPEGPayloadBytes, 0)
-        XCTAssertEqual(resolutionStatistics.volatilePayloadResolutions, 4)
+        XCTAssertEqual(resolutionStatistics.volatilePayloadResolutions, 3)
         XCTAssertEqual(resolutionStatistics.durablePayloadResolutions, 0)
     }
 
@@ -1309,10 +1307,6 @@ actor HybridDurableRepositoryProbe: HybridDurableRepository {
 
     func loadThumbnail(id: UUID) async -> CGImage? {
         await base.loadThumbnail(id: id)
-    }
-
-    func loadSearchIndexImage(id: UUID, maxPixelSize: Int) async throws -> CGImage {
-        try await base.loadSearchIndexImage(id: id, maxPixelSize: maxPixelSize)
     }
 
     func exportFrame(id: UUID, timestamp: Date) async throws -> URL {
