@@ -227,7 +227,10 @@ final class FrameStoreTests: XCTestCase {
                 makeImage(), timestamp: now, hash: 1, displayID: nil, displayName: nil
             )
             XCTFail("Expected database write failure")
-        } catch FrameStoreError.database {
+        } catch FrameStoreError.database(let message) {
+            // Only the post-write span insert may fail; an earlier read
+            // failure would skip the rollback this test is about.
+            XCTAssertTrue(message.contains("synthetic span insert failure"), message)
         }
 
         XCTAssertEqual(try sqliteInt(databaseURL: databaseURL, sql: "SELECT COUNT(*) FROM frames;"), 0)
