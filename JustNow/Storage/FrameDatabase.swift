@@ -565,11 +565,6 @@ nonisolated final class FrameDatabase: @unchecked Sendable {
         }
     }
 
-    func insert(_ metadata: FrameMetadata) throws {
-        let session = try activeSession() ?? beginCaptureSession(at: metadata.timestamp)
-        _ = try insertCapture(metadata, spanID: metadata.id, sessionID: session.id)
-    }
-
     func importLegacyFrames(
         _ frames: [FrameMetadata],
         fingerprint: String,

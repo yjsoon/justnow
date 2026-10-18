@@ -2625,7 +2625,8 @@ final class FrameBufferTests: XCTestCase {
         let frame: FrameMetadata
         do {
             let store = try FrameStore(directory: directory)
-            frame = try await store.saveFrame(
+            _ = try await store.beginCaptureSession(at: Date(timeIntervalSince1970: 7_100))
+            frame = try await store.recordTestCapture(
                 makeStructuredImage(seed: 71),
                 timestamp: Date(timeIntervalSince1970: 7_100),
                 hash: 71,

@@ -28,10 +28,8 @@ final class FrameRepositoryTests: XCTestCase {
     }
 
     func testDiskRepositoryPreservesStableIDAndExactJPEGThroughResolutionAndExport() async throws {
-        let instrumentation = CapturePersistenceInstrumentation()
         let store = try FrameStore(
             directory: directory,
-            instrumentation: instrumentation,
             screenshotsDirectory: exportDirectory
         )
         let repository = DiskFrameRepository(frameStore: store)
@@ -81,10 +79,6 @@ final class FrameRepositoryTests: XCTestCase {
         XCTAssertEqual(result.outcome.disposition, .durableFrame)
         XCTAssertTrue(result.outcome.wroteDurableJPEG)
         XCTAssertEqual(result.outcome.metadataWriteByteCounts.count, 1)
-        let snapshot = instrumentation.currentSnapshot()
-        XCTAssertEqual(snapshot.encodedFrames, 0, "The repository must not claim an encode it did not perform")
-        XCTAssertEqual(snapshot.persistedFrames, 0, "FrameBuffer owns repository-outcome metrics")
-        XCTAssertEqual(snapshot.logicalDurableJPEGEventBytes, 0)
     }
 
     func testDiskRepositoryMemoryPressureIsANoOpAndPreservesDurableHistory() async throws {
@@ -161,27 +155,6 @@ final class FrameRepositoryTests: XCTestCase {
             frame.timestamp.timeIntervalSince1970,
             accuracy: 0.000_001
         )
-    }
-
-    func testDirectFrameStoreSaveStillRecordsItsOwnEncodingAndPersistenceMetrics() async throws {
-        let instrumentation = CapturePersistenceInstrumentation()
-        let store = try FrameStore(directory: directory, instrumentation: instrumentation)
-        let image = try makeImage(width: 12, height: 8)
-
-        let metadata = try await store.saveFrame(
-            image,
-            timestamp: Date(),
-            hash: 7,
-            displayID: nil,
-            displayName: nil
-        )
-
-        let snapshot = instrumentation.currentSnapshot()
-        XCTAssertEqual(snapshot.encodedFrames, 1)
-        XCTAssertEqual(snapshot.persistedFrames, 1)
-        XCTAssertEqual(snapshot.logicalDurableJPEGEventBytes, metadata.fileSize)
-        XCTAssertEqual(snapshot.metadataTransactions, 1)
-        XCTAssertEqual(snapshot.durableRepositorySaves, 0)
     }
 
     func testPromotionPreservesIdentityExactBytesAndAbsoluteSpanMetadata() async throws {

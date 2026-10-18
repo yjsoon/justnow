@@ -285,10 +285,7 @@ class FrameBuffer {
         if let frameRepository {
             resolvedFrameRepository = frameRepository
         } else {
-            let frameStore = try FrameStore(
-                directory: storageDirectory,
-                instrumentation: instrumentation
-            )
+            let frameStore = try FrameStore(directory: storageDirectory)
             switch resolvedHistoryStorageMode {
             case .allDisk:
                 resolvedFrameRepository = DiskFrameRepository(frameStore: frameStore)
