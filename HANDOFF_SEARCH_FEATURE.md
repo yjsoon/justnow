@@ -66,7 +66,7 @@
 
 1. **Thumbnails are 200px** — too small for reliable OCR (confirmed in `ThumbnailGenerator.swift`)
 2. **Initial catch-up still depends on backlog size** — faster, but very large histories will still take time
-3. **1x captures read small text poorly** — idle, low-battery and thermal policies capture at scale 1, where fast OCR misses some 11–12pt text
+3. **1x captures read small text poorly** — on battery or in Low Power Mode (when "Reduce power use automatically" is on, the default), idle, and thermal pressure, capture runs at scale 1, where fast OCR misses some 11–12pt text
 
 ## What Was Chosen
 
@@ -80,7 +80,7 @@
 | File | Key Changes |
 |------|-------------|
 | `JustNow/Capture/FrameBuffer.swift` | Unbounded OCR queue, alternating dequeue, `SearchIndexStatus`, full-history indexing, batched background OCR |
-| `JustNow/AppDelegate.swift` | Ungated search, always-enable OCR indexing, OCR batch size / image size policy |
+| `JustNow/AppDelegate.swift` | Ungated search, always-enable OCR indexing, OCR batch size policy |
 | `JustNow/UI/OverlayView.swift` | Index-only `performSearch()`, chronological result ordering, index status UI |
 | `JustNow/UI/OverlayWindowController.swift` | Arrow key handling (always navigate), simplified `showOverlay()` |
 | `JustNow/Storage/TextCache.swift` | Recency-first search ordering |
@@ -92,13 +92,12 @@
 - ✅ Full retained history indexed
 - ✅ Results show newest match first
 - ✅ Arrow keys navigate results
-- ✅ First-run indexing now uses concurrent reduced-size OCR
+- ✅ First-run indexing now uses concurrent OCR
 - ⚠️ Very large backlogs may still take time to catch up
 - ⚠️ No precise before/after benchmark has been captured yet
 
 ## Next Steps for Incoming Agent
 
 1. Measure actual catch-up throughput in a large real-world history and compare against the old serial path
-2. Tune `concurrentJobs`, `minimumInterval`, and `searchImageMaxPixelSize` if CPU or battery impact is still too high
-3. Consider a dedicated persisted OCR image cache only if reduced-size decode from disk is still a measurable bottleneck
-4. Consider surfacing telemetry in a debug workflow if more search performance tuning is needed
+2. Tune `concurrentJobs` and `minimumInterval` if CPU, memory or battery impact is still too high
+3. Consider surfacing telemetry in a debug workflow if more search performance tuning is needed

@@ -4,6 +4,9 @@ All notable changes to JustNow will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- Find normal-size on-screen text in search. Background indexing now reads each frame at its captured resolution instead of a downscaled copy that fast text recognition could not read. Frames already indexed keep their existing text.
+
 ## [1.5.6] - 2026-10-11
 
 ### Fixed

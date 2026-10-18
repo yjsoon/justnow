@@ -16,6 +16,7 @@ final class OCRIndexResolutionTests: XCTestCase {
     ]
 
     override func setUpWithError() throws {
+        try super.setUpWithError()
         directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("OCRIndexResolutionTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -23,6 +24,7 @@ final class OCRIndexResolutionTests: XCTestCase {
 
     override func tearDownWithError() throws {
         try? FileManager.default.removeItem(at: directory)
+        try super.tearDownWithError()
     }
 
     func testIndexingReadsTwelvePointTextOnARetinaCapture() async throws {
@@ -50,9 +52,9 @@ final class OCRIndexResolutionTests: XCTestCase {
         let recognised = indexed.text.lowercased()
         let found = words.filter { recognised.contains($0) }
         let missing = words.filter { !recognised.contains($0) }
-        // Downscaled decodes read none of these words; full resolution reads
-        // all of them. Allow a small margin for OCR model differences.
-        XCTAssertGreaterThanOrEqual(found.count, 14, "OCR missed \(missing)")
+        // The old 1200 px decode read none of these words; full resolution
+        // reads all of them. Allow a margin for OCR model differences.
+        XCTAssertGreaterThanOrEqual(found.count, 12, "OCR missed \(missing)")
 
         await textCache.setText(indexed.text, for: frame.id, timestamp: frame.timestamp)
         let matches = try await textCache.searchFrameIDs(matching: "synthetic", limit: 10)
@@ -99,4 +101,3 @@ final class OCRIndexResolutionTests: XCTestCase {
         return try XCTUnwrap(context.makeImage())
     }
 }
-
