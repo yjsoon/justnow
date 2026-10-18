@@ -152,32 +152,6 @@ actor CompressedFrameRing {
         return payload.entry
     }
 
-    func extend(
-        frameID: UUID,
-        observedAt: Date,
-        displayName: String?
-    ) -> TimelineSpan? {
-        guard var payload = payloads[frameID] else { return nil }
-        guard observedAt >= payload.entry.span.observedThroughAt else { return nil }
-        let span = TimelineSpan(
-            id: payload.entry.span.id,
-            frameID: payload.entry.span.frameID,
-            sessionID: payload.entry.span.sessionID,
-            startedAt: payload.entry.span.startedAt,
-            observedThroughAt: observedAt,
-            observationCount: payload.entry.span.observationCount + 1,
-            displayID: payload.entry.span.displayID,
-            displayName: displayName ?? payload.entry.span.displayName
-        )
-        payload.entry = TimelineEntry(span: span, frame: payload.entry.frame)
-        payloads[frameID] = payload
-        return span
-    }
-
-    func entry(frameID: UUID) -> TimelineEntry? {
-        payloads[frameID]?.entry
-    }
-
     func data(frameID: UUID) -> Data? {
         payloads[frameID]?.data
     }
@@ -328,14 +302,6 @@ actor CompressedFrameRing {
             leaseCounts.removeValue(forKey: id)
         }
         fifoFrameIDs = retainedIDs
-        return removed
-    }
-
-    private func removePayload(id: UUID) -> Payload? {
-        guard let removed = payloads.removeValue(forKey: id) else { return nil }
-        fifoFrameIDs.removeAll { $0 == id }
-        totalBytes -= removed.data.count
-        leaseCounts.removeValue(forKey: id)
         return removed
     }
 

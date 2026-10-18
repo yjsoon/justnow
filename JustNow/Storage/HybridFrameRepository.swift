@@ -179,18 +179,6 @@ actor HybridFrameRepository: FrameRepository {
         try await disk.cleanupOrphans()
     }
 
-    func orderedFrames() async -> [StoredFrame] {
-        let entries = await orderedTimeline()
-        var framesByPhysicalID: [UUID: StoredFrame] = [:]
-        for entry in entries {
-            framesByPhysicalID[entry.frame.id] = entry.frame
-        }
-        return framesByPhysicalID.values.sorted { lhs, rhs in
-            if lhs.timestamp != rhs.timestamp { return lhs.timestamp < rhs.timestamp }
-            return lhs.id.uuidString < rhs.id.uuidString
-        }
-    }
-
     func orderedTimeline() async -> [TimelineEntry] {
         let durable = await disk.orderedTimeline()
         let resident = await ring.entries()

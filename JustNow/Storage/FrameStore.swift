@@ -214,15 +214,6 @@ actor FrameStore {
         }
     }
 
-    func endCaptureSession(reason: CaptureSessionEndReason) throws {
-        do {
-            guard let active = try database.activeSession() else { return }
-            try database.endCaptureSession(id: active.id, reason: reason)
-        } catch {
-            throw FrameStoreError.database(String(describing: error))
-        }
-    }
-
     func getTimelineEntries() -> [TimelineEntry] {
         do {
             return try database.allTimelineEntries()
@@ -806,10 +797,6 @@ actor FrameStore {
         } catch {
             throw FrameStoreError.database(String(describing: error))
         }
-    }
-
-    func pruneFrames(ids: Set<UUID>) throws {
-        _ = try pruneSpans(ids: ids)
     }
 
     func clear() throws {

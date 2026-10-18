@@ -1670,13 +1670,6 @@ private actor OverlayTimelineRepositoryProbe: FrameRepository {
 
     func cleanupOrphans() {}
 
-    func orderedFrames() -> [StoredFrame] {
-        var seen: Set<UUID> = []
-        return entries.compactMap { entry in
-            seen.insert(entry.frame.id).inserted ? entry.frame : nil
-        }
-    }
-
     func orderedTimeline() -> [TimelineEntry] {
         entries
     }

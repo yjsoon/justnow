@@ -52,8 +52,6 @@ final class FrameRepositoryTests: XCTestCase {
             .appendingPathComponent("frames", isDirectory: true)
             .appendingPathComponent("\(frame.id.uuidString).jpg")
         XCTAssertEqual(try Data(contentsOf: payloadURL), jpegData)
-        let orderedFrames = await repository.orderedFrames()
-        XCTAssertEqual(orderedFrames, [frame])
         let timeline = await repository.orderedTimeline()
         XCTAssertEqual(timeline.count, 1)
         XCTAssertEqual(timeline.first?.frame, frame)
@@ -155,7 +153,7 @@ final class FrameRepositoryTests: XCTestCase {
             .appendingPathComponent("frames", isDirectory: true)
             .appendingPathComponent("\(frame.id.uuidString).jpg")
         XCTAssertEqual(try Data(contentsOf: payloadURL), originalJPEG)
-        let orderedFrames = await repository.orderedFrames()
+        let orderedFrames = await repository.orderedTimeline().map(\.frame)
         XCTAssertEqual(orderedFrames.map(\.id), [frame.id])
         XCTAssertEqual(orderedFrames.map(\.hash), [frame.hash])
         XCTAssertEqual(

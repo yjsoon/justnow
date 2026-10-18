@@ -315,9 +315,6 @@ nonisolated enum DurablePersistenceOperation: Sendable, Equatable {
 nonisolated protocol FrameRepository: Sendable {
     func captureAdmissionMode() async -> FrameCaptureAdmissionMode
     func cleanupOrphans() async throws
-    /// Returns each physical capture once, ordered by its immutable capture
-    /// timestamp. Logical observation recency belongs to `orderedTimeline()`.
-    func orderedFrames() async -> [StoredFrame]
     func orderedTimeline() async -> [TimelineEntry]
     func beginCaptureSession(at startedAt: Date) async throws -> CaptureSession
     func endCaptureSession(
@@ -414,10 +411,6 @@ nonisolated final class DiskFrameRepository: HybridDurableRepository, Sendable {
 
     func cleanupOrphans() async throws {
         try await frameStore.cleanupOrphans()
-    }
-
-    func orderedFrames() async -> [StoredFrame] {
-        await frameStore.getAllMetadata().map(Self.storedFrame(from:))
     }
 
     func orderedTimeline() async -> [TimelineEntry] {
@@ -587,15 +580,5 @@ nonisolated final class DiskFrameRepository: HybridDurableRepository, Sendable {
 
     func exportEncodedPayload(_ data: Data, timestamp: Date) async throws -> URL {
         try await frameStore.saveEncodedFrameToScreenshotsLocation(data, timestamp: timestamp)
-    }
-
-    private static func storedFrame(from metadata: FrameMetadata) -> StoredFrame {
-        StoredFrame(
-            id: metadata.id,
-            timestamp: metadata.timestamp,
-            hash: metadata.hash,
-            displayID: metadata.displayID,
-            displayName: metadata.displayName
-        )
     }
 }

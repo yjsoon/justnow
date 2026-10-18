@@ -223,33 +223,6 @@ final class FrameStoreTests: XCTestCase {
         XCTAssertTrue(frameFiles.isEmpty)
     }
 
-    func testPruneRemovesMetadataAndFiles() async throws {
-        let store = try FrameStore(directory: directory)
-        let keep = try await store.saveFrame(
-            makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
-        )
-        let drop = try await store.saveFrame(
-            makeImage(), timestamp: Date(), hash: 2, displayID: nil, displayName: nil
-        )
-
-        try await store.pruneFrames(ids: [drop.id])
-
-        let remaining = await store.getAllMetadata()
-        XCTAssertEqual(remaining.map(\.id), [keep.id])
-
-        let framesDirectory = directory.appendingPathComponent("frames", isDirectory: true)
-        XCTAssertFalse(
-            FileManager.default.fileExists(
-                atPath: framesDirectory.appendingPathComponent(drop.filename).path
-            )
-        )
-        XCTAssertTrue(
-            FileManager.default.fileExists(
-                atPath: framesDirectory.appendingPathComponent(keep.filename).path
-            )
-        )
-    }
-
     func testSQLiteMetadataPersistsAcrossReinitialisation() async throws {
         let saved: FrameMetadata
         do {
@@ -1516,10 +1489,10 @@ final class FrameStoreTests: XCTestCase {
         let store = try FrameStore(directory: directory)
         let base = Date(timeIntervalSince1970: 40_000)
         let jpeg = try XCTUnwrap(ImageEncoder.jpegData(from: makeImage(), quality: 0.8))
-        _ = try await store.beginCaptureSession(at: base)
+        let firstSession = try await store.beginCaptureSession(at: base)
         let first = StoredFrame(id: UUID(), timestamp: base, hash: 1, displayID: nil, displayName: nil)
         _ = try await store.recordEncodedCapture(frame: first, jpegData: jpeg)
-        try await store.endCaptureSession(reason: .paused)
+        try await store.endCaptureSession(id: firstSession.id, reason: .paused)
         _ = try await store.beginCaptureSession(at: base.addingTimeInterval(10))
         let second = StoredFrame(
             id: UUID(), timestamp: base.addingTimeInterval(10), hash: 1,
@@ -1750,13 +1723,13 @@ final class FrameStoreTests: XCTestCase {
         let store = try FrameStore(directory: directory)
         let base = Date(timeIntervalSince1970: 60_000)
         let jpeg = try XCTUnwrap(ImageEncoder.jpegData(from: makeImage(), quality: 0.8))
-        _ = try await store.beginCaptureSession(at: base)
+        let firstSession = try await store.beginCaptureSession(at: base)
         let frame = StoredFrame(id: UUID(), timestamp: base, hash: 1, displayID: nil, displayName: nil)
         let firstMutation = try await store.recordEncodedCapture(frame: frame, jpegData: jpeg)
         guard case .inserted(let firstEntry) = firstMutation.mutation else {
             return XCTFail("Expected initial timeline entry")
         }
-        try await store.endCaptureSession(reason: .paused)
+        try await store.endCaptureSession(id: firstSession.id, reason: .paused)
 
         let secondSessionID = UUID()
         let secondSpanID = UUID()

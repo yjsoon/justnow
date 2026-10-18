@@ -2955,10 +2955,6 @@ private actor FrameRepositoryProbe: FrameRepository {
 
     func cleanupOrphans() {}
 
-    func orderedFrames() -> [StoredFrame] {
-        frames
-    }
-
     func orderedTimeline() -> [TimelineEntry] {
         spans
     }
