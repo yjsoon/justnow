@@ -14,7 +14,6 @@ struct OverlayKeyboardState: Equatable {
 
 enum OverlayKeyboardAction: Equatable {
     case passthrough
-    case consume
     case dismissOverlay
     case cancelTextGrab
     case clearSearch

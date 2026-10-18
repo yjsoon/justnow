@@ -92,7 +92,7 @@ final class DiagnosticsLog: @unchecked Sendable {
     }
 
     private let queue = DispatchQueue(label: "sg.tk.JustNow.diagnostics", qos: .utility)
-    private let fileURL: URL
+    let fileURL: URL
     private let rotatedFileURL: URL
     private let dateFormatter: DateFormatter
 

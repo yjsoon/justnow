@@ -103,7 +103,7 @@ final class OverlayKeyboardActionTests: XCTestCase {
         XCTAssertEqual(action, .cancelTextGrab)
     }
 
-    func testSlashFocusesSearchWhenAvailableAndClosed() {
+    func testSlashFocusesSearchWhenClosed() {
         let action = resolveOverlayKeyboardAction(
             keyCode: UInt16(kVK_ANSI_Slash),
             modifiers: [],

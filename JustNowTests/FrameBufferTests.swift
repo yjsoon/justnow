@@ -3123,7 +3123,7 @@ private actor FrameRepositoryProbe: FrameRepository {
         case .duplicateFrame, .spanCheckpoint, .pressureDrop:
             // Production does not insert a new span for these outcomes, so
             // this insertion path cannot model them faithfully.
-            preconditionFailure("FrameRepositoryProbe only models inserted captures")
+            XCTFail("FrameRepositoryProbe only models inserted captures")
         }
         return effects
     }

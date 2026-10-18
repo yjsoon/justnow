@@ -15,6 +15,10 @@ final class DiagnosticsLogTests: XCTestCase {
 
     func testHostedTestsNeverWriteTheUsersDiagnosticsLog() {
         XCTAssertNotEqual(DiagnosticsLog.sharedDirectory, DiagnosticsLog.defaultDirectory)
+        XCTAssertEqual(
+            DiagnosticsLog.shared.fileURL.deletingLastPathComponent().standardizedFileURL,
+            DiagnosticsLog.sharedDirectory.standardizedFileURL
+        )
         XCTAssertTrue(
             DiagnosticsLog.sharedDirectory.path.hasPrefix(FileManager.default.temporaryDirectory.path)
         )

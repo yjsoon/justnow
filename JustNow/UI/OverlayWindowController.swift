@@ -255,8 +255,6 @@ class OverlayWindowController: NSObject {
             switch action {
             case .passthrough:
                 return event
-            case .consume:
-                return nil
             case .dismissOverlay:
                 self.hideOverlay()
             case .cancelTextGrab:
