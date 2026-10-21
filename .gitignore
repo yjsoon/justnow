@@ -58,3 +58,7 @@ node_modules/
 skills-lock.json
 
 AppIcon.icns
+
+# Python bytecode
+__pycache__/
+*.pyc
