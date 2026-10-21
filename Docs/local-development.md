@@ -58,7 +58,22 @@ Routine use of the existing matching Developer ID identity is authorized for loc
 
 ### Current helper limitations
 
-`local-install-app.sh` blocks fallback signing over an existing Developer ID installation when identity/team inputs are missing. It does **not** enforce equality between the existing and every configured/discovered Developer ID identity. Compare them before use; do not assume discovery selected the right one.
+`local-install-app.sh` checks signing before it stops or replaces anything. On every install it:
+
+- refuses a configured `--team`/`APPLE_TEAM_ID` that disagrees with the team in the signing identity's name;
+- runs `codesign --verify --deep --strict` on the new build and requires bundle identifier `sg.tk.JustNow`;
+- with Developer ID signing, requires the new build's Team ID to match the configured team.
+
+When the installed app is Developer ID-signed, it also compares against it:
+
+- the installed app must have bundle identifier `sg.tk.JustNow`;
+- fallback (non-Developer ID) signing is refused when identity/team inputs are missing;
+- a configured team that differs from the installed app's Team ID is refused before building;
+- the new build's Team ID must match the installed app's, and the new build must satisfy the installed app's designated requirement (what TCC uses to match the Screen Recording grant).
+
+`--allow-signing-change` skips only these installed-app comparisons (other than the bundle identifier) for an intentional migration; expect a new Screen Recording prompt. Do not pass it for routine installs, and treat a refusal as a signal to inspect the signing inputs, not to add the flag.
+
+Installs over an Xcode-default-signed or missing app are not compared. Discovery picks the identity matching the installed authority when several exist, but still compare the selected identity before use.
 
 The helper still calls `pkill`, replaces the app using `trash` and a copy, and attempts `open`. It does not wait for the asynchronous normal-quit flush, and a failed `open` only prints a warning. The pre-exit check and post-install smoke test above are required; a successful helper exit is insufficient. Script hardening is separate work, not an existing safeguard.
 
