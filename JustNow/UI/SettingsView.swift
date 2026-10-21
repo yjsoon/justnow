@@ -173,14 +173,14 @@ struct SettingsView: View {
                 Toggle("Download updates automatically", isOn: automaticDownloadsBinding)
                     .disabled(!context.allowsAutomaticUpdates)
 
-                Text("JustNow uses Sparkle to deliver signed updates from the public appcast at justnow.tk.sg.")
+                Text("JustNow uses Sparkle to check the public appcast at justnow.tk.sg and download signed updates from GitHub Releases.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Privacy") {
-                Text("Your screen history, recognised text, and settings stay on this Mac. Update checks are JustNow's only network requests.")
+                Text("Your screen history, recognised text, and settings stay on this Mac. JustNow only connects to the internet to check for and download updates.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -485,13 +485,13 @@ struct SettingsView: View {
                                 .foregroundStyle(.secondary)
                         }
 
-                        Text("These numbers update every 2 seconds from local telemetry.")
+                        Text("These numbers update every 2 seconds and never leave this Mac.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     .padding(.top, 6)
                 } label: {
-                    Text("Local search telemetry")
+                    Text("Local search statistics")
                 }
             }
         }

@@ -42,7 +42,7 @@ Saved screenshots come from JustNow's rewind history rather than a fresh screen 
 
 - **Format**: JPEG, using the same compression as the rewind history.
 - **Resolution**: full pixel density when plugged in. Halved when capturing on battery or in Low Power Mode for performance — change this in **Settings → Capture**.
-- **Destination**: by default, JustNow saves to your `com.apple.screencapture` location (Desktop unless you've changed it system-wide). You can pick a different folder, copy to the clipboard, or both, in **Settings → Screenshot save location**.
+- **Destination**: by default, JustNow saves to your `com.apple.screencapture` location (Desktop unless you've changed it system-wide). You can pick a different folder, copy to the clipboard, or both, in **Settings → Rewind → Screenshot save location**.
 
 ## Settings
 
@@ -64,9 +64,9 @@ You can adjust:
 
 JustNow has no telemetry: your screen history, indexed text, and settings never leave your Mac. The full [privacy policy](https://justnow.tk.sg/privacy) is also linked from **Settings → General → Privacy**.
 
-Screen history and its recognised text are stored in `~/Library/Application Support/JustNow/`, restricted to your user account and excluded from backups. Frames are deleted automatically with their text once they fall outside your rewind history setting (JustNow keeps at least one sparse hour for search), and **Settings → Capture → Storage → Clear All History** deletes everything immediately. Pause recording at any time with `⌘⌥⇧J` or from the menu bar.
+Screen history and its recognised text are stored in `~/Library/Application Support/JustNow/`, restricted to your user account and marked for exclusion from Time Machine. While recording, frames are deleted automatically with their text once they fall outside your rewind history setting (JustNow keeps at least one sparse hour for search). **Settings → Capture → Storage → Clear All History** immediately deletes all frames, recognised text, and recovery copies, but not the diagnostics log or screenshots you have saved. Pause recording at any time with `⌘⌥⇧J` or from the menu bar.
 
-To help debug capture issues, JustNow keeps a small local diagnostics log at `~/Library/Logs/JustNow/`. It records capture lifecycle events (starts, stops, errors, permission checks, sleep/lock transitions) and occasional aggregate capture/storage measurements such as frame counts, logical JPEG/metadata event-byte totals, queue peaks, and bounded comparison coverage. These logical event sizes are not measurements of filesystem growth, physical device writes, SSD wear, or NAND writes. Settings separately reports allocated SQLite/WAL space where macOS exposes it reliably. JustNow never records screen content, recognised text, image bytes, file paths, display names or IDs, or perceptual hashes. The log is capped at about 1 MB, is never transmitted anywhere, and you can delete it at any time.
+To help debug capture issues, JustNow keeps a small local diagnostics log at `~/Library/Logs/JustNow/`. It records capture lifecycle events (starts, stops, errors, permission checks, sleep/lock transitions), connected display names and system IDs, app and macOS versions at launch, search outcomes without the query text, and occasional aggregate capture/storage measurements such as frame counts, logical JPEG/metadata event-byte totals, queue peaks, and bounded comparison coverage. These logical event sizes are not measurements of filesystem growth, physical device writes, SSD wear, or NAND writes. Settings separately reports allocated SQLite/WAL space where macOS exposes it reliably. JustNow never records screen content, recognised text, search queries, image bytes, file paths, or perceptual hashes. The log is capped at about 1 MB, is never transmitted anywhere, and you can delete it at any time.
 
 The only network requests JustNow makes are update checks and downloads via Sparkle: the feed at `justnow.tk.sg/appcast.xml` and update archives from GitHub Releases. You can turn off automatic checks in **Settings → General → Software Update**.
 
