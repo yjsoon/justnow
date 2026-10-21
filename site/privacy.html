@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>JustNow Privacy Policy</title>
+    <meta name="description" content="How JustNow handles your screen history, recognised text, diagnostics, and network requests.">
+    <link rel="canonical" href="https://justnow.tk.sg/privacy">
+    <meta name="theme-color" content="#f6f4ef" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#1e1f22" media="(prefers-color-scheme: dark)">
+    <link rel="stylesheet" href="/styles.css">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png">
+    <link rel="apple-touch-icon" href="/favicon-32.png">
+  </head>
+  <body>
+    <a href="#main" class="skip-link">Skip to content</a>
+    <div class="page">
+
+      <header class="header">
+        <a href="/" class="header-lockup">
+          <img class="header-icon" src="/favicon.svg" alt="" width="36" height="36">
+          <span class="header-name">JustNow</span>
+        </a>
+        <nav class="header-links">
+          <a href="/">App page</a>
+          <a href="https://github.com/yjsoon/justnow/releases/latest" class="header-download">Download</a>
+        </nav>
+      </header>
+
+      <main id="main">
+      <section class="hero">
+        <h1>Privacy policy</h1>
+        <p class="hero-sub">
+          JustNow records your screen so you can rewind it. Everything it
+          records stays on your Mac. There is no account, no telemetry, and no
+          upload of screen content, recognised text, or settings. The only
+          network requests the app makes are update checks.
+        </p>
+        <p class="hero-note">
+          Effective date: <strong>[EFFECTIVE DATE]</strong>. Applies to
+          JustNow for macOS as distributed from GitHub Releases and this
+          website.
+        </p>
+      </section>
+
+      <hr class="sep">
+
+      <article class="policy">
+
+        <h2 id="capture">What JustNow captures</h2>
+        <p>
+          JustNow only captures your screen after you grant it Screen Recording
+          permission in macOS. From then on, while JustNow is running and
+          recording is not paused, it takes a still image of each connected
+          display at the capture interval you choose in Settings.
+        </p>
+        <p>
+          Those images contain whatever was visible on screen. That can include
+          messages, documents, private browsing windows, and passwords or codes
+          that were shown in plain text. JustNow does not try to detect or skip
+          sensitive content, so pause recording whenever you would rather it
+          did not keep a copy.
+        </p>
+        <p>
+          JustNow stops capturing while the screen is locked, while the Mac is
+          asleep, and while another user is logged in through fast user
+          switching.
+        </p>
+
+        <h2 id="pause">Pausing recording</h2>
+        <p>
+          You can pause and resume recording at any time with
+          <kbd>&#8984;&#8997;&#8679;J</kbd> (configurable in Settings) or with
+          <strong>Pause Recording</strong> in the menu bar menu. Quitting
+          JustNow also stops capture. To stop JustNow capturing entirely, quit
+          it and turn it off in <strong>System Settings &rarr; Privacy &amp;
+          Security &rarr; Screen Recording</strong>.
+        </p>
+
+        <h2 id="storage">Where your history is stored</h2>
+        <p>
+          Captured frames are saved as JPEG images, with a local SQLite
+          database of frame details (such as capture times and which display
+          they came from), in
+          <code>~/Library/Application&nbsp;Support/JustNow/</code>. JustNow
+          restricts that folder to your macOS user account and excludes it
+          from Time Machine and other backups. JustNow does not add its own
+          encryption to these files, so we recommend turning on FileVault.
+        </p>
+        <p>
+          If you turn on <strong>Keep recent history in memory</strong> in
+          Settings, the most recent detail is held in memory instead of being
+          written to disk, and is cleared when JustNow quits or relaunches.
+        </p>
+        <p>
+          If JustNow finds damaged or incomplete storage when it starts, it
+          moves the affected files into a <code>recovery</code> folder inside
+          the same storage folder instead of deleting them. Those copies stay
+          there until you clear your history or delete them yourself.
+        </p>
+
+        <h2 id="retention">How long history is kept</h2>
+        <p>
+          You choose how much rewind history to keep: 30 minutes, 2 hours,
+          8 hours, or 24 hours (the default). JustNow keeps every frame for the
+          most recent part of that window, then keeps fewer frames as history
+          gets older. Frames older than the window are deleted automatically,
+          along with their recognised text. When the window is shorter than one
+          hour, JustNow keeps a sparse hour of history so that the one-hour
+          search option still works.
+        </p>
+
+        <h2 id="ocr">Recognised text and search</h2>
+        <p>
+          To make your history searchable, JustNow runs text recognition on
+          captured frames using Apple&rsquo;s Vision framework, on your Mac.
+          The recognised text and the position of each word are stored in a
+          local search database in the same storage folder. Neither the images
+          nor the text are sent anywhere. Recognised text is deleted when its
+          frame is deleted.
+        </p>
+
+        <h2 id="delete">Deleting your history</h2>
+        <p>
+          In <strong>Settings &rarr; Capture &rarr; Storage</strong>, choose
+          <strong>Clear All History</strong>. This deletes all captured frames,
+          the recognised-text search database, and any recovery copies.
+          <strong>Open Storage Folder</strong> in the same section shows you the
+          files. You can also quit JustNow and delete
+          <code>~/Library/Application&nbsp;Support/JustNow/</code> yourself.
+        </p>
+        <p>
+          As with any file deletion, macOS may not immediately overwrite the
+          disk space that deleted data occupied. FileVault protects that space
+          as well.
+        </p>
+
+        <h2 id="clipboard">Clipboard and saved screenshots</h2>
+        <p>
+          JustNow only copies or saves something when you ask it to:
+        </p>
+        <ul>
+          <li>
+            Dragging over text in a rewind frame copies the recognised text to
+            your clipboard.
+          </li>
+          <li>
+            Saving a frame or region (<kbd>&#8984;S</kbd>, or holding
+            <kbd>&#8984;</kbd> while dragging) writes a JPEG to the folder you
+            choose in Settings (your macOS screenshot location by default),
+            copies it to the clipboard, or both.
+          </li>
+        </ul>
+        <p>
+          Once something is on your clipboard or in a folder, it is handled by
+          macOS and any other apps you use. For example, Universal Clipboard
+          or iCloud Drive syncing of your Desktop may copy it to your other
+          devices. JustNow does not track or delete those copies.
+        </p>
+
+        <h2 id="diagnostics">Diagnostics log</h2>
+        <p>
+          To help debug capture problems, JustNow keeps a small diagnostics log
+          at <code>~/Library/Logs/JustNow/</code>. It records capture lifecycle
+          events (starts, stops, errors, permission checks, and sleep or lock
+          transitions) and occasional aggregate measurements such as frame
+          counts, total data sizes, and queue lengths.
+        </p>
+        <p>
+          The log never contains screen content, recognised text, image data,
+          file paths, display names or identifiers, or perceptual hashes (image fingerprints). It is
+          capped at about 1&nbsp;MB, is never sent anywhere by JustNow, and you
+          can delete it at any time. If you attach it to a bug report, you
+          choose what to share.
+        </p>
+
+        <h2 id="network">Network requests and updates</h2>
+        <p>
+          The only network requests JustNow makes are for software updates,
+          using the open-source Sparkle framework:
+        </p>
+        <ul>
+          <li>
+            Checking for updates downloads the public update feed from
+            <code>https://justnow.tk.sg/appcast.xml</code>, which is hosted on
+            Cloudflare Pages.
+          </li>
+          <li>
+            If an update is available and you choose to install it (or turn on
+            automatic downloads), JustNow downloads the signed update from
+            GitHub Releases.
+          </li>
+        </ul>
+        <p>
+          These requests carry the details any web request does, such as your
+          IP address, plus the app and Sparkle versions. JustNow does not send
+          a system profile, a device identifier, or anything about your
+          history. Cloudflare and GitHub may keep standard server logs under
+          their own privacy policies. You can turn off automatic checks in
+          <strong>Settings &rarr; General &rarr; Software Update</strong> and
+          check manually instead.
+        </p>
+
+        <h2 id="no-telemetry">What JustNow does not do</h2>
+        <ul>
+          <li>No analytics, telemetry, or crash reporting services.</li>
+          <li>No account or sign-in.</li>
+          <li>No upload or cloud sync of screen history, recognised text, or settings.</li>
+          <li>No advertising, and no selling or sharing of data, because we never receive any.</li>
+          <li>No use of your data to train AI models.</li>
+        </ul>
+        <p>
+          The Search Diagnostics figures in Settings are calculated and shown on
+          your Mac only.
+        </p>
+
+        <h2 id="website">This website</h2>
+        <p>
+          <code>justnow.tk.sg</code> is a static site. It sets no cookies and
+          runs no analytics or tracking scripts. Cloudflare, which hosts it,
+          may process standard request logs.
+        </p>
+
+        <h2 id="changes">Changes to this policy</h2>
+        <p>
+          If JustNow&rsquo;s handling of data changes, this page will be
+          updated along with its effective date. The full history of this page
+          is public in the
+          <a href="https://github.com/yjsoon/justnow/commits/main/site/privacy.html">JustNow repository</a>.
+        </p>
+
+        <h2 id="contact">Contact</h2>
+        <p>
+          [CONTACT ROUTE] Questions about this policy or JustNow&rsquo;s
+          privacy can be raised on
+          <a href="https://github.com/yjsoon/justnow/issues">GitHub Issues</a>.
+          Please do not attach screenshots or logs that contain anything
+          private.
+        </p>
+
+      </article>
+      </main>
+
+      <footer class="footer">
+        <div class="footer-links">
+          <a href="https://github.com/yjsoon/justnow">GitHub</a>
+          <a href="https://github.com/yjsoon/justnow/releases/latest">Download</a>
+          <a href="/releases/">Release notes</a>
+          <a href="/privacy">Privacy</a>
+        </div>
+      </footer>
+
+    </div>
+  </body>
+</html>

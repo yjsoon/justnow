@@ -62,11 +62,13 @@ You can adjust:
 
 ## Privacy
 
-JustNow has no telemetry: your screen history, indexed text, and settings never leave your Mac.
+JustNow has no telemetry: your screen history, indexed text, and settings never leave your Mac. The full [privacy policy](https://justnow.tk.sg/privacy) is also linked from **Settings → General → Privacy**.
 
-To help debug capture issues, JustNow keeps a small local diagnostics log at `~/Library/Logs/JustNow/`. It records capture lifecycle events (starts, stops, errors, sleep/lock transitions) and occasional aggregate capture/storage measurements such as frame counts, logical JPEG/metadata event-byte totals, queue peaks, and bounded comparison coverage. These logical event sizes are not measurements of filesystem growth, physical device writes, SSD wear, or NAND writes. Settings separately reports allocated SQLite/WAL space where macOS exposes it reliably. JustNow never records screen content, recognised text, image bytes, file paths, display names or IDs, or perceptual hashes. The log is capped at about 1 MB, is never transmitted anywhere, and you can delete it at any time.
+Screen history and its recognised text are stored in `~/Library/Application Support/JustNow/`, restricted to your user account and excluded from backups. Frames are deleted automatically with their text once they fall outside your rewind history setting (JustNow keeps at least one sparse hour for search), and **Settings → Capture → Storage → Clear All History** deletes everything immediately. Pause recording at any time with `⌘⌥⇧J` or from the menu bar.
 
-The only network requests JustNow makes are update checks via Sparkle.
+To help debug capture issues, JustNow keeps a small local diagnostics log at `~/Library/Logs/JustNow/`. It records capture lifecycle events (starts, stops, errors, permission checks, sleep/lock transitions) and occasional aggregate capture/storage measurements such as frame counts, logical JPEG/metadata event-byte totals, queue peaks, and bounded comparison coverage. These logical event sizes are not measurements of filesystem growth, physical device writes, SSD wear, or NAND writes. Settings separately reports allocated SQLite/WAL space where macOS exposes it reliably. JustNow never records screen content, recognised text, image bytes, file paths, display names or IDs, or perceptual hashes. The log is capped at about 1 MB, is never transmitted anywhere, and you can delete it at any time.
+
+The only network requests JustNow makes are update checks and downloads via Sparkle: the feed at `justnow.tk.sg/appcast.xml` and update archives from GitHub Releases. You can turn off automatic checks in **Settings → General → Software Update**.
 
 ## Building From Source
 

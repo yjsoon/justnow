@@ -42,6 +42,8 @@ struct SettingsView: View {
 
     var context: SettingsContext = SettingsContext()
 
+    static let privacyPolicyURL = URL(string: "https://justnow.tk.sg/privacy")!
+
     enum Tab: Hashable {
         case general, rewind, capture, shortcuts
     }
@@ -175,6 +177,15 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section("Privacy") {
+                Text("Your screen history, recognised text, and settings stay on this Mac. Update checks are JustNow's only network requests.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Link("Privacy Policy", destination: Self.privacyPolicyURL)
             }
         }
         .formStyle(.grouped)
