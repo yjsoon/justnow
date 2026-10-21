@@ -36,6 +36,10 @@ struct CapturePolicyApplier {
 final class CapturePolicyController {
     let idleThreshold: TimeInterval = 60
     let userActivityUpdateInterval: TimeInterval = 1
+    /// How often to re-read the system idle duration while the idle policy is
+    /// applied. Keyboard activity is not monitored directly, so this bounds how
+    /// long typing takes to bring capture back to its active cadence.
+    let idleWakePollInterval: TimeInterval = 5
 
     private let batteryMultiplier: Double = 3
     private let batteryLowThreshold: Double = 0.3
@@ -108,7 +112,17 @@ final class CapturePolicyController {
         return isLastAppliedPolicyIdle
     }
 
-    func idleTransitionDelay(for idleDuration: TimeInterval) -> TimeInterval? {
+    /// Delay until the next idle-state check, based on the system-wide idle
+    /// duration (which covers keyboard input without a keyboard monitor).
+    /// While capturing and idle, poll for a return to activity. While active,
+    /// check again when the idle threshold would be crossed. Returns nil when
+    /// the threshold has already passed but the idle policy is not applied
+    /// (for example, adaptive capture is off), or when idle but not capturing;
+    /// the periodic policy timer covers those cases.
+    func idleTransitionDelay(for idleDuration: TimeInterval, isCapturing: Bool) -> TimeInterval? {
+        if isLastAppliedPolicyIdle {
+            return isCapturing ? idleWakePollInterval : nil
+        }
         let remaining = max(idleThreshold - idleDuration, 0)
         return remaining > 0 ? remaining : nil
     }

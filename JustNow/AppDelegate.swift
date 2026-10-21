@@ -560,6 +560,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             guard let self else { return }
             Task { @MainActor [self] in
                 self.updateCapturePolicy()
+                self.scheduleIdleTransitionCheck()
             }
         }
         capturePolicyTimer?.tolerance = 10.0
@@ -593,18 +594,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
 
     private func setupInputMonitor() {
         var lastMouseMoveForwardedAt = -Double.greatestFiniteMagnitude
+        var lastScrollForwardedAt = -Double.greatestFiniteMagnitude
 
-        // Keep mouse movement as an activity signal so the adaptive capture
-        // policy exits idle without waiting for a click or the periodic policy
-        // timer. Gate it before hopping to the main actor to avoid 60Hz Tasks.
+        // Mouse and scroll events let the adaptive capture policy exit idle
+        // immediately. Keyboard input is deliberately not monitored: keyboard-
+        // only activity is picked up from the system idle duration by the idle
+        // check timer instead. Gate mouse movement and scrolling before hopping
+        // to the main actor to avoid 60-120Hz Tasks.
         inputEventMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel, .mouseMoved]
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel, .mouseMoved]
         ) { [weak self] event in
             if event.type == .mouseMoved {
                 guard event.timestamp - lastMouseMoveForwardedAt >= inputActivityForwardingInterval else {
                     return
                 }
                 lastMouseMoveForwardedAt = event.timestamp
+            } else if event.type == .scrollWheel {
+                guard event.timestamp - lastScrollForwardedAt >= inputActivityForwardingInterval else {
+                    return
+                }
+                lastScrollForwardedAt = event.timestamp
             }
 
             guard let self else { return }
@@ -834,6 +843,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         updateCaptureStatus("Active")
         capturePolicyController.resetAppliedPolicy()
         updateCapturePolicy()
+        scheduleIdleTransitionCheck()
         if let successMessage {
             captureLogger.info("\(successMessage, privacy: .public)")
         }
@@ -1051,6 +1061,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
 
     private func updateCapturePolicy() {
         guard captureCoordinator != nil else { return }
+        let wasIdle = capturePolicyController.isLastAppliedPolicyIdle
+        defer {
+            // Entering or leaving idle changes how often the idle check runs.
+            if capturePolicyController.isLastAppliedPolicyIdle != wasIdle {
+                scheduleIdleTransitionCheck()
+            }
+        }
         capturePolicyController.applyIfNeeded(
             settings: currentCapturePolicySettings(),
             environment: currentCapturePolicyEnvironment(),
@@ -1111,13 +1128,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         idleTransitionTimer?.invalidate()
 
         guard let remaining = capturePolicyController.idleTransitionDelay(
-            for: secondsSinceLastUserEvent()
+            for: secondsSinceLastUserEvent(),
+            isCapturing: captureCoordinator?.isCapturing ?? false
         ) else { return }
 
         idleTransitionTimer = Timer.scheduledTimer(withTimeInterval: remaining, repeats: false) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor [self] in
                 self.updateCapturePolicy()
+                // Keyboard-only activity never reaches handleUserActivity, so
+                // re-arm from the system idle duration after every check.
+                self.scheduleIdleTransitionCheck()
             }
         }
         idleTransitionTimer?.tolerance = min(remaining * 0.2, 5.0)

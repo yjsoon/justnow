@@ -224,4 +224,86 @@ final class CapturePolicyControllerTests: XCTestCase {
             )
         )
     }
+
+    func testIdleTransitionDelayWaitsForThresholdWhileActive() {
+        let controller = CapturePolicyController()
+
+        XCTAssertEqual(controller.idleTransitionDelay(for: 0, isCapturing: true), controller.idleThreshold)
+        XCTAssertEqual(controller.idleTransitionDelay(for: 45, isCapturing: true), controller.idleThreshold - 45)
+        // Threshold crossed but idle policy not applied (e.g. adaptive capture off):
+        // no tight re-check loop; the periodic policy timer covers it.
+        XCTAssertNil(controller.idleTransitionDelay(for: controller.idleThreshold, isCapturing: true))
+        XCTAssertNil(controller.idleTransitionDelay(for: 600, isCapturing: true))
+    }
+
+    func testIdleTransitionDelayPollsForKeyboardOnlyWakeWhileIdle() {
+        let controller = CapturePolicyController()
+        let settings = CapturePolicySettings(captureInterval: 1, reduceCaptureOnBattery: true)
+
+        controller.applyIfNeeded(
+            settings: settings,
+            environment: makeEnvironment(idleDuration: 120),
+            isCapturing: true,
+            applier: makeNoOpApplier()
+        )
+        XCTAssertTrue(controller.isLastAppliedPolicyIdle)
+
+        // While idle the delay is a short poll, whatever the idle duration, so
+        // typing (seen only through the system idle duration) wakes capture quickly.
+        XCTAssertEqual(controller.idleTransitionDelay(for: 120, isCapturing: true), controller.idleWakePollInterval)
+        XCTAssertEqual(controller.idleTransitionDelay(for: 0.5, isCapturing: true), controller.idleWakePollInterval)
+        XCTAssertLessThan(controller.idleWakePollInterval, controller.idleThreshold)
+
+        // Keyboard-only activity: the poll reads a small system idle duration and
+        // the controller leaves idle, then waits for the threshold again.
+        controller.applyIfNeeded(
+            settings: settings,
+            environment: makeEnvironment(idleDuration: 0.5),
+            isCapturing: true,
+            applier: makeNoOpApplier()
+        )
+        XCTAssertFalse(controller.isLastAppliedPolicyIdle)
+        XCTAssertEqual(controller.idleTransitionDelay(for: 0.5, isCapturing: true), controller.idleThreshold - 0.5)
+    }
+
+    func testIdleTransitionDelayDoesNotPollWhileIdleAndNotCapturing() {
+        let controller = CapturePolicyController()
+
+        controller.applyIfNeeded(
+            settings: CapturePolicySettings(captureInterval: 1, reduceCaptureOnBattery: true),
+            environment: makeEnvironment(idleDuration: 120),
+            isCapturing: false,
+            applier: makeNoOpApplier()
+        )
+
+        // Paused, locked or display asleep: no 5-second wakeups while the user is away.
+        XCTAssertTrue(controller.isLastAppliedPolicyIdle)
+        XCTAssertNil(controller.idleTransitionDelay(for: 120, isCapturing: false))
+        XCTAssertNil(controller.idleTransitionDelay(for: 0.5, isCapturing: false))
+        XCTAssertEqual(
+            controller.idleTransitionDelay(for: 120, isCapturing: true),
+            controller.idleWakePollInterval
+        )
+    }
+
+    private func makeEnvironment(idleDuration: TimeInterval) -> CapturePolicyEnvironment {
+        CapturePolicyEnvironment(
+            isOnBattery: false,
+            isLowPowerModeEnabled: false,
+            batteryChargeFraction: nil,
+            idleDuration: idleDuration,
+            thermalState: .nominal
+        )
+    }
+
+    private func makeNoOpApplier() -> CapturePolicyApplier {
+        CapturePolicyApplier(
+            updateCaptureInterval: { _ in },
+            updateCaptureScale: { _ in },
+            updateFramePersistence: { _, _ in },
+            updateOCRIndexingPolicy: { _ in },
+            beginForegroundActivity: {},
+            endForegroundActivity: {}
+        )
+    }
 }

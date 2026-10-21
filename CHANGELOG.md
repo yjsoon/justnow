@@ -4,6 +4,9 @@ All notable changes to JustNow will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- Stop monitoring global keyboard events. Adaptive capture now notices typing from the system idle time and returns to its normal cadence within a few seconds; mouse and scroll activity still wake it immediately.
+
 ## [1.5.6] - 2026-10-11
 
 ### Fixed
