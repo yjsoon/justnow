@@ -97,6 +97,7 @@ def render_release_notes(source: dict[str, Any]) -> str:
         <div class="footer-links">
           <a href="/">App page</a>
           <a href="/appcast.xml">Appcast</a>
+          <a href="/privacy">Privacy</a>
           <a href="{escape(site["changelog_url"])}">Full changelog on GitHub</a>
         </div>
       </footer>

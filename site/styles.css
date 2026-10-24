@@ -512,3 +512,41 @@ code {
   color: var(--text-soft);
   line-height: 1.7;
 }
+
+/* ---- Privacy policy page ---- */
+
+.policy {
+  max-width: 65ch;
+  padding: var(--space-2xl) 0;
+}
+
+.policy h2 {
+  margin: var(--space-xl) 0 var(--space-md);
+  font-size: var(--text-lg);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.policy h2:first-child {
+  margin-top: 0;
+}
+
+.policy p,
+.policy ul {
+  margin: 0 0 var(--space-md);
+  color: var(--text-soft);
+  line-height: 1.7;
+}
+
+.policy ul {
+  padding-left: 1.2rem;
+}
+
+.policy code {
+  overflow-wrap: anywhere;
+}
+
+.policy strong {
+  color: var(--text);
+  font-weight: 600;
+}
