@@ -61,28 +61,6 @@ nonisolated enum ImageEncoder {
         return data as Data
     }
 
-    /// Decode an image file, optionally downscaling during decode for OCR workloads.
-    static func cgImage(from url: URL, maxPixelSize: Int? = nil) -> CGImage? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
-            return nil
-        }
-
-        if let maxPixelSize, maxPixelSize > 0 {
-            let options: [CFString: Any] = [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
-                kCGImageSourceShouldCacheImmediately: true
-            ]
-            return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
-        }
-
-        let options: [CFString: Any] = [
-            kCGImageSourceShouldCacheImmediately: true
-        ]
-        return CGImageSourceCreateImageAtIndex(source, 0, options as CFDictionary)
-    }
-
     /// Decode JPEG data to CGImage.
     static func cgImage(from jpegData: Data) -> CGImage? {
         guard let source = CGImageSourceCreateWithData(jpegData as CFData, nil) else {

@@ -12,7 +12,7 @@ The app uses macOS-only frameworks and app-hosted Xcode tests. Linux Swift canno
 
 ## Build and test without replacing the app
 
-Run from the repository root on a Mac with Xcode. The deployment target is macOS 15; `JustNow.xcodeproj/project.pbxproj` currently uses Swift 5 language mode. Do not confuse that with the compiler version. Check `xcodebuild -version` and `xcrun swift --version` on the build machine; the active test workflow uses a `macos-26` runner, not a pinned compiler version.
+Run from the repository root on a Mac with Xcode. The deployment target is macOS 15; `JustNow.xcodeproj/project.pbxproj` currently uses Swift 5 language mode. Do not confuse that with the compiler version. Check `xcodebuild -version` and `xcrun swift --version` on the build machine; the active test workflow uses a `macos-26` runner, not a pinned compiler version. Building needs Xcode 26 or later (the macOS 26 SDK and Swift 6.2): the app uses macOS 26 APIs behind runtime availability checks and default main-actor isolation, while still running on macOS 15.
 
 A build-only check that does not use signing credentials or install/launch the app:
 
