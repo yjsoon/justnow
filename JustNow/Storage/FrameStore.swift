@@ -86,7 +86,6 @@ actor FrameStore {
     private let storeLock: FrameStoreLock
     private let database: FrameDatabase
     private let storeID: String
-    private let instrumentation: CapturePersistenceInstrumentation?
     private let screenshotsDirectory: URL?
     private let clearPayloadRemoval: FrameStoreClearPayloadRemoval?
     private let promotionPayloadDidWrite: FrameStorePromotionPayloadDidWrite?
@@ -120,13 +119,11 @@ actor FrameStore {
     /// location instead of the live Application Support store.
     init(
         directory: URL? = nil,
-        instrumentation: CapturePersistenceInstrumentation? = nil,
         screenshotsDirectory: URL? = nil,
         clearPayloadRemoval: FrameStoreClearPayloadRemoval? = nil,
         promotionPayloadDidWrite: FrameStorePromotionPayloadDidWrite? = nil,
         durableCommitHook: FrameDatabaseCommitHook? = nil
     ) throws {
-        self.instrumentation = instrumentation
         self.screenshotsDirectory = screenshotsDirectory
         self.clearPayloadRemoval = clearPayloadRemoval
         self.promotionPayloadDidWrite = promotionPayloadDidWrite
@@ -214,15 +211,6 @@ actor FrameStore {
         }
     }
 
-    func endCaptureSession(reason: CaptureSessionEndReason) throws {
-        do {
-            guard let active = try database.activeSession() else { return }
-            try database.endCaptureSession(id: active.id, reason: reason)
-        } catch {
-            throw FrameStoreError.database(String(describing: error))
-        }
-    }
-
     func getTimelineEntries() -> [TimelineEntry] {
         do {
             return try database.allTimelineEntries()
@@ -239,54 +227,6 @@ actor FrameStore {
             Self.logStorageDiagnostic("Failed to read capture sessions: \(error)")
             return []
         }
-    }
-
-    func saveFrame(
-        _ cgImage: CGImage,
-        timestamp: Date,
-        hash: UInt64,
-        displayID: UUID?,
-        displayName: String?,
-        options: FrameSaveOptions = .standard
-    ) throws -> FrameMetadata {
-        let id = UUID()
-        guard let jpegData = ImageEncoder.jpegData(from: cgImage, quality: options.quality) else {
-            throw FrameStoreError.imageEncodingFailed
-        }
-        instrumentation?.recordEncodedJPEG(jpegData, displayID: displayID)
-        let metadata = try saveEncodedFrame(
-            id: id,
-            jpegData: jpegData,
-            timestamp: timestamp,
-            hash: hash,
-            displayID: displayID,
-            displayName: displayName
-        )
-        instrumentation?.recordPersistedJPEG(jpegData, displayID: displayID)
-        instrumentation?.recordMetadataWrite(byteCount: FrameDatabase.logicalByteCount(for: metadata))
-        return metadata
-    }
-
-    /// Persist an already encoded capture without decoding or re-encoding it.
-    /// The caller owns the stable frame identity so the same ID can survive a
-    /// future transition between volatile and durable repository sources.
-    func saveEncodedFrame(
-        id: UUID,
-        jpegData: Data,
-        timestamp: Date,
-        hash: UInt64,
-        displayID: UUID?,
-        displayName: String?
-    ) throws -> FrameMetadata {
-        try persistNewPayload(
-            id: id,
-            jpegData: jpegData,
-            timestamp: timestamp,
-            hash: hash,
-            displayID: displayID,
-            displayName: displayName,
-            insert: { metadata in try self.database.insert(metadata) }
-        )
     }
 
     private func persistNewPayload(
@@ -806,10 +746,6 @@ actor FrameStore {
         } catch {
             throw FrameStoreError.database(String(describing: error))
         }
-    }
-
-    func pruneFrames(ids: Set<UUID>) throws {
-        _ = try pruneSpans(ids: ids)
     }
 
     func clear() throws {

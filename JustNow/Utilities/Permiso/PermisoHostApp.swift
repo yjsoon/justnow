@@ -15,8 +15,8 @@ struct PermisoHostApp {
     }
 
     static func current(bundle: Bundle = .main) -> PermisoHostApp {
-        // JustNow ships CFBundleDisplayName as an empty string deliberately so macOS
-        // falls back to CFBundleName; treat blanks as missing instead of taking them.
+        // Treat a blank display name as missing so the panel falls back to
+        // CFBundleName rather than showing an empty title.
         func nonEmpty(_ key: String) -> String? {
             guard let value = bundle.object(forInfoDictionaryKey: key) as? String, !value.isEmpty else {
                 return nil

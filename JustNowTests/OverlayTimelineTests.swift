@@ -965,6 +965,80 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertEqual(viewModel.searchResults.map(\.span.id), [recent.span.id])
     }
 
+    /// OCR rows are keyed by the physical JPEG, but browsing is keyed by the
+    /// logical span. One cached row must surface every span that reuses the
+    /// payload, and the scope cutoff applies per span.
+    func testSearchMapsOnePhysicalCacheIDToEveryQualifyingLogicalSpan() async throws {
+        let semanticNow = Date(timeIntervalSinceReferenceDate: 10_000)
+        let physicalID = UUID()
+        let old = makeEntry(
+            frameID: physicalID,
+            start: semanticNow.addingTimeInterval(-900),
+            end: semanticNow.addingTimeInterval(-890)
+        )
+        let recent = makeEntry(
+            frameID: physicalID,
+            start: semanticNow.addingTimeInterval(-20),
+            end: semanticNow.addingTimeInterval(-10)
+        )
+        let image = try XCTUnwrap(TestImageFactory.makeSolidImage(width: 8, height: 8, level: 91))
+        let repository = OverlayTimelineRepositoryProbe(entries: [old, recent], image: image)
+        let buffer = try await makeBuffer(repository: repository)
+        await buffer.textCache.setText(
+            "shared needle",
+            for: physicalID,
+            timestamp: timelineSpanBounds(for: recent).end
+        )
+        let viewModel = makeViewModel(
+            entries: [old, recent],
+            buffer: buffer,
+            referenceDate: semanticNow
+        )
+
+        viewModel.isSearching = true
+        viewModel.searchTimeScope = .all
+        viewModel.searchQuery = "needle"
+        viewModel.performSearch(immediately: true)
+        try await waitUntil { !viewModel.isSearchLoading }
+        XCTAssertEqual(viewModel.searchResults.map(\.span.id), [old.span.id, recent.span.id])
+
+        viewModel.searchTimeScope = .fiveMinutes
+        viewModel.performSearch(immediately: true)
+        try await waitUntil { !viewModel.isSearchLoading }
+        XCTAssertEqual(viewModel.searchResults.map(\.span.id), [recent.span.id])
+    }
+
+    /// A reversed (rollback) span is judged by its normalised end, so a recent
+    /// start keeps it inside a five-minute search scope.
+    func testRollbackSpanUsesNormalisedEndForSearchCutoff() async throws {
+        let semanticNow = Date(timeIntervalSinceReferenceDate: 10_000)
+        let rollback = makeEntry(
+            start: semanticNow.addingTimeInterval(-10),
+            end: semanticNow.addingTimeInterval(-3_600)
+        )
+        let image = try XCTUnwrap(TestImageFactory.makeSolidImage(width: 8, height: 8, level: 92))
+        let repository = OverlayTimelineRepositoryProbe(entries: [rollback], image: image)
+        let buffer = try await makeBuffer(repository: repository)
+        await buffer.textCache.setText(
+            "rollback needle",
+            for: rollback.frame.id,
+            timestamp: timelineSpanBounds(for: rollback).end
+        )
+        let viewModel = makeViewModel(
+            entries: [rollback],
+            buffer: buffer,
+            referenceDate: semanticNow
+        )
+
+        viewModel.isSearching = true
+        viewModel.searchTimeScope = .fiveMinutes
+        viewModel.searchQuery = "needle"
+        viewModel.performSearch(immediately: true)
+        try await waitUntil { !viewModel.isSearchLoading }
+
+        XCTAssertEqual(viewModel.searchResults.map(\.span.id), [rollback.span.id])
+    }
+
     /// Search must filter the immutable leased snapshot after collecting all
     /// matching IDs. More than the former 10,000-row global cap from another
     /// display cannot hide the selected display's matching timeline spans.
@@ -1596,13 +1670,6 @@ private actor OverlayTimelineRepositoryProbe: FrameRepository {
 
     func cleanupOrphans() {}
 
-    func orderedFrames() -> [StoredFrame] {
-        var seen: Set<UUID> = []
-        return entries.compactMap { entry in
-            seen.insert(entry.frame.id).inserted ? entry.frame : nil
-        }
-    }
-
     func orderedTimeline() -> [TimelineEntry] {
         entries
     }
@@ -1656,7 +1723,14 @@ private actor OverlayTimelineRepositoryProbe: FrameRepository {
             frame: frame
         )
         entries.append(entry)
-        return FrameRepositorySaveResult(mutation: .inserted(entry), outcome: .volatileFrame)
+        var effects = FrameRepositoryEffects.empty
+        effects.timelineUpserts = [entry]
+        effects.persistenceEvents = [.volatileAdmission]
+        return FrameRepositorySaveResult(
+            mutation: .inserted(entry),
+            outcome: .volatileFrame,
+            effects: effects
+        )
     }
 
     func loadFullImage(id: UUID) -> CGImage {

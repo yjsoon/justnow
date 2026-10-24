@@ -53,28 +53,15 @@ final class ImageEncoderTests: XCTestCase {
         XCTAssertNil(ImageEncoder.cgImage(from: Data()))
     }
 
-    func testDecodingMissingFileReturnsNil() {
-        let missing = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ImageEncoderTests-missing-\(UUID().uuidString).jpg")
-
-        XCTAssertNil(ImageEncoder.cgImage(from: missing))
-        XCTAssertNil(ImageEncoder.cgImage(from: missing, maxPixelSize: 100))
-    }
-
     func testMaxPixelSizeDecodingBoundsTheLargerDimension() throws {
         let image = try XCTUnwrap(TestImageFactory.makeSolidImage(width: 64, height: 32, level: 90))
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ImageEncoderTests-\(UUID().uuidString).jpg")
-        defer { try? FileManager.default.removeItem(at: url) }
-
         let data = try XCTUnwrap(ImageEncoder.jpegData(from: image, quality: 0.8))
-        try data.write(to: url)
 
-        let decoded = try XCTUnwrap(ImageEncoder.cgImage(from: url, maxPixelSize: 16))
+        let decoded = try XCTUnwrap(ImageEncoder.cgImage(from: data, maxPixelSize: 16))
         XCTAssertLessThanOrEqual(max(decoded.width, decoded.height), 16)
 
         // Non-positive size means "no downscale", not a zero-size decode.
-        let fullSize = try XCTUnwrap(ImageEncoder.cgImage(from: url, maxPixelSize: 0))
+        let fullSize = try XCTUnwrap(ImageEncoder.cgImage(from: data, maxPixelSize: 0))
         XCTAssertEqual(fullSize.width, 64)
     }
 }

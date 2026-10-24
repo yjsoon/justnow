@@ -72,6 +72,14 @@ To help debug capture issues, JustNow keeps a small local diagnostics log at `~/
 
 The only network requests JustNow makes are update checks and downloads via Sparkle: the feed at `justnow.tk.sg/appcast.xml` and update archives from GitHub Releases. You can turn off automatic checks in **Settings → General → Software Update**.
 
+## FAQ
+
+### Why is there a purple privacy indicator in the menu bar?
+
+macOS may display a privacy/capture indicator at the top right while JustNow captures screenshots for your rewind history. JustNow captures still images, not audio. Hiding JustNow's menu bar icon does not hide the system indicator, and macOS provides no documented, supported option for JustNow to hide it while capturing.
+
+To stop capture, choose **Pause Recording** from JustNow's menu (default shortcut: `⌘⌥⇧J`), or quit JustNow. Pausing also pauses new rewind history; macOS controls the indicator's appearance and timing.
+
 ## Building From Source
 
 See [Local Development](Docs/local-development.md) for focused tests, signing checks, safe replacement, and Screen Recording troubleshooting.

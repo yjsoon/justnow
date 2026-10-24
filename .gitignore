@@ -59,6 +59,6 @@ skills-lock.json
 
 AppIcon.icns
 
-# Python bytecode
+# Python
 __pycache__/
 *.pyc

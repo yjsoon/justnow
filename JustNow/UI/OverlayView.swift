@@ -233,7 +233,7 @@ struct ContentAreaView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if viewModel.isSearchAvailable && viewModel.isSearching {
+            if viewModel.isSearching {
                 SearchBarView(viewModel: viewModel, focus: $focusedControl)
                     .padding(.top, OverlayChromeMetrics.searchBarTopPadding)
                     .padding(.horizontal, 200)
@@ -242,7 +242,7 @@ struct ContentAreaView: View {
 
             centerContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.top, viewModel.isSearchAvailable && viewModel.isSearching ? 20 : 40)
+                .padding(.top, viewModel.isSearching ? 20 : 40)
                 .offset(y: OverlayChromeMetrics.contentVerticalShift)
 
             TimelineSlider(viewModel: viewModel, focus: $focusedControl)
@@ -253,7 +253,7 @@ struct ContentAreaView: View {
             TimelineFooter(viewModel: viewModel, textGrabBannerState: textGrabBannerState)
                 .padding(.bottom, OverlayChromeMetrics.timelineFooterBottomPadding)
         }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: viewModel.isSearchAvailable && viewModel.isSearching)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: viewModel.isSearching)
         .task(id: viewModel.selectedFramePrefetchKey) {
             viewModel.prefetchImagesNearSelection()
         }
@@ -319,11 +319,7 @@ struct ContentAreaView: View {
                 Text("No frames in this rewind window")
                     .font(.headline)
                     .foregroundStyle(.white.opacity(0.6))
-                Text(
-                    viewModel.isSearchAvailable
-                        ? "Search can still look through all indexed history."
-                        : "Increase rewind history in Settings to keep older frames visible here."
-                )
+                Text("Search can still look through all indexed history.")
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.45))
             }
@@ -350,25 +346,17 @@ struct ContentAreaView: View {
 private struct OverlayTopBar: View {
     var viewModel: OverlayViewModel
 
-    @ViewBuilder
     private var searchControl: some View {
-        if viewModel.isSearchAvailable {
-            OverlayChromeButton(
-                systemImage: "magnifyingglass",
-                accessibilityLabel: viewModel.isSearching ? "Close search" : "Open search",
-                accessibilityHint: viewModel.isSearching
-                    ? "Closes search and returns to the full timeline."
-                    : "Opens the search field for indexed screen text.",
-                toolTip: viewModel.isSearching ? "Close search (Escape)" : "Search (/)",
-                isSelected: viewModel.isSearching,
-                action: viewModel.toggleSearch
-            )
-        } else {
-            Color.clear
-                .frame(width: OverlayChromeMetrics.controlSize, height: OverlayChromeMetrics.controlSize)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-        }
+        OverlayChromeButton(
+            systemImage: "magnifyingglass",
+            accessibilityLabel: viewModel.isSearching ? "Close search" : "Open search",
+            accessibilityHint: viewModel.isSearching
+                ? "Closes search and returns to the full timeline."
+                : "Opens the search field for indexed screen text.",
+            toolTip: viewModel.isSearching ? "Close search (Escape)" : "Search (/)",
+            isSelected: viewModel.isSearching,
+            action: viewModel.toggleSearch
+        )
     }
 
     var body: some View {
@@ -527,10 +515,6 @@ private struct CompatGlassEffectContainer<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        #if LEGACY_MACOS_UI
-        content()
-            .padding(spacing)
-        #else
         if #available(macOS 26.0, *) {
             GlassEffectContainer(spacing: spacing) {
                 content()
@@ -539,19 +523,12 @@ private struct CompatGlassEffectContainer<Content: View>: View {
             content()
                 .padding(spacing)
         }
-        #endif
     }
 }
 
 private extension View {
     @ViewBuilder
     func compatGlassEffect(cornerRadius: CGFloat) -> some View {
-        #if LEGACY_MACOS_UI
-        self.background(
-            RoundedRectangle(cornerRadius: cornerRadius)
-                .fill(.ultraThinMaterial)
-        )
-        #else
         if #available(macOS 26.0, *) {
             self.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
         } else {
@@ -560,6 +537,5 @@ private extension View {
                     .fill(.ultraThinMaterial)
             )
         }
-        #endif
     }
 }

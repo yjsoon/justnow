@@ -10,15 +10,10 @@ final class PermisoAssistant {
     private var overlayController: PermisoOverlayWindowController?
     private var trackingTimer: Timer?
     private var activationObserver: NSObjectProtocol?
-    private var activePanel: PermisoPanel?
     private var pendingSourceFrameInScreen: CGRect?
     private var didPresentCurrentOverlay = false
 
     init() {}
-
-    var isPresenting: Bool {
-        overlayController?.window?.isVisible == true
-    }
 
     func present(
         panel: PermisoPanel,
@@ -26,7 +21,6 @@ final class PermisoAssistant {
     ) {
         dismiss()
 
-        activePanel = panel
         pendingSourceFrameInScreen = sourceFrameInScreen
         didPresentCurrentOverlay = false
         overlayController = PermisoOverlayWindowController(hostApp: .current(), panel: panel) { [weak self] in
@@ -44,7 +38,6 @@ final class PermisoAssistant {
         }
         overlayController?.close()
         overlayController = nil
-        activePanel = nil
         pendingSourceFrameInScreen = nil
         didPresentCurrentOverlay = false
     }
