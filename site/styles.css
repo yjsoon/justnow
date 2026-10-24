@@ -542,6 +542,10 @@ code {
   padding-left: 1.2rem;
 }
 
+.policy code {
+  overflow-wrap: anywhere;
+}
+
 .policy strong {
   color: var(--text);
   font-weight: 600;

@@ -54,7 +54,8 @@
           JustNow only captures your screen after you grant it Screen Recording
           permission in macOS. From then on, while JustNow is running and
           recording is not paused, it takes a still image of each connected
-          display at the capture interval you choose in Settings.
+          display periodically. You choose the capture interval in Settings;
+          JustNow may increase it when you are idle or to reduce energy use.
         </p>
         <p>
           Those images contain whatever was visible on screen. That can include
@@ -128,8 +129,9 @@
           captured frames using Apple&rsquo;s on-device Vision and VisionKit
           frameworks. The recognised text, and for some frames the position of
           matching words, is stored in a local search database in the same storage folder. Neither the images
-          nor the text are sent anywhere. Recognised text is deleted when its
-          frame is deleted.
+          nor the text are sent anywhere. Text in the current search database
+          is removed when its frame is deleted, with the legacy-file exception
+          below.
         </p>
 
         <h2 id="delete">Deleting your history</h2>
@@ -142,6 +144,16 @@
           <strong>Open Storage Folder</strong> in the same section shows you the
           files. You can also quit JustNow and delete
           <code>~/Library/Application&nbsp;Support/JustNow/</code> yourself.
+        </p>
+        <p>
+          If you used an early version of JustNow, a legacy
+          <code>text_cache.json</code> file containing recognised text may
+          remain in the storage folder. Automatic retention and
+          <strong>Clear All History</strong> do not delete this file. Its text
+          can be imported again on a later launch if the search database is
+          empty. To remove this older copy, quit JustNow and delete
+          <code>text_cache.json</code> from the storage folder, or delete the
+          whole storage folder.
         </p>
         <p>
           Deletion removes JustNow&rsquo;s local history files, but it is not
@@ -161,16 +173,23 @@
         </p>
         <ul>
           <li>
-            Dragging over text in a rewind frame copies the recognised text to
-            your clipboard.
+            The text-grab drag action copies recognised text from a rewind
+            frame to your clipboard.
           </li>
           <li>
-            Saving a frame or region (<kbd>&#8984;S</kbd>, or holding
-            <kbd>&#8984;</kbd> while dragging) writes a JPEG to the folder you
-            choose in Settings (your macOS screenshot location by default),
-            copies it to the clipboard, or both.
+            Saving a frame or region (<kbd>&#8984;S</kbd>, the screenshot drag
+            action, or the overlay&rsquo;s screenshot menu items) writes a JPEG
+            to the folder you choose in Settings (your macOS screenshot
+            location by default), copies it to the clipboard, or both.
           </li>
         </ul>
+        <p>
+          By default, dragging grabs text and holding <kbd>&#8984;</kbd> while
+          dragging selects a screenshot region. You can change the
+          <strong>Default drag action</strong> in
+          <strong>Settings &rarr; Rewind</strong>; holding <kbd>&#8984;</kbd>
+          always selects the other action.
+        </p>
         <p>
           Once something is on your clipboard or in a folder, it is handled by
           macOS and any other apps you use. For example, Universal Clipboard
