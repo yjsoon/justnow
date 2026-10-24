@@ -52,16 +52,4 @@ final class ImageEncoderTests: XCTestCase {
         XCTAssertNil(ImageEncoder.cgImage(from: Data("definitely not a JPEG".utf8)))
         XCTAssertNil(ImageEncoder.cgImage(from: Data()))
     }
-
-    func testMaxPixelSizeDecodingBoundsTheLargerDimension() throws {
-        let image = try XCTUnwrap(TestImageFactory.makeSolidImage(width: 64, height: 32, level: 90))
-        let data = try XCTUnwrap(ImageEncoder.jpegData(from: image, quality: 0.8))
-
-        let decoded = try XCTUnwrap(ImageEncoder.cgImage(from: data, maxPixelSize: 16))
-        XCTAssertLessThanOrEqual(max(decoded.width, decoded.height), 16)
-
-        // Non-positive size means "no downscale", not a zero-size decode.
-        let fullSize = try XCTUnwrap(ImageEncoder.cgImage(from: data, maxPixelSize: 0))
-        XCTAssertEqual(fullSize.width, 64)
-    }
 }

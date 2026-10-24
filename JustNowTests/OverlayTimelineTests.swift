@@ -1741,10 +1741,6 @@ private actor OverlayTimelineRepositoryProbe: FrameRepository {
         image
     }
 
-    func loadSearchIndexImage(id: UUID, maxPixelSize: Int) -> CGImage {
-        image
-    }
-
     func exportFrame(id: UUID, timestamp: Date) async -> URL {
         operationEventValues.append(.exportStarted)
         if shouldSuspendNextExport {

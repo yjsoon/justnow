@@ -28,15 +28,13 @@ struct OCRIndexingPolicy: Sendable, Equatable {
     let maxQueueDepth: Int
     let maxFrameAge: TimeInterval
     let concurrentJobs: Int
-    let searchImageMaxPixelSize: Int
 
     static let disabled = OCRIndexingPolicy(
         isEnabled: false,
         minimumInterval: 0,
         maxQueueDepth: 0,
         maxFrameAge: 0,
-        concurrentJobs: 1,
-        searchImageMaxPixelSize: 0
+        concurrentJobs: 1
     )
 }
 
@@ -1849,10 +1847,7 @@ class FrameBuffer {
 
             let framesToIndex = dequeuedFrames.filter(shouldContinueOCR(for:))
             ocrIndexingFramesByTask[taskGeneration] = framesToIndex.count
-            let indexedFrames = await ocrIndexingWorker.index(
-                frames: framesToIndex,
-                searchImageMaxPixelSize: policy.searchImageMaxPixelSize
-            )
+            let indexedFrames = await ocrIndexingWorker.index(frames: framesToIndex)
 
             for indexedFrame in indexedFrames {
                 guard !Task.isCancelled else {

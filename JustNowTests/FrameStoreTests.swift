@@ -1131,15 +1131,10 @@ final class FrameStoreTests: XCTestCase {
         try FileManager.default.removeItem(at: fullURL)
         try FileManager.default.createSymbolicLink(at: fullURL, withDestinationURL: externalURL)
 
-        for operation in [
-            { try await store.loadFullImage(id: metadata.id) },
-            { try await store.loadSearchIndexImage(id: metadata.id, maxPixelSize: 8) }
-        ] {
-            do {
-                _ = try await operation()
-                XCTFail("Expected fileNotFound for a symlinked frame payload")
-            } catch FrameStoreError.fileNotFound {
-            }
+        do {
+            _ = try await store.loadFullImage(id: metadata.id)
+            XCTFail("Expected fileNotFound for a symlinked frame payload")
+        } catch FrameStoreError.fileNotFound {
         }
         do {
             _ = try await store.copyFrameToScreenshotsLocation(

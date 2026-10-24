@@ -611,18 +611,6 @@ actor FrameStore {
         return data
     }
 
-    func loadSearchIndexImage(id: UUID, maxPixelSize: Int) throws -> CGImage {
-        let metadata = try requiredMetadata(for: id)
-        let path = framesURL.appendingPathComponent(metadata.filename)
-        guard let data = try? FrameStoreFile.readRegularFile(at: path) else {
-            throw FrameStoreError.fileNotFound(id)
-        }
-        guard let image = ImageEncoder.cgImage(from: data, maxPixelSize: maxPixelSize) else {
-            throw FrameStoreError.imageDecodingFailed
-        }
-        return image
-    }
-
     /// Copy the frame's stored JPEG to the user's chosen screenshots location,
     /// preserving original pixel dimensions and encoder quality.
     func copyFrameToScreenshotsLocation(id: UUID, timestamp: Date) throws -> URL {

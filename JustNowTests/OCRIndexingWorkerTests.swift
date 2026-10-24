@@ -11,9 +11,9 @@ final class OCRIndexingWorkerTests: XCTestCase {
                 hasCachedText: { frameID in
                     await probe.hasCachedText(frameID)
                 },
-                indexFrame: { frame, maxPixelSize in
+                indexFrame: { frame in
                     let frameID = await MainActor.run { frame.id }
-                    let shouldIndex = await probe.recordIndexAttempt(frameID: frameID, maxPixelSize: maxPixelSize)
+                    let shouldIndex = await probe.recordIndexAttempt(frameID: frameID)
                     guard shouldIndex else { return nil }
 
                     return OCRIndexedFrame(
@@ -26,47 +26,11 @@ final class OCRIndexingWorkerTests: XCTestCase {
             )
         )
 
-        let indexedFrames = await worker.index(
-            frames: [cachedFrame, uncachedFrame],
-            searchImageMaxPixelSize: 1440
-        )
+        let indexedFrames = await worker.index(frames: [cachedFrame, uncachedFrame])
 
         XCTAssertEqual(indexedFrames.map(\.frame.id), [uncachedFrame.id])
         let indexedFrameIDs = await probe.indexedFrameIDs()
         XCTAssertEqual(indexedFrameIDs, [uncachedFrame.id])
-    }
-
-    func testIndexPassesConfiguredSearchImageSizeToDependencies() async {
-        let frame = makeFrame(secondsAgo: 1)
-        let probe = OCRIndexingWorkerProbe(cachedFrameIDs: [])
-        let worker = OCRIndexingWorker(
-            dependencies: OCRIndexingWorkerDependencies(
-                hasCachedText: { frameID in
-                    await probe.hasCachedText(frameID)
-                },
-                indexFrame: { frame, maxPixelSize in
-                    let frameID = await MainActor.run { frame.id }
-                    let shouldIndex = await probe.recordIndexAttempt(frameID: frameID, maxPixelSize: maxPixelSize)
-                    guard shouldIndex else { return nil }
-
-                    return OCRIndexedFrame(
-                        frame: frame,
-                        text: "OCR \(frameID.uuidString)",
-                        duration: 0.05,
-                        indexLag: 0.5
-                    )
-                }
-            )
-        )
-
-        let indexedFrames = await worker.index(
-            frames: [frame],
-            searchImageMaxPixelSize: 960
-        )
-
-        XCTAssertEqual(indexedFrames.count, 1)
-        let maxPixelSizes = await probe.maxPixelSizes()
-        XCTAssertEqual(maxPixelSizes, [960])
     }
 
     func testIndexSkipsFramesWhoseDependencyReturnsNil() async {
@@ -78,9 +42,9 @@ final class OCRIndexingWorkerTests: XCTestCase {
                 hasCachedText: { frameID in
                     await probe.hasCachedText(frameID)
                 },
-                indexFrame: { frame, maxPixelSize in
+                indexFrame: { frame in
                     let frameID = await MainActor.run { frame.id }
-                    let shouldIndex = await probe.recordIndexAttempt(frameID: frameID, maxPixelSize: maxPixelSize)
+                    let shouldIndex = await probe.recordIndexAttempt(frameID: frameID)
                     guard shouldIndex else { return nil }
 
                     return OCRIndexedFrame(
@@ -93,10 +57,7 @@ final class OCRIndexingWorkerTests: XCTestCase {
             )
         )
 
-        let indexedFrames = await worker.index(
-            frames: [failedFrame, successfulFrame],
-            searchImageMaxPixelSize: 0
-        )
+        let indexedFrames = await worker.index(frames: [failedFrame, successfulFrame])
 
         XCTAssertEqual(indexedFrames.map(\.frame.id), [successfulFrame.id])
     }
@@ -116,7 +77,6 @@ private actor OCRIndexingWorkerProbe {
     private let cachedFrameIDs: Set<UUID>
     private let failingFrameIDs: Set<UUID>
     private var indexedFrameIDsStorage: [UUID] = []
-    private var maxPixelSizesStorage: [Int] = []
 
     init(cachedFrameIDs: Set<UUID>, failingFrameIDs: Set<UUID> = []) {
         self.cachedFrameIDs = cachedFrameIDs
@@ -127,8 +87,7 @@ private actor OCRIndexingWorkerProbe {
         cachedFrameIDs.contains(frameID)
     }
 
-    func recordIndexAttempt(frameID: UUID, maxPixelSize: Int) -> Bool {
-        maxPixelSizesStorage.append(maxPixelSize)
+    func recordIndexAttempt(frameID: UUID) -> Bool {
         guard !failingFrameIDs.contains(frameID) else { return false }
 
         indexedFrameIDsStorage.append(frameID)
@@ -137,9 +96,5 @@ private actor OCRIndexingWorkerProbe {
 
     func indexedFrameIDs() -> [UUID] {
         indexedFrameIDsStorage
-    }
-
-    func maxPixelSizes() -> [Int] {
-        maxPixelSizesStorage
     }
 }

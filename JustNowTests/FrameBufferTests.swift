@@ -524,7 +524,7 @@ final class FrameBufferTests: XCTestCase {
         let worker = OCRIndexingWorker(
             dependencies: OCRIndexingWorkerDependencies(
                 hasCachedText: { _ in false },
-                indexFrame: { frame, _ in
+                indexFrame: { frame in
                     await gate.waitForRelease()
                     return OCRIndexedFrame(frame: frame, text: "indexed", duration: 0, indexLag: 0)
                 }
@@ -545,8 +545,7 @@ final class FrameBufferTests: XCTestCase {
             minimumInterval: 0,
             maxQueueDepth: 2,
             maxFrameAge: 60,
-            concurrentJobs: 1,
-            searchImageMaxPixelSize: 320
+            concurrentJobs: 1
         )
         buffer.updateOCRIndexingPolicy(policy)
         await gate.waitUntilStarted(count: 1)
@@ -865,10 +864,9 @@ final class FrameBufferTests: XCTestCase {
             frameRepository: repository,
             textCache: buffer.textCache
         )
-        _ = await ocrDependencies.indexFrame(second, 320)
-        let searchImageRequests = await repository.searchImageRequests()
-        XCTAssertEqual(searchImageRequests.map(\.id), [second.id])
-        XCTAssertEqual(searchImageRequests.map(\.maxPixelSize), [320])
+        _ = await ocrDependencies.indexFrame(second)
+        let ocrImageRequests = await repository.fullImageRequests()
+        XCTAssertEqual(ocrImageRequests, [second.id, second.id])
     }
 
     func testCaptureEncodesOnceOffMainAndReportsRepositoryOutcomeExactlyOnce() async throws {
@@ -2891,7 +2889,6 @@ private actor FrameRepositoryProbe: FrameRepository {
     private let coalesceExactJPEG: Bool
     private var jpegByFrameID: [UUID: Data] = [:]
     private var fullImageRequestIDs: [UUID] = []
-    private var searchImageRequestValues: [(id: UUID, maxPixelSize: Int)] = []
     private var exportRequestValues: [(id: UUID, timestamp: Date)] = []
     private var croppedExportTimestampValues: [Date] = []
     private var saveRequestValues: [SaveRequest] = []
@@ -3146,11 +3143,6 @@ private actor FrameRepositoryProbe: FrameRepository {
         image
     }
 
-    func loadSearchIndexImage(id: UUID, maxPixelSize: Int) -> CGImage {
-        searchImageRequestValues.append((id: id, maxPixelSize: maxPixelSize))
-        return image
-    }
-
     func exportFrame(id: UUID, timestamp: Date) -> URL {
         exportRequestValues.append((id: id, timestamp: timestamp))
         return exportedURL
@@ -3248,10 +3240,6 @@ private actor FrameRepositoryProbe: FrameRepository {
 
     func croppedExportTimestamps() -> [Date] {
         croppedExportTimestampValues
-    }
-
-    func searchImageRequests() -> [(id: UUID, maxPixelSize: Int)] {
-        searchImageRequestValues
     }
 
     func saveRequests() -> [SaveRequest] {

@@ -328,7 +328,6 @@ nonisolated protocol FrameRepository: Sendable {
 
     func loadFullImage(id: UUID) async throws -> CGImage
     func loadThumbnail(id: UUID) async -> CGImage?
-    func loadSearchIndexImage(id: UUID, maxPixelSize: Int) async throws -> CGImage
     func exportFrame(id: UUID, timestamp: Date) async throws -> URL
     func exportCroppedImage(_ image: CGImage, timestamp: Date) async throws -> URL
     func acquirePayloadLease(for physicalFrameIDs: Set<UUID>) async -> any FrameRepositoryPayloadLease
@@ -523,10 +522,6 @@ nonisolated final class DiskFrameRepository: HybridDurableRepository, Sendable {
 
     func loadThumbnail(id: UUID) async -> CGImage? {
         await frameStore.loadThumbnail(id: id)
-    }
-
-    func loadSearchIndexImage(id: UUID, maxPixelSize: Int) async throws -> CGImage {
-        try await frameStore.loadSearchIndexImage(id: id, maxPixelSize: maxPixelSize)
     }
 
     func exportFrame(id: UUID, timestamp: Date) async throws -> URL {
