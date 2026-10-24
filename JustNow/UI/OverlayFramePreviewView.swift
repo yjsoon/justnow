@@ -36,7 +36,7 @@ struct FramePreviewView: View {
     private let loadIndicatorDelay: Duration = .milliseconds(140)
 
     private var shouldShowSearchHighlights: Bool {
-        viewModel.isSearchAvailable && viewModel.isSearching && viewModel.hasSearchQuery
+        viewModel.isSearching && viewModel.hasSearchQuery
     }
 
     private var isShowingCurrentFrame: Bool {

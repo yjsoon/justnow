@@ -16,7 +16,6 @@ struct KeyboardShortcutRecorder: View {
     var onRecordingChanged: (UUID, Bool) -> Void = { _, _ in }
 
     @State private var isRecording = false
-    @FocusState private var isFocused: Bool
 
     var body: some View {
         HStack(spacing: 4) {

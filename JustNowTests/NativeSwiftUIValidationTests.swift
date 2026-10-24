@@ -38,9 +38,10 @@ final class NativeSwiftUIValidationTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
         let store = try FrameStore(directory: directory)
         let now = Date()
+        _ = try await store.beginCaptureSession(at: now.addingTimeInterval(-40))
         for index in 0..<4 {
             let image = try XCTUnwrap(TestImageFactory.makeSolidImage(width: 16, height: 16, level: 100))
-            _ = try await store.saveFrame(image, timestamp: now.addingTimeInterval(Double(index * 10 - 40)),
+            _ = try await store.recordTestCapture(image, timestamp: now.addingTimeInterval(Double(index * 10 - 40)),
                 hash: UInt64(index + 1), displayID: nil, displayName: "Synthetic display")
         }
         let buffer = try await FrameBuffer(retentionPolicy: .default24Hours, storageDirectory: directory,
@@ -148,9 +149,11 @@ final class NativeSwiftUIValidationTests: XCTestCase {
     func testNativeOverlayEditorAndOtherWindowEvents() async throws {
         let directory = try temporaryDirectory()
         let store = try FrameStore(directory: directory)
+        let now = Date()
+        _ = try await store.beginCaptureSession(at: now.addingTimeInterval(-100))
         for index in 0..<4 {
             let image = try XCTUnwrap(TestImageFactory.makeSolidImage(width: 16, height: 16, level: UInt8(60 + index * 40)))
-            _ = try await store.saveFrame(image, timestamp: Date().addingTimeInterval(Double(index * 20 - 100)),
+            _ = try await store.recordTestCapture(image, timestamp: now.addingTimeInterval(Double(index * 20 - 100)),
                 hash: UInt64(index + 1), displayID: nil, displayName: "Synthetic display")
         }
         let buffer = try await FrameBuffer(retentionPolicy: .default24Hours, storageDirectory: directory,

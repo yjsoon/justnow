@@ -161,35 +161,26 @@ final class CapturePersistenceInstrumentationTests: XCTestCase {
         XCTAssertEqual(snapshot.logicalDurableJPEGEventBytes, 4_097)
     }
 
-    func testRepositoryOutcomesExposeEveryStorageDispositionAndWriteEffect() {
+    func testRepositoryEffectsExposeEveryStorageDispositionAndWriteEffect() {
         let instrumentation = CapturePersistenceInstrumentation()
         let jpeg = Data([1, 2, 3, 4])
+        var effects = FrameRepositoryEffects.empty
+        effects.persistenceEvents = [
+            .durableAnchor(
+                reason: .allDisk,
+                wroteDurableJPEG: true,
+                jpegData: jpeg,
+                frameID: UUID(),
+                displayID: nil,
+                metadataByteCount: 21
+            ),
+            .volatileAdmission,
+            .exactDuplicate,
+            .spanCheckpoint(frameID: UUID(), metadataByteCount: 8),
+            .pressureDrop
+        ]
 
-        instrumentation.recordRepositorySaveOutcome(
-            .durableFrame(metadataByteCount: 21),
-            jpegData: jpeg,
-            displayID: nil
-        )
-        instrumentation.recordRepositorySaveOutcome(
-            .volatileFrame,
-            jpegData: jpeg,
-            displayID: nil
-        )
-        instrumentation.recordRepositorySaveOutcome(
-            .duplicateFrame,
-            jpegData: jpeg,
-            displayID: nil
-        )
-        instrumentation.recordRepositorySaveOutcome(
-            .spanCheckpoint(metadataByteCount: 8),
-            jpegData: jpeg,
-            displayID: nil
-        )
-        instrumentation.recordRepositorySaveOutcome(
-            .pressureDrop,
-            jpegData: jpeg,
-            displayID: nil
-        )
+        instrumentation.recordRepositoryEffects(effects)
 
         let snapshot = instrumentation.currentSnapshot()
         XCTAssertEqual(snapshot.durableRepositorySaves, 1)
@@ -202,6 +193,7 @@ final class CapturePersistenceInstrumentationTests: XCTestCase {
         XCTAssertEqual(snapshot.metadataTransactions, 2)
         XCTAssertEqual(snapshot.logicalMetadataEventBytes, 29)
         XCTAssertEqual(snapshot.largestMetadataWriteBytes, 21)
+        XCTAssertEqual(snapshot.repositoryExactDuplicateFrames, 1)
     }
 
     func testOversizedJPEGsAreExplicitlySkippedFromExactComparison() {

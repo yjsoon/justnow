@@ -21,8 +21,9 @@ final class FrameStoreTests: XCTestCase {
     func testSaveAndLoadRoundTrip() async throws {
         let store = try FrameStore(directory: directory)
         let image = try makeImage()
+        _ = try await store.beginCaptureSession(at: Date(timeIntervalSince1970: 1_000))
 
-        let metadata = try await store.saveFrame(
+        let metadata = try await store.recordTestCapture(
             image,
             timestamp: Date(timeIntervalSince1970: 1_000),
             hash: 42,
@@ -46,16 +47,18 @@ final class FrameStoreTests: XCTestCase {
         let store = try FrameStore(directory: directory)
         let firstDisplayID = UUID()
         let secondDisplayID = UUID()
-        let first = try await store.saveFrame(
-            makeImage(), timestamp: Date(), hash: 1,
+        let now = Date()
+        _ = try await store.beginCaptureSession(at: now)
+        let first = try await store.recordTestCapture(
+            makeImage(), timestamp: now, hash: 1,
             displayID: firstDisplayID, displayName: "Built-in Display"
         )
-        let second = try await store.saveFrame(
-            makeImage(), timestamp: Date(), hash: 2,
+        let second = try await store.recordTestCapture(
+            makeImage(), timestamp: now, hash: 2,
             displayID: secondDisplayID, displayName: "External Display"
         )
-        let legacy = try await store.saveFrame(
-            makeImage(), timestamp: Date(), hash: 3,
+        let legacy = try await store.recordTestCapture(
+            makeImage(), timestamp: now, hash: 3,
             displayID: nil, displayName: nil
         )
 
@@ -163,9 +166,12 @@ final class FrameStoreTests: XCTestCase {
         let displayID = UUID()
         let baseDate = Date(timeIntervalSince1970: 1_000)
         var expectedSampleBytes: Int64 = 0
+        _ = try await store.beginCaptureSession(at: baseDate)
 
+        // The oldest frame is recorded last, so sampling must order by
+        // timestamp rather than by insertion order.
         for offset in 1...50 {
-            let metadata = try await store.saveFrame(
+            let metadata = try await store.recordTestCapture(
                 makeImage(),
                 timestamp: baseDate.addingTimeInterval(TimeInterval(offset)),
                 hash: UInt64(offset),
@@ -174,7 +180,7 @@ final class FrameStoreTests: XCTestCase {
             )
             expectedSampleBytes += metadata.fileSize
         }
-        _ = try await store.saveFrame(
+        _ = try await store.recordTestCapture(
             makeImage(width: 400, height: 300),
             timestamp: baseDate,
             hash: 51,
@@ -205,16 +211,29 @@ final class FrameStoreTests: XCTestCase {
 
     func testFailedMetadataInsertRollsBackNewJPEG() async throws {
         let store = try FrameStore(directory: directory)
+        let now = Date()
+        _ = try await store.beginCaptureSession(at: now)
         let databaseURL = directory.appendingPathComponent("frames.sqlite")
-        try executeSQLite(databaseURL: databaseURL, sql: "DROP TABLE frames;")
+        // Fail the span insert, which runs after the JPEG is written and after
+        // the frame row is inserted in the same transaction.
+        try executeSQLite(
+            databaseURL: databaseURL,
+            sql: "CREATE TRIGGER test_fail_span_insert BEFORE INSERT ON frame_spans "
+                + "BEGIN SELECT RAISE(ABORT, 'synthetic span insert failure'); END;"
+        )
 
         do {
-            _ = try await store.saveFrame(
-                makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+            _ = try await store.recordTestCapture(
+                makeImage(), timestamp: now, hash: 1, displayID: nil, displayName: nil
             )
             XCTFail("Expected database write failure")
-        } catch FrameStoreError.database {
+        } catch FrameStoreError.database(let message) {
+            // Only the post-write span insert may fail; an earlier read
+            // failure would skip the rollback this test is about.
+            XCTAssertTrue(message.contains("synthetic span insert failure"), message)
         }
+
+        XCTAssertEqual(try sqliteInt(databaseURL: databaseURL, sql: "SELECT COUNT(*) FROM frames;"), 0)
 
         let frameFiles = try FileManager.default.contentsOfDirectory(
             at: directory.appendingPathComponent("frames", isDirectory: true),
@@ -223,38 +242,12 @@ final class FrameStoreTests: XCTestCase {
         XCTAssertTrue(frameFiles.isEmpty)
     }
 
-    func testPruneRemovesMetadataAndFiles() async throws {
-        let store = try FrameStore(directory: directory)
-        let keep = try await store.saveFrame(
-            makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
-        )
-        let drop = try await store.saveFrame(
-            makeImage(), timestamp: Date(), hash: 2, displayID: nil, displayName: nil
-        )
-
-        try await store.pruneFrames(ids: [drop.id])
-
-        let remaining = await store.getAllMetadata()
-        XCTAssertEqual(remaining.map(\.id), [keep.id])
-
-        let framesDirectory = directory.appendingPathComponent("frames", isDirectory: true)
-        XCTAssertFalse(
-            FileManager.default.fileExists(
-                atPath: framesDirectory.appendingPathComponent(drop.filename).path
-            )
-        )
-        XCTAssertTrue(
-            FileManager.default.fileExists(
-                atPath: framesDirectory.appendingPathComponent(keep.filename).path
-            )
-        )
-    }
-
     func testSQLiteMetadataPersistsAcrossReinitialisation() async throws {
         let saved: FrameMetadata
         do {
             let store = try FrameStore(directory: directory)
-            saved = try await store.saveFrame(
+            _ = try await store.beginCaptureSession(at: Date(timeIntervalSince1970: 2_000))
+            saved = try await store.recordTestCapture(
                 makeImage(),
                 timestamp: Date(timeIntervalSince1970: 2_000),
                 hash: 7,
@@ -279,7 +272,7 @@ final class FrameStoreTests: XCTestCase {
         do {
             let store = try FrameStore(directory: directory)
             session = try await store.beginCaptureSession(at: Date(timeIntervalSince1970: 2_000))
-            saved = try await store.saveFrame(
+            saved = try await store.recordTestCapture(
                 makeImage(), timestamp: session.startedAt, hash: 7,
                 displayID: nil, displayName: nil
             )
@@ -321,7 +314,8 @@ final class FrameStoreTests: XCTestCase {
         let saved: FrameMetadata
         do {
             let store = try FrameStore(directory: directory)
-            saved = try await store.saveFrame(
+            _ = try await store.beginCaptureSession(at: Date(timeIntervalSince1970: 2_000))
+            saved = try await store.recordTestCapture(
                 makeImage(), timestamp: Date(timeIntervalSince1970: 2_000), hash: 7,
                 displayID: nil, displayName: nil
             )
@@ -365,12 +359,12 @@ final class FrameStoreTests: XCTestCase {
     func testPruningFinalSpanRemovesOnlyUnreferencedClosedSessions() async throws {
         let store = try FrameStore(directory: directory)
         let expired = try await store.beginCaptureSession(at: Date(timeIntervalSince1970: 1_000))
-        let expiredFrame = try await store.saveFrame(
+        let expiredFrame = try await store.recordTestCapture(
             makeImage(), timestamp: expired.startedAt, hash: 1, displayID: nil, displayName: nil
         )
         try await store.endCaptureSession(id: expired.id, reason: .paused)
         let referenced = try await store.beginCaptureSession(at: Date(timeIntervalSince1970: 2_000))
-        let retainedFrame = try await store.saveFrame(
+        let retainedFrame = try await store.recordTestCapture(
             makeImage(), timestamp: referenced.startedAt, hash: 2, displayID: nil, displayName: nil
         )
         try await store.endCaptureSession(id: referenced.id, reason: .overlay)
@@ -388,13 +382,20 @@ final class FrameStoreTests: XCTestCase {
         XCTAssertNil(sessions.last?.endedAt)
         let remainingFrames = await store.getAllMetadata()
         XCTAssertEqual(remainingFrames.map(\.id), [retainedFrame.id])
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: framesDirectoryURL().appendingPathComponent(expiredFrame.filename).path
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: framesDirectoryURL().appendingPathComponent(retainedFrame.filename).path
+        ))
     }
 
     func testSQLitePreservesSubSecondTimestamps() async throws {
         let timestamp = Date(timeIntervalSince1970: 2_000.125)
         do {
             let store = try FrameStore(directory: directory)
-            _ = try await store.saveFrame(
+            _ = try await store.beginCaptureSession(at: timestamp)
+            _ = try await store.recordTestCapture(
                 makeImage(),
                 timestamp: timestamp,
                 hash: 7,
@@ -447,16 +448,18 @@ final class FrameStoreTests: XCTestCase {
         let sibling: FrameMetadata
         do {
             let store = try FrameStore(directory: directory)
-            poisoned = try await store.saveFrame(
+            let now = Date()
+            _ = try await store.beginCaptureSession(at: now)
+            poisoned = try await store.recordTestCapture(
                 makeImage(width: 8, height: 8),
-                timestamp: Date(),
+                timestamp: now,
                 hash: 1,
                 displayID: nil,
                 displayName: nil
             )
-            sibling = try await store.saveFrame(
+            sibling = try await store.recordTestCapture(
                 makeImage(width: 8, height: 8),
-                timestamp: Date(),
+                timestamp: now,
                 hash: 2,
                 displayID: nil,
                 displayName: nil
@@ -826,8 +829,10 @@ final class FrameStoreTests: XCTestCase {
         let recoveredJournalURL = try XCTUnwrap(recoveryFileURL(filename: "frames.sqlite-journal"))
         XCTAssertEqual(try Data(contentsOf: recoveredJournalURL), journalEvidence)
 
-        _ = try await store.saveFrame(
-            makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+        let captureStart = Date()
+        _ = try await store.beginCaptureSession(at: captureStart)
+        _ = try await store.recordTestCapture(
+            makeImage(), timestamp: captureStart, hash: 1, displayID: nil, displayName: nil
         )
         try await store.cleanupOrphans()
         XCTAssertTrue(recoveryContains(filename: "preserved.jpg"))
@@ -966,11 +971,12 @@ final class FrameStoreTests: XCTestCase {
         let second: FrameMetadata
         do {
             let store = try FrameStore(directory: directory)
-            first = try await store.saveFrame(
+            _ = try await store.beginCaptureSession(at: Date(timeIntervalSince1970: 1))
+            first = try await store.recordTestCapture(
                 makeImage(), timestamp: Date(timeIntervalSince1970: 1), hash: 1,
                 displayID: nil, displayName: nil
             )
-            second = try await store.saveFrame(
+            second = try await store.recordTestCapture(
                 makeImage(), timestamp: Date(timeIntervalSince1970: 2), hash: 2,
                 displayID: nil, displayName: nil
             )
@@ -997,8 +1003,10 @@ final class FrameStoreTests: XCTestCase {
         let saved: FrameMetadata
         do {
             let store = try FrameStore(directory: directory)
-            saved = try await store.saveFrame(
-                makeImage(), timestamp: Date(), hash: 1,
+            let captureStart = Date()
+            _ = try await store.beginCaptureSession(at: captureStart)
+            saved = try await store.recordTestCapture(
+                makeImage(), timestamp: captureStart, hash: 1,
                 displayID: nil, displayName: nil
             )
             await store.flush()
@@ -1023,8 +1031,10 @@ final class FrameStoreTests: XCTestCase {
 
     func testCleanupOrphansMovesUnknownFilesToRecovery() async throws {
         let store = try FrameStore(directory: directory)
-        let metadata = try await store.saveFrame(
-            makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+        let captureStart = Date()
+        _ = try await store.beginCaptureSession(at: captureStart)
+        let metadata = try await store.recordTestCapture(
+            makeImage(), timestamp: captureStart, hash: 1, displayID: nil, displayName: nil
         )
 
         let framesDirectory = directory.appendingPathComponent("frames", isDirectory: true)
@@ -1076,8 +1086,10 @@ final class FrameStoreTests: XCTestCase {
 
     func testCleanupOrphansDropsDatabaseRowsForMissingFiles() async throws {
         let store = try FrameStore(directory: directory)
-        let metadata = try await store.saveFrame(
-            makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+        let captureStart = Date()
+        _ = try await store.beginCaptureSession(at: captureStart)
+        let metadata = try await store.recordTestCapture(
+            makeImage(), timestamp: captureStart, hash: 1, displayID: nil, displayName: nil
         )
 
         let framesDirectory = directory.appendingPathComponent("frames", isDirectory: true)
@@ -1100,9 +1112,11 @@ final class FrameStoreTests: XCTestCase {
 
     func testReferencedFullImageSymlinkIsNeverReadCopiedOrRetained() async throws {
         let store = try FrameStore(directory: directory)
-        let metadata = try await store.saveFrame(
+        let captureStart = Date()
+        _ = try await store.beginCaptureSession(at: captureStart)
+        let metadata = try await store.recordTestCapture(
             makeImage(width: 16, height: 12),
-            timestamp: Date(),
+            timestamp: captureStart,
             hash: 1,
             displayID: nil,
             displayName: nil
@@ -1142,9 +1156,11 @@ final class FrameStoreTests: XCTestCase {
 
     func testSymlinkedThumbnailIsReplacedWithoutReadingExternalTarget() async throws {
         let store = try FrameStore(directory: directory)
-        let metadata = try await store.saveFrame(
+        let captureStart = Date()
+        _ = try await store.beginCaptureSession(at: captureStart)
+        let metadata = try await store.recordTestCapture(
             makeImage(width: 400, height: 300),
-            timestamp: Date(),
+            timestamp: captureStart,
             hash: 1,
             displayID: nil,
             displayName: nil
@@ -1168,11 +1184,13 @@ final class FrameStoreTests: XCTestCase {
 
     func testClearRemovesAllFramesAndFiles() async throws {
         let store = try FrameStore(directory: directory)
-        _ = try await store.saveFrame(
-            makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+        let captureStart = Date()
+        _ = try await store.beginCaptureSession(at: captureStart)
+        _ = try await store.recordTestCapture(
+            makeImage(), timestamp: captureStart, hash: 1, displayID: nil, displayName: nil
         )
-        _ = try await store.saveFrame(
-            makeImage(), timestamp: Date(), hash: 2, displayID: nil, displayName: nil
+        _ = try await store.recordTestCapture(
+            makeImage(), timestamp: captureStart, hash: 2, displayID: nil, displayName: nil
         )
         let recoveryBundle = FrameStore.recoveryDirectory(in: directory)
             .appendingPathComponent("manual-recovery", isDirectory: true)
@@ -1201,8 +1219,10 @@ final class FrameStoreTests: XCTestCase {
             directory: directory,
             clearPayloadRemoval: removal.remove
         )
-        let oldMetadata = try await store.saveFrame(
-            makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+        let captureStart = Date()
+        _ = try await store.beginCaptureSession(at: captureStart)
+        let oldMetadata = try await store.recordTestCapture(
+            makeImage(), timestamp: captureStart, hash: 1, displayID: nil, displayName: nil
         )
         let oldPayload = directory
             .appendingPathComponent("frames", isDirectory: true)
@@ -1259,8 +1279,10 @@ final class FrameStoreTests: XCTestCase {
         let metadata: FrameMetadata
         do {
             let store = try FrameStore(directory: directory)
-            metadata = try await store.saveFrame(
-                makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+            let captureStart = Date()
+            _ = try await store.beginCaptureSession(at: captureStart)
+            metadata = try await store.recordTestCapture(
+                makeImage(), timestamp: captureStart, hash: 1, displayID: nil, displayName: nil
             )
             await store.flush()
         }
@@ -1283,8 +1305,10 @@ final class FrameStoreTests: XCTestCase {
         let metadata: FrameMetadata
         do {
             let store = try FrameStore(directory: directory)
-            metadata = try await store.saveFrame(
-                makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+            let captureStart = Date()
+            _ = try await store.beginCaptureSession(at: captureStart)
+            metadata = try await store.recordTestCapture(
+                makeImage(), timestamp: captureStart, hash: 1, displayID: nil, displayName: nil
             )
             await store.flush()
         }
@@ -1303,8 +1327,10 @@ final class FrameStoreTests: XCTestCase {
         let metadata: FrameMetadata
         do {
             let store = try FrameStore(directory: directory)
-            metadata = try await store.saveFrame(
-                makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+            let captureStart = Date()
+            _ = try await store.beginCaptureSession(at: captureStart)
+            metadata = try await store.recordTestCapture(
+                makeImage(), timestamp: captureStart, hash: 1, displayID: nil, displayName: nil
             )
             await store.flush()
         }
@@ -1324,8 +1350,10 @@ final class FrameStoreTests: XCTestCase {
         let metadata: FrameMetadata
         do {
             let store = try FrameStore(directory: directory)
-            metadata = try await store.saveFrame(
-                makeImage(), timestamp: Date(), hash: 1, displayID: nil, displayName: nil
+            let captureStart = Date()
+            _ = try await store.beginCaptureSession(at: captureStart)
+            metadata = try await store.recordTestCapture(
+                makeImage(), timestamp: captureStart, hash: 1, displayID: nil, displayName: nil
             )
             await store.flush()
         }
@@ -1345,9 +1373,11 @@ final class FrameStoreTests: XCTestCase {
 
     func testThumbnailIsGeneratedLazilyAndCachedToDisk() async throws {
         let store = try FrameStore(directory: directory)
-        let metadata = try await store.saveFrame(
+        let captureStart = Date()
+        _ = try await store.beginCaptureSession(at: captureStart)
+        let metadata = try await store.recordTestCapture(
             makeImage(width: 400, height: 300),
-            timestamp: Date(),
+            timestamp: captureStart,
             hash: 1,
             displayID: nil,
             displayName: nil
@@ -1511,10 +1541,10 @@ final class FrameStoreTests: XCTestCase {
         let store = try FrameStore(directory: directory)
         let base = Date(timeIntervalSince1970: 40_000)
         let jpeg = try XCTUnwrap(ImageEncoder.jpegData(from: makeImage(), quality: 0.8))
-        _ = try await store.beginCaptureSession(at: base)
+        let firstSession = try await store.beginCaptureSession(at: base)
         let first = StoredFrame(id: UUID(), timestamp: base, hash: 1, displayID: nil, displayName: nil)
         _ = try await store.recordEncodedCapture(frame: first, jpegData: jpeg)
-        try await store.endCaptureSession(reason: .paused)
+        try await store.endCaptureSession(id: firstSession.id, reason: .paused)
         _ = try await store.beginCaptureSession(at: base.addingTimeInterval(10))
         let second = StoredFrame(
             id: UUID(), timestamp: base.addingTimeInterval(10), hash: 1,
@@ -1745,13 +1775,13 @@ final class FrameStoreTests: XCTestCase {
         let store = try FrameStore(directory: directory)
         let base = Date(timeIntervalSince1970: 60_000)
         let jpeg = try XCTUnwrap(ImageEncoder.jpegData(from: makeImage(), quality: 0.8))
-        _ = try await store.beginCaptureSession(at: base)
+        let firstSession = try await store.beginCaptureSession(at: base)
         let frame = StoredFrame(id: UUID(), timestamp: base, hash: 1, displayID: nil, displayName: nil)
         let firstMutation = try await store.recordEncodedCapture(frame: frame, jpegData: jpeg)
         guard case .inserted(let firstEntry) = firstMutation.mutation else {
             return XCTFail("Expected initial timeline entry")
         }
-        try await store.endCaptureSession(reason: .paused)
+        try await store.endCaptureSession(id: firstSession.id, reason: .paused)
 
         let secondSessionID = UUID()
         let secondSpanID = UUID()

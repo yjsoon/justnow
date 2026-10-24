@@ -726,7 +726,7 @@ final class HybridFrameRepositoryTests: XCTestCase {
         XCTAssertEqual(readsAfter.orderedTimeline, readsBefore.orderedTimeline)
     }
 
-    func testOrderedFramesKeepsPhysicalCaptureTimestampAfterSpanExtension() async throws {
+    func testTimelineKeepsPhysicalCaptureTimestampAfterSpanExtension() async throws {
         let store = try FrameStore(directory: directory)
         let repository = HybridFrameRepository(frameStore: store, byteCap: 64)
         let displayID = UUID()
@@ -742,10 +742,12 @@ final class HybridFrameRepositoryTests: XCTestCase {
         )
         _ = try await repository.recordEncodedCapture(repeated, jpegData: Data([1]))
 
-        let frames = await repository.orderedFrames()
+        let timeline = await repository.orderedTimeline()
 
-        XCTAssertEqual(frames.map(\.id), [first.id])
-        XCTAssertEqual(frames.first?.timestamp, first.timestamp)
+        XCTAssertEqual(timeline.map(\.frame.id), [first.id])
+        XCTAssertEqual(timeline.first?.frame.timestamp, first.timestamp)
+        XCTAssertEqual(timeline.first?.span.observedThroughAt, repeated.timestamp)
+        XCTAssertEqual(timeline.first?.span.observationCount, 2)
     }
 
     func testPolicyUsesFirstMajorAndOrdinaryAnchorsWhileHashZeroNeverTriggersMajor() async throws {
@@ -988,8 +990,8 @@ final class HybridFrameRepositoryTests: XCTestCase {
         XCTAssertEqual(snapshot.metadataTransactions, 1)
 
         let restarted = HybridFrameRepository(frameStore: store, byteCap: 1_000)
-        let restartedFrames = await restarted.orderedFrames()
-        XCTAssertEqual(restartedFrames.map(\.id), [frame.id])
+        let restartedTimeline = await restarted.orderedTimeline()
+        XCTAssertEqual(restartedTimeline.map(\.frame.id), [frame.id])
     }
 
     func testPauseCloseRetryReturnsTailEffectsOnceWithoutTerminationAccounting() async throws {
@@ -1224,7 +1226,6 @@ actor HybridDurableRepositoryProbe: HybridDurableRepository {
 
     func captureAdmissionMode() async -> FrameCaptureAdmissionMode { .diskCadenceFiltered }
     func cleanupOrphans() async throws { try await base.cleanupOrphans() }
-    func orderedFrames() async -> [StoredFrame] { await base.orderedFrames() }
 
     func orderedTimeline() async -> [TimelineEntry] {
         orderedTimelineCallCount += 1
