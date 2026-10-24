@@ -157,6 +157,11 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+
+                    Text("macOS may show a privacy indicator while JustNow captures screenshots. JustNow cannot hide this system indicator through a documented, supported option. Use Pause Recording or quit JustNow to stop capture.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 

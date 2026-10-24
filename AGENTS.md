@@ -24,6 +24,7 @@ Prefer simple, forward-moving implementations while preserving users' settings a
 
 ## Verification
 
+- Always check JustNow changes on a Mac runner before reporting verification complete. For app changes, use Xcode; for UI copy or appearance changes, also render and inspect the affected surface. Transfer unpushed changes safely for validation rather than requiring publication, and preserve the runner's existing work and installed app.
 - Scale checks to the change: accuracy/links for docs; focused tests and a build for localized app work; broader regression coverage for shared capture, storage, privacy, or lifecycle changes.
 - For visual changes, inspect rendered affected states, including changed non-default states; compilation alone is not visual verification. Use synthetic or non-sensitive content.
 - Verify actual launch and the affected behavior after a local reinstall. Hosted unit tests are not an installed-app smoke test.
