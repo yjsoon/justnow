@@ -72,8 +72,7 @@ final class CapturePolicyControllerTests: XCTestCase {
                 minimumInterval: 10,
                 maxQueueDepth: 60,
                 maxFrameAge: 180,
-                concurrentJobs: 2,
-                searchImageMaxPixelSize: 1_000
+                concurrentJobs: 2
             )
         )
         XCTAssertFalse(policy.shouldPreventAppNap)
@@ -103,8 +102,7 @@ final class CapturePolicyControllerTests: XCTestCase {
                 minimumInterval: 10,
                 maxQueueDepth: 60,
                 maxFrameAge: 180,
-                concurrentJobs: 2,
-                searchImageMaxPixelSize: 1_000
+                concurrentJobs: 2
             )
         )
     }
@@ -133,8 +131,7 @@ final class CapturePolicyControllerTests: XCTestCase {
                 minimumInterval: 20,
                 maxQueueDepth: 24,
                 maxFrameAge: 180,
-                concurrentJobs: 1,
-                searchImageMaxPixelSize: 800
+                concurrentJobs: 1
             )
         )
         XCTAssertTrue(policy.isIdle)

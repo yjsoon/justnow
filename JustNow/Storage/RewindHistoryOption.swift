@@ -61,10 +61,6 @@ nonisolated enum RewindHistoryOption: Double, CaseIterable, Identifiable {
         }
     }
 
-    var retentionPolicy: RetentionPolicy {
-        .rewindHistory(self)
-    }
-
     static func resolved(from rawValue: Double) -> Self {
         Self(rawValue: rawValue) ?? .defaultValue
     }

@@ -320,10 +320,6 @@ class OverlayViewModel {
     /// action. The drag handler clears it after consuming, so this is one-shot.
     var isRegionScreenshotArmed: Bool = false
 
-    var isSearchAvailable: Bool {
-        true
-    }
-
     var hasSearchQuery: Bool {
         !normalisedSearchQuery.isEmpty
     }
@@ -333,12 +329,11 @@ class OverlayViewModel {
     }
 
     var shouldShowSearchingState: Bool {
-        isSearchAvailable && isSearching && hasSearchQuery && isSearchLoading
+        isSearching && hasSearchQuery && isSearchLoading
     }
 
     var shouldShowNoSearchResults: Bool {
-        isSearchAvailable
-            && isSearching
+        isSearching
             && hasSearchQuery
             && !isSearchLoading
             && resolvedSearchRequest == currentSearchRequest
@@ -346,8 +341,7 @@ class OverlayViewModel {
     }
 
     var shouldShowSearchFailure: Bool {
-        isSearchAvailable
-            && isSearching
+        isSearching
             && hasSearchQuery
             && !isSearchLoading
             && failedSearchRequest == currentSearchRequest
@@ -384,17 +378,7 @@ class OverlayViewModel {
     }
 
     var displayedEntries: [TimelineEntry] {
-        isSearchAvailable && isSearching && hasSearchQuery ? searchResults : timelineEntries
-    }
-
-    /// Compatibility projection for image consumers. Logical identity and
-    /// geometry always come from `displayedEntries`.
-    var displayedFrames: [StoredFrame] {
-        displayedEntries.map(\.frame)
-    }
-
-    var timelineFrames: [StoredFrame] {
-        timelineEntries.map(\.frame)
+        isSearching && hasSearchQuery ? searchResults : timelineEntries
     }
 
     var displayedFrameCount: Int {
@@ -420,10 +404,6 @@ class OverlayViewModel {
 
     var currentExportSelection: OverlayFrameExportSelection? {
         currentFrame.map { OverlayFrameExportSelection(frame: $0, timestamp: selectedTimestamp) }
-    }
-
-    var timelineStartDate: Date? {
-        displayedEntries.map { timelineSpanBounds(for: $0).start }.min()
     }
 
     var accessibilityTimelineValue: String {
@@ -500,10 +480,6 @@ class OverlayViewModel {
     }
 
     func toggleSearch() {
-        guard isSearchAvailable else {
-            clearSearch()
-            return
-        }
         if isSearching {
             clearSearch()
         } else {
@@ -512,7 +488,6 @@ class OverlayViewModel {
     }
 
     func focusSearch() {
-        guard isSearchAvailable else { return }
         if !isSearching {
             isSearching = true
         }
@@ -552,7 +527,7 @@ class OverlayViewModel {
         let status = await frameBuffer.searchIndexStatus()
         searchIndexStatus = status
 
-        guard isSearchAvailable, isSearching, hasSearchQuery else { return }
+        guard isSearching, hasSearchQuery else { return }
         guard !isSearchLoading else { return }
         guard status.indexedFrames != previousIndexedFrames else { return }
 
@@ -560,7 +535,7 @@ class OverlayViewModel {
     }
 
     func performSearch(immediately: Bool = false) {
-        guard isSearchAvailable, isSearching else { return }
+        guard isSearching else { return }
 
         searchDebounceTask?.cancel()
         searchDebounceTask = nil

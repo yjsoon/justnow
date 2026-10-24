@@ -21,13 +21,6 @@ nonisolated enum FramePayloadResolver {
         guard let image = ImageEncoder.cgImage(from: jpegData) else { return nil }
         return ImageEncoder.generateThumbnail(from: image)
     }
-
-    static func searchImage(from jpegData: Data, maxPixelSize: Int) throws -> CGImage {
-        guard let image = ImageEncoder.cgImage(from: jpegData, maxPixelSize: maxPixelSize) else {
-            throw FrameStoreError.imageDecodingFailed
-        }
-        return image
-    }
 }
 
 private actor HybridPayloadLease: FrameRepositoryPayloadLease {
@@ -177,18 +170,6 @@ actor HybridFrameRepository: FrameRepository {
 
     func cleanupOrphans() async throws {
         try await disk.cleanupOrphans()
-    }
-
-    func orderedFrames() async -> [StoredFrame] {
-        let entries = await orderedTimeline()
-        var framesByPhysicalID: [UUID: StoredFrame] = [:]
-        for entry in entries {
-            framesByPhysicalID[entry.frame.id] = entry.frame
-        }
-        return framesByPhysicalID.values.sorted { lhs, rhs in
-            if lhs.timestamp != rhs.timestamp { return lhs.timestamp < rhs.timestamp }
-            return lhs.id.uuidString < rhs.id.uuidString
-        }
     }
 
     func orderedTimeline() async -> [TimelineEntry] {
@@ -495,16 +476,6 @@ actor HybridFrameRepository: FrameRepository {
         }
         let image = await disk.loadThumbnail(id: id)
         if image != nil { durablePayloadResolutions += 1 }
-        return image
-    }
-
-    func loadSearchIndexImage(id: UUID, maxPixelSize: Int) async throws -> CGImage {
-        if let data = await ring.data(frameID: id) {
-            volatilePayloadResolutions += 1
-            return try FramePayloadResolver.searchImage(from: data, maxPixelSize: maxPixelSize)
-        }
-        let image = try await disk.loadSearchIndexImage(id: id, maxPixelSize: maxPixelSize)
-        durablePayloadResolutions += 1
         return image
     }
 

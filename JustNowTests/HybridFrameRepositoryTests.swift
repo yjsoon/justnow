@@ -298,17 +298,15 @@ final class HybridFrameRepositoryTests: XCTestCase {
 
         let full = try await source.loadFullImage(id: frame.id)
         let thumbnail = await source.loadThumbnail(id: frame.id)
-        let search = try await source.loadSearchIndexImage(id: frame.id, maxPixelSize: 12)
         let exported = try await source.exportFrame(id: frame.id, timestamp: timestamp)
 
         XCTAssertEqual(full.width, image.width)
         XCTAssertEqual(thumbnail?.width, image.width)
-        XCTAssertLessThanOrEqual(max(search.width, search.height), 12)
         XCTAssertEqual(try Data(contentsOf: exported), jpeg)
         let statistics = await repository.storageStatistics()
         let resolutionStatistics = await source.payloadResolutionStatistics()
         XCTAssertGreaterThan(statistics.durableJPEGPayloadBytes, 0)
-        XCTAssertEqual(resolutionStatistics.volatilePayloadResolutions, 4)
+        XCTAssertEqual(resolutionStatistics.volatilePayloadResolutions, 3)
         XCTAssertEqual(resolutionStatistics.durablePayloadResolutions, 0)
     }
 
@@ -728,7 +726,7 @@ final class HybridFrameRepositoryTests: XCTestCase {
         XCTAssertEqual(readsAfter.orderedTimeline, readsBefore.orderedTimeline)
     }
 
-    func testOrderedFramesKeepsPhysicalCaptureTimestampAfterSpanExtension() async throws {
+    func testTimelineKeepsPhysicalCaptureTimestampAfterSpanExtension() async throws {
         let store = try FrameStore(directory: directory)
         let repository = HybridFrameRepository(frameStore: store, byteCap: 64)
         let displayID = UUID()
@@ -744,10 +742,12 @@ final class HybridFrameRepositoryTests: XCTestCase {
         )
         _ = try await repository.recordEncodedCapture(repeated, jpegData: Data([1]))
 
-        let frames = await repository.orderedFrames()
+        let timeline = await repository.orderedTimeline()
 
-        XCTAssertEqual(frames.map(\.id), [first.id])
-        XCTAssertEqual(frames.first?.timestamp, first.timestamp)
+        XCTAssertEqual(timeline.map(\.frame.id), [first.id])
+        XCTAssertEqual(timeline.first?.frame.timestamp, first.timestamp)
+        XCTAssertEqual(timeline.first?.span.observedThroughAt, repeated.timestamp)
+        XCTAssertEqual(timeline.first?.span.observationCount, 2)
     }
 
     func testPolicyUsesFirstMajorAndOrdinaryAnchorsWhileHashZeroNeverTriggersMajor() async throws {
@@ -990,8 +990,8 @@ final class HybridFrameRepositoryTests: XCTestCase {
         XCTAssertEqual(snapshot.metadataTransactions, 1)
 
         let restarted = HybridFrameRepository(frameStore: store, byteCap: 1_000)
-        let restartedFrames = await restarted.orderedFrames()
-        XCTAssertEqual(restartedFrames.map(\.id), [frame.id])
+        let restartedTimeline = await restarted.orderedTimeline()
+        XCTAssertEqual(restartedTimeline.map(\.frame.id), [frame.id])
     }
 
     func testPauseCloseRetryReturnsTailEffectsOnceWithoutTerminationAccounting() async throws {
@@ -1226,7 +1226,6 @@ actor HybridDurableRepositoryProbe: HybridDurableRepository {
 
     func captureAdmissionMode() async -> FrameCaptureAdmissionMode { .diskCadenceFiltered }
     func cleanupOrphans() async throws { try await base.cleanupOrphans() }
-    func orderedFrames() async -> [StoredFrame] { await base.orderedFrames() }
 
     func orderedTimeline() async -> [TimelineEntry] {
         orderedTimelineCallCount += 1
@@ -1309,10 +1308,6 @@ actor HybridDurableRepositoryProbe: HybridDurableRepository {
 
     func loadThumbnail(id: UUID) async -> CGImage? {
         await base.loadThumbnail(id: id)
-    }
-
-    func loadSearchIndexImage(id: UUID, maxPixelSize: Int) async throws -> CGImage {
-        try await base.loadSearchIndexImage(id: id, maxPixelSize: maxPixelSize)
     }
 
     func exportFrame(id: UUID, timestamp: Date) async throws -> URL {

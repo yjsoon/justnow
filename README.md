@@ -42,7 +42,7 @@ Saved screenshots come from JustNow's rewind history rather than a fresh screen 
 
 - **Format**: JPEG, using the same compression as the rewind history.
 - **Resolution**: full pixel density when plugged in. Halved when capturing on battery or in Low Power Mode for performance — change this in **Settings → Capture**.
-- **Destination**: by default, JustNow saves to your `com.apple.screencapture` location (Desktop unless you've changed it system-wide). You can pick a different folder, copy to the clipboard, or both, in **Settings → Screenshot save location**.
+- **Destination**: by default, JustNow saves to your `com.apple.screencapture` location (Desktop unless you've changed it system-wide). You can pick a different folder, copy to the clipboard, or both, in **Settings → Rewind → Screenshot save location**.
 
 ## Settings
 
@@ -62,11 +62,23 @@ You can adjust:
 
 ## Privacy
 
-JustNow has no telemetry: your screen history, indexed text, and settings never leave your Mac.
+JustNow has no telemetry: your screen history, indexed text, and settings never leave your Mac. The full [privacy policy](https://justnow.tk.sg/privacy) is also linked from **Settings → General → Privacy**.
 
-To help debug capture issues, JustNow keeps a small local diagnostics log at `~/Library/Logs/JustNow/`. It records capture lifecycle events (starts, stops, errors, sleep/lock transitions) and occasional aggregate capture/storage measurements such as frame counts, logical JPEG/metadata event-byte totals, queue peaks, and bounded comparison coverage. These logical event sizes are not measurements of filesystem growth, physical device writes, SSD wear, or NAND writes. Settings separately reports allocated SQLite/WAL space where macOS exposes it reliably. JustNow never records screen content, recognised text, image bytes, file paths, display names or IDs, or perceptual hashes. The log is capped at about 1 MB, is never transmitted anywhere, and you can delete it at any time.
+Screen history and its recognised text are stored in `~/Library/Application Support/JustNow/`, restricted to your user account and marked for exclusion from Time Machine. While recording, frames are deleted automatically with their text in the current search database once they fall outside your rewind history setting (JustNow keeps at least one sparse hour for search). **Settings → Capture → Storage → Clear All History** clears the current frame history, search database, and recovery copies, but not the diagnostics log or screenshots you have saved. Pause recording at any time with `⌘⌥⇧J` or from the menu bar.
 
-The only network requests JustNow makes are update checks via Sparkle.
+If you used an early version, recognised text may also remain in a legacy `text_cache.json` file in the storage folder. Retention and Clear All History do not delete it, and its text can be imported again on a later launch when the search database is empty. To remove this older copy, quit JustNow and delete that file or the whole storage folder. Deletion is not secure erasure and does not remove copies made elsewhere.
+
+To help debug capture issues, JustNow keeps a small local diagnostics log at `~/Library/Logs/JustNow/`. It records capture lifecycle events (starts, stops, errors, permission checks, sleep/lock transitions), connected display names and system IDs, app and macOS versions at launch, search outcomes without the query text, and occasional aggregate capture/storage measurements such as frame counts, logical JPEG/metadata event-byte totals, queue peaks, and bounded comparison coverage. These logical event sizes are not measurements of filesystem growth, physical device writes, SSD wear, or NAND writes. Settings separately reports allocated SQLite/WAL space where macOS exposes it reliably. JustNow never records screen content, recognised text, search queries, image bytes, file paths, or perceptual hashes. The log is capped at about 1 MB, is never transmitted anywhere, and you can delete it at any time.
+
+The only network requests JustNow makes are update checks and downloads via Sparkle: the feed at `justnow.tk.sg/appcast.xml` and update archives from GitHub Releases. You can turn off automatic checks in **Settings → General → Software Update**.
+
+## FAQ
+
+### Why is there a purple privacy indicator in the menu bar?
+
+macOS may display a privacy/capture indicator at the top right while JustNow captures screenshots for your rewind history. JustNow captures still images, not audio. Hiding JustNow's menu bar icon does not hide the system indicator, and macOS provides no documented, supported option for JustNow to hide it while capturing.
+
+To stop capture, choose **Pause Recording** from JustNow's menu (default shortcut: `⌘⌥⇧J`), or quit JustNow. Pausing also pauses new rewind history; macOS controls the indicator's appearance and timing.
 
 ## Building From Source
 

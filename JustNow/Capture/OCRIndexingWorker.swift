@@ -10,7 +10,7 @@ struct OCRIndexedFrame: Sendable {
 
 struct OCRIndexingWorkerDependencies: Sendable {
     let hasCachedText: @Sendable (UUID) async -> Bool
-    let indexFrame: @Sendable (StoredFrame, Int) async -> OCRIndexedFrame?
+    let indexFrame: @Sendable (StoredFrame) async -> OCRIndexedFrame?
 
     static func live(
         frameRepository: any FrameRepository,
@@ -20,20 +20,14 @@ struct OCRIndexingWorkerDependencies: Sendable {
             hasCachedText: { frameID in
                 await textCache.hasCachedText(for: frameID)
             },
-            indexFrame: { frame, imageMaxPixelSize in
+            indexFrame: { frame in
                 let startedAt = Date()
 
                 do {
-                    let image: CGImage
-                    if imageMaxPixelSize > 0 {
-                        image = try await frameRepository.loadSearchIndexImage(
-                            id: frame.id,
-                            maxPixelSize: imageMaxPixelSize
-                        )
-                    } else {
-                        image = try await frameRepository.loadFullImage(id: frame.id)
-                    }
-
+                    // Index at the captured resolution. Fast OCR needs about
+                    // two pixels per point to read normal-size UI text, and
+                    // any downscaled decode loses it on Retina captures.
+                    let image = try await frameRepository.loadFullImage(id: frame.id)
                     let text = await TextRecognitionManager.extractText(from: image, mode: .searchIndex)
                     guard !Task.isCancelled else { return nil }
 
@@ -58,12 +52,12 @@ struct OCRIndexingWorker {
         self.dependencies = dependencies
     }
 
-    func index(frames: [StoredFrame], searchImageMaxPixelSize: Int) async -> [OCRIndexedFrame] {
+    func index(frames: [StoredFrame]) async -> [OCRIndexedFrame] {
         return await withTaskGroup(of: OCRIndexedFrame?.self, returning: [OCRIndexedFrame].self) { group in
             for frame in frames {
                 group.addTask {
                     guard !(await dependencies.hasCachedText(frame.id)) else { return nil }
-                    return await dependencies.indexFrame(frame, searchImageMaxPixelSize)
+                    return await dependencies.indexFrame(frame)
                 }
             }
 

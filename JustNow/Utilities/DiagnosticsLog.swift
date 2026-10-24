@@ -73,15 +73,26 @@ enum CaptureSystemState {
 /// are not reliably persisted, and OS betas are exactly when we need a durable
 /// record that survives log rotation.
 final class DiagnosticsLog: @unchecked Sendable {
-    static let shared = DiagnosticsLog()
+    static let shared = DiagnosticsLog(directory: sharedDirectory)
 
     static var defaultDirectory: URL {
         FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Logs/JustNow", isDirectory: true)
     }
 
+    /// Unit tests are hosted inside the app, so production code they exercise
+    /// would otherwise append synthetic lines to (and rotate) the user's real
+    /// diagnostics log.
+    static var sharedDirectory: URL {
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil else {
+            return defaultDirectory
+        }
+        return FileManager.default.temporaryDirectory
+            .appendingPathComponent("JustNowTests-Diagnostics", isDirectory: true)
+    }
+
     private let queue = DispatchQueue(label: "sg.tk.JustNow.diagnostics", qos: .utility)
-    private let fileURL: URL
+    let fileURL: URL
     private let rotatedFileURL: URL
     private let dateFormatter: DateFormatter
 

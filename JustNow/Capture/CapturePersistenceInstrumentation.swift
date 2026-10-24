@@ -291,62 +291,13 @@ nonisolated final class CapturePersistenceInstrumentation: @unchecked Sendable {
         }
     }
 
-    /// Records the repository's source-neutral save result after the caller
-    /// has fenced cancellation and Clear-generation races. This is the sole
-    /// repository path for durable byte metrics, preventing `FrameStore` and
-    /// `FrameBuffer` from counting the same write twice.
-    func recordRepositorySaveOutcome(
-        _ outcome: FrameRepositorySaveOutcome,
-        jpegData: Data,
-        displayID: UUID?
-    ) {
-        withLock {
-            switch outcome.disposition {
-            case .durableFrame:
-                snapshot = snapshot.replacing(
-                    durableRepositorySaves: snapshot.durableRepositorySaves + 1
-                )
-            case .volatileFrame:
-                snapshot = snapshot.replacing(
-                    volatileRepositorySaves: snapshot.volatileRepositorySaves + 1
-                )
-            case .duplicateFrame:
-                snapshot = snapshot.replacing(
-                    duplicateRepositorySaves: snapshot.duplicateRepositorySaves + 1
-                )
-            case .spanCheckpoint:
-                snapshot = snapshot.replacing(
-                    spanCheckpointRepositorySaves: snapshot.spanCheckpointRepositorySaves + 1
-                )
-            case .pressureDrop:
-                snapshot = snapshot.replacing(
-                    pressureDroppedRepositorySaves: snapshot.pressureDroppedRepositorySaves + 1
-                )
-            }
-
-            if outcome.wroteDurableJPEG {
-                touchDisplay(displayID)
-                updateComparisonData(jpegData, displayID: displayID)
-                snapshot = snapshot.replacing(
-                    persistedFrames: snapshot.persistedFrames + 1,
-                    logicalDurableJPEGEventBytes: snapshot.logicalDurableJPEGEventBytes + Int64(jpegData.count)
-                )
-            }
-
-            for byteCount in outcome.metadataWriteByteCounts {
-                snapshot = snapshot.replacing(
-                    logicalMetadataEventBytes: snapshot.logicalMetadataEventBytes + Int64(byteCount),
-                    metadataTransactions: snapshot.metadataTransactions + 1,
-                    largestMetadataWriteBytes: max(snapshot.largestMetadataWriteBytes, byteCount)
-                )
-            }
-        }
-    }
-
-    /// Records actual source-neutral effects. Unlike the legacy single
-    /// outcome, this preserves compound operations (for example, completing a
-    /// pending promotion before admitting the current capture) and attributes
-    /// durable anchors to the policy decision which caused the write.
+    /// Records the repository's source-neutral effects after the caller has
+    /// fenced cancellation and Clear-generation races. This is the sole
+    /// repository path for durable byte metrics, so `FrameStore` and
+    /// `FrameBuffer` never count the same write twice. It preserves compound
+    /// operations (for example, completing a pending promotion before
+    /// admitting the current capture) and attributes durable anchors to the
+    /// policy decision which caused the write.
     func recordRepositoryEffects(
         _ effects: FrameRepositoryEffects,
         acceptedJPEGData: Data? = nil,

@@ -77,6 +77,8 @@ If present, `.env.release.local` (or `RELEASE_ENV_FILE`) is sourced by the local
 
 ## Local packaging
 
+For installing a build into `/Applications` on your own Mac, use `./Scripts/local-install-app.sh` instead (see [local development](local-development.md)). It refuses to replace an existing Developer ID install with a build whose Team ID differs or that does not satisfy the installed app's designated requirement, unless `--allow-signing-change` is passed for an intentional migration.
+
 For an authorized packaging task, replace `vX.Y.Z` with the artifact suffix (omit it for `local`):
 
 ```bash
