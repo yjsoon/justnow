@@ -55,7 +55,19 @@ installed_leaf_authority() {
     return 0
   fi
 
-  { codesign -dv --verbose=4 "${INSTALL_PATH}" 2>&1 || true; } | sed -n 's/^Authority=//p' | head -n 1
+  local output
+  if ! output="$(codesign -dv --verbose=4 "${INSTALL_PATH}" 2>&1)"; then
+    if [ "${ALLOW_SIGNING_CHANGE}" != "true" ]; then
+      refuse_signing_change "could not inspect the installed app's signature:
+${output}"
+    fi
+    local installed_bundle_id
+    installed_bundle_id="$(bundle_identifier "${INSTALL_PATH}")"
+    [ "${installed_bundle_id}" = "${EXPECTED_BUNDLE_ID}" ] || die "The installed ${INSTALL_PATH} has bundle identifier '${installed_bundle_id}', expected '${EXPECTED_BUNDLE_ID}'. Move it aside yourself if it should be replaced. Nothing was changed."
+    echo "--allow-signing-change: the installed signature could not be inspected. macOS will likely ask for Screen Recording permission again." >&2
+    return 0
+  fi
+  sed -n 's/^Authority=//p' <<<"${output}" | head -n 1
 }
 
 team_from_identity() {
@@ -93,7 +105,7 @@ refuse_signing_change() {
   cat >&2 <<EOF
 Refusing to replace ${INSTALL_PATH}: $1
 
-Replacing it would change the app's code-signing identity, so macOS would treat it
+Replacing it could change the app's code-signing identity, so macOS would treat it
 as a different app and ask for Screen Recording permission again. Nothing has been
 stopped or removed.
 
