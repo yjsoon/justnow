@@ -276,7 +276,7 @@ protocol ScreenCaptureDelegate: AnyObject {
 }
 
 /// Uses SCScreenshotManager for one-shot captures instead of SCStream.
-/// This avoids the persistent purple "sharing" indicator in the menu bar.
+/// macOS may still display a system privacy indicator during screenshot capture.
 @MainActor
 class ScreenCaptureManager: NSObject {
     private let maximumConsecutiveCaptureFailures = 3
