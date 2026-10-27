@@ -94,7 +94,6 @@ sign_sparkle_support_binaries() {
 create_applications_alias() (
   local target_dir="$1"
   local alias_path="${target_dir}/Applications"
-  local icon_dir
   local icon_copy
   local icon_resource
 
@@ -121,6 +120,8 @@ on run argv
 end run
 APPLESCRIPT
 
+  # Keep this in the subshell scope: Bash 3.2 unwinds function locals before
+  # running EXIT traps on failure.
   icon_dir="$(mktemp -d "${TMPDIR:-/tmp}/applications-folder-icon.XXXXXX")"
   trap 'rm -rf "${icon_dir}"' EXIT
   icon_copy="${icon_dir}/Applications.icns"
