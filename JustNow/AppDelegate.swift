@@ -369,7 +369,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             return
         }
 
-        await startCaptureForLaunchState()
+        await captureStartController.runLaunchStart { [self] in
+            await startCaptureForLaunchState()
+        }
     }
 
     private func initializeFrameBufferForStartup() async throws {
@@ -474,6 +476,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 try? await Task.sleep(for: duration)
             }
         )
+        guard !Task.isCancelled else { return }
+        guard captureEventController.canStartCapture() else {
+            replaceStartStatusWithBlockedStatus()
+            return
+        }
         switch screenRecordingPermission.resolveLaunchState(
             hasPermission: hasPermission,
             requestPermission: { false }
@@ -498,6 +505,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     private func startCaptureForGrantedLaunchPermission(allowPermissionRetry: Bool = true) async {
+        guard !Task.isCancelled else { return }
+        guard captureEventController.canStartCapture() else {
+            replaceStartStatusWithBlockedStatus()
+            return
+        }
         do {
             try await captureCoordinator.startCapture()
             guard !Task.isCancelled else { return }
@@ -512,7 +524,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         } catch is CancellationError {
             return
         } catch CaptureError.permissionDenied {
-            if await isScreenRecordingStillDeniedAfterSettle() {
+            let isStillDenied = await isScreenRecordingStillDeniedAfterSettle()
+            guard !Task.isCancelled else { return }
+            if isStillDenied {
                 presentPermissionAlert(status: "No Permission")
             } else if allowPermissionRetry {
                 DiagnosticsLog.shared.log(

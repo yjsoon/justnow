@@ -3,6 +3,70 @@ import XCTest
 
 @MainActor
 final class CaptureStartControllerTests: XCTestCase {
+    func testPauseInvalidatesLaunchWhilePermissionSettlesAndResumeStillStarts() async {
+        let sleeper = CaptureStartControllerSleepProbe()
+        let controller = CaptureStartController()
+        var permissionGranted = false
+        var launchStarts = 0
+        var resumeStarts = 0
+        var setupCompleted = false
+        let setup = Task { @MainActor in
+            await controller.runLaunchStart {
+                let granted = await CapturePermissionPreflight.waitForGrant(
+                    hasPermission: { permissionGranted },
+                    sleep: { duration in await sleeper.sleep(for: duration) }
+                )
+                guard !Task.isCancelled, granted else { return }
+                launchStarts += 1
+            }
+            // Cancelling launch must not cancel its parent setup task.
+            XCTAssertFalse(Task.isCancelled)
+            setupCompleted = true
+        }
+        await waitUntil { !(await sleeper.recordedDurations()).isEmpty }
+        XCTAssertTrue(controller.hasPendingStart)
+
+        // Pause invalidates launch; an immediate resume must not revive it,
+        // even though current lifecycle permission will be allowed again.
+        controller.cancelPendingStart()
+        controller.scheduleStart(
+            request: CaptureStartRequest(
+                status: "Resuming...",
+                attempt: CaptureStartAttempt(
+                    successMessage: "started", failurePrefix: "failed", failureStatus: "Error"
+                )
+            ),
+            canStartCapture: { true },
+            blockedStatus: { _ in nil },
+            updateStatus: { _ in },
+            startCapture: { _ in
+                await setup.value
+                guard !Task.isCancelled else { return .failed }
+                resumeStarts += 1
+                return .started
+            }
+        )
+        permissionGranted = true
+        await sleeper.resumeAll()
+        await setup.value
+        await waitUntil { !controller.hasPendingStart }
+
+        XCTAssertTrue(setupCompleted)
+        XCTAssertEqual(launchStarts, 0)
+        XCTAssertEqual(resumeStarts, 1)
+    }
+
+    func testUninterruptedLaunchCompletesAndReleasesPendingStart() async {
+        let controller = CaptureStartController()
+        var starts = 0
+        await controller.runLaunchStart {
+            XCTAssertFalse(Task.isCancelled)
+            starts += 1
+        }
+        XCTAssertEqual(starts, 1)
+        XCTAssertFalse(controller.hasPendingStart)
+    }
+
     func testManualResumeInsideOverlayStartsExactlyOnceAfterDismissal() async {
         let startController = CaptureStartController(sleep: { _ in
             XCTFail("The overlay must block manual resume before its delay is scheduled")

@@ -91,10 +91,10 @@ sign_sparkle_support_binaries() {
   codesign --force --options runtime --timestamp --sign "${SIGNING_IDENTITY}" "${framework_path}"
 }
 
-create_applications_alias() {
+create_applications_alias() (
   local target_dir="$1"
   local alias_path="${target_dir}/Applications"
-  local icon_copy_base
+  local icon_copy
   local icon_resource
 
   for tool in osascript sips DeRez Rez SetFile; do
@@ -120,15 +120,19 @@ on run argv
 end run
 APPLESCRIPT
 
-  icon_copy_base="$(mktemp "${TMPDIR:-/tmp}/applications-folder-icon.XXXXXX")"
-  cp "${APPLICATIONS_ALIAS_ICON}" "${icon_copy_base}.icns"
-  sips -i "${icon_copy_base}.icns" >/dev/null
+  # Keep this in the subshell scope: Bash 3.2 unwinds function locals before
+  # running EXIT traps on failure.
+  icon_dir="$(mktemp -d "${TMPDIR:-/tmp}/applications-folder-icon.XXXXXX")"
+  trap 'rm -rf "${icon_dir}"' EXIT
+  icon_copy="${icon_dir}/Applications.icns"
+  icon_resource="${icon_dir}/Applications.rsrc"
+  cp "${APPLICATIONS_ALIAS_ICON}" "${icon_copy}"
+  sips -i "${icon_copy}" >/dev/null
 
-  icon_resource="$(mktemp "${TMPDIR:-/tmp}/applications-folder-icon-rsrc.XXXXXX")"
-  DeRez -only icns "${icon_copy_base}.icns" > "${icon_resource}"
+  DeRez -only icns "${icon_copy}" > "${icon_resource}"
   Rez -append "${icon_resource}" -o "${alias_path}"
   SetFile -a C "${alias_path}"
-}
+)
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
