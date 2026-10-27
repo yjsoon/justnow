@@ -49,6 +49,7 @@ struct CaptureStartRequest {
 final class CaptureStartController {
     private let sleep: (Duration) async -> Void
     private var pendingStartTask: Task<Void, Never>?
+    private var launchStartTask: Task<Void, Never>?
     private var pendingStartGeneration = 0
     private var isStartDeferred = false
     private var deferredCompletionGeneration = 0
@@ -62,14 +63,32 @@ final class CaptureStartController {
     }
 
     var hasPendingStart: Bool {
-        pendingStartTask != nil || isStartDeferred
+        pendingStartTask != nil || launchStartTask != nil || isStartDeferred
     }
 
     func cancelPendingStart() {
         pendingStartGeneration += 1
         pendingStartTask?.cancel()
         pendingStartTask = nil
+        launchStartTask?.cancel()
+        launchStartTask = nil
         isStartDeferred = false
+    }
+
+    /// Keep launch permission waits and coordinator startup cancellable without
+    /// cancelling the frame-buffer initialization that precedes them.
+    func runLaunchStart(_ startCapture: @escaping @MainActor () async -> Void) async {
+        guard !Task.isCancelled else { return }
+        let generation = pendingStartGeneration
+        let task = Task { @MainActor in
+            guard !Task.isCancelled else { return }
+            await startCapture()
+        }
+        launchStartTask = task
+        await task.value
+        if generation == pendingStartGeneration {
+            launchStartTask = nil
+        }
     }
 
     func completeDeferredStart() {
