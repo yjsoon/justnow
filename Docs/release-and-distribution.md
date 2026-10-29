@@ -4,7 +4,7 @@ This document is for maintainers preparing official macOS builds for GitHub Rele
 
 Official distribution preparation, notarisation, and publication require authorization for those actions. Routine local-install signing is a separate permission; see [local development](local-development.md). An authorized stable publication includes the release's website metadata, release notes, appcast, and Cloudflare deployment unless the user excludes them. It does not authorize unrelated site/infrastructure changes, tag creation/movement, pushes/merges, or unrequested replacement of existing release assets.
 
-GitHub Actions builds and publishes stable releases, the website, and the signed Sparkle feed on version-tag pushes. Local packaging/publishing remains available as an alternative. Both paths use `Scripts/local-release-build.sh` to sign the app and notarise/staple the DMG.
+GitHub Actions builds and publishes stable releases, the website, and the signed Sparkle feed on version-tag pushes. Local packaging/publishing remains available as an alternative. Both paths use `Scripts/local-release-build.sh` to sign the app, notarise and staple it before packaging, then notarise and staple the DMG.
 
 ## GitHub Actions setup
 
@@ -117,7 +117,7 @@ To produce a locally notarised and stapled DMG, add App Store Connect API key de
 
 If you are using an Individual App Store Connect API key, omit `--api-issuer`.
 
-The script creates the ZIP before submitting and stapling the DMG. Do not describe the ZIP or its enclosed app as stapled by this flow. If `create-dmg` is unavailable, packaging skips DMG creation and the notarisation block; verify expected artifacts and notarisation results rather than trusting the final success message alone.
+The script notarises and staples the app before creating the ZIP and DMG, so both contain a stapled app that opens without Gatekeeper's online check. The ZIP itself is not stapled (ZIP archives cannot be). The DMG is then notarised and stapled separately. If `create-dmg` is unavailable, packaging skips DMG creation and the DMG notarisation; verify expected artifacts and notarisation results rather than trusting the final success message alone.
 
 Local notarisation prerequisites:
 
@@ -169,7 +169,7 @@ Before invoking the helper, confirm the GitHub repository/account, approved tag 
 For a stable release, complete the release/site outcome even if the script skips or warns:
 
 - Provide nonempty release notes. Empty notes skip metadata, feed, and deployment; drafts/prereleases intentionally leave the stable feed unchanged.
-- Check generated version/build numbers, release notes, enclosure URLs, sizes, and Sparkle signature against the exact uploaded ZIP. Verify expected app/DMG signing and DMG notarisation/stapling evidence. Appcast generation uses the local ZIP, not a freshly downloaded copy of the published asset.
+- Check generated version/build numbers, release notes, enclosure URLs, sizes, and Sparkle signature against the exact uploaded ZIP. Verify expected app/DMG signing and app/DMG notarisation/stapling evidence. Appcast generation uses the local ZIP, not a freshly downloaded copy of the published asset.
 - **Appcast failure is only a warning in the publisher.** It can still deploy a stale or invalid feed. For a validation checkpoint before deployment, use `--skip-site-deploy`, validate the generated files, then deploy explicitly as part of the same authorized stable release. This stages deployment; it does not omit the website update.
 - Review and commit generated `site/releases.json`, `site/releases/`, and `site/appcast.xml` changes as part of the release work. The scripts do not commit them. Push/merge only when authorized. Deploy from the intended committed release state using [Cloudflare target checks](cloudflare-pages.md); if the helper already deployed dirty generated files, redeploy their committed state so deployment metadata matches the released content. Do not label an unrelated branch/commit as `main` merely because the helper defaults to it.
 - Verify the public version, release notes, feed, and asset links after deployment. Report partial publication honestly; do not blindly rerun a command that may overwrite already-published assets.

@@ -39,7 +39,7 @@ Usage:
 Options:
   [version]     Optional artifact version suffix (default: local)
   --distribution    Sign app and DMG with Developer ID credentials
-  --notarize        Submit the signed DMG for notarisation and staple the result
+  --notarize        Notarise and staple the signed app before packaging, then the DMG
   --identity        Developer ID identity for signing
   --team            Developer ID development team ID
   --api-key         Path to an App Store Connect API key (.p8)
@@ -89,6 +89,22 @@ sign_sparkle_support_binaries() {
   codesign --force --options runtime --timestamp --sign "${SIGNING_IDENTITY}" "${version_path}"
   remove_signature_if_present "${framework_path}"
   codesign --force --options runtime --timestamp --sign "${SIGNING_IDENTITY}" "${framework_path}"
+}
+
+notarize() {
+  local NOTARY_CMD=(
+    xcrun notarytool submit "$1"
+    --key "${API_KEY_PATH}"
+    --key-id "${API_KEY_ID}"
+    --team-id "${DEVELOPMENT_TEAM}"
+    --wait
+  )
+
+  if [ -n "${API_ISSUER_ID}" ]; then
+    NOTARY_CMD+=(--issuer "${API_ISSUER_ID}")
+  fi
+
+  "${NOTARY_CMD[@]}"
 }
 
 create_applications_alias() (
@@ -256,6 +272,18 @@ if [ "${USE_DISTRIBUTION_SIGNING}" = "true" ]; then
   codesign --verify --deep --strict --verbose=2 "${APP_PATH}"
 fi
 
+if [ "${USE_NOTARIZATION}" = "true" ]; then
+  # Staple the app itself so the ZIP, Sparkle updates, and copies dragged out
+  # of the DMG open offline instead of waiting on Gatekeeper's online check.
+  APP_NOTARY_ZIP="dist/${APP_NAME}-${VERSION}-notary.zip"
+  rm -f "${APP_NOTARY_ZIP}"
+  ditto -c -k --sequesterRsrc --keepParent "${APP_PATH}" "${APP_NOTARY_ZIP}"
+  notarize "${APP_NOTARY_ZIP}"
+  rm -f "${APP_NOTARY_ZIP}"
+  xcrun stapler staple "${APP_PATH}"
+  xcrun stapler validate "${APP_PATH}"
+fi
+
 mkdir -p "${STAGING_DIR}"
 rm -rf "${STAGING_DIR:?}"/*
 cp -R "${APP_PATH}" "${STAGING_DIR}/"
@@ -297,19 +325,7 @@ if [ "${USE_DISTRIBUTION_SIGNING}" = "true" ] && [ -f "${DMG_PATH}" ]; then
 fi
 
 if [ "${USE_NOTARIZATION}" = "true" ] && [ -f "${DMG_PATH}" ]; then
-  NOTARY_CMD=(
-    xcrun notarytool submit "${DMG_PATH}"
-    --key "${API_KEY_PATH}"
-    --key-id "${API_KEY_ID}"
-    --team-id "${DEVELOPMENT_TEAM}"
-    --wait
-  )
-
-  if [ -n "${API_ISSUER_ID}" ]; then
-    NOTARY_CMD+=(--issuer "${API_ISSUER_ID}")
-  fi
-
-  "${NOTARY_CMD[@]}"
+  notarize "${DMG_PATH}"
   xcrun stapler staple "${DMG_PATH}"
   xcrun stapler validate "${DMG_PATH}"
 fi

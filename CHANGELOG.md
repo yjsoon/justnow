@@ -13,6 +13,7 @@ All notable changes to JustNow will be documented in this file.
 ### Fixed
 - Make the Screen Recording permission alert dismissable with Not Now, name the current System Settings pane, and give numbered steps without developer-only wording. It no longer stacks a second copy when JustNow becomes active again.
 - Relaunch JustNow automatically after Screen Recording is granted, instead of asking users to reopen a menu bar app with no Dock icon.
+- Notarise and staple the app itself before packaging, so the ZIP, Sparkle updates, and copies installed from the DMG open without waiting on Gatekeeper's online check.
 - Explain when JustNow is already running instead of showing a raw storage error, and quit the extra copy.
 - Find normal-size on-screen text in search. Background indexing now reads each frame at its captured resolution instead of a downscaled copy that fast text recognition could not read. Frames already indexed keep their existing text.
 
