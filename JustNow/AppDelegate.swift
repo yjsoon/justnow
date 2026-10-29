@@ -252,10 +252,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         return .terminateLater
     }
 
+    /// Alerts shown from main-actor Tasks run inside a main-queue callout.
+    /// Terminating there parks AppKit's terminateLater loop, which cannot drain
+    /// the main queue again, so the flush Task never replies and the app hangs.
+    /// A run-loop timer calls terminate: outside that callout.
+    private func terminateFromRunLoop() {
+        NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
+    }
+
     private func relaunchApp() {
         do {
             guard try relaunchCoordinator.prepareRelaunch() else { return }
-            NSApp.terminate(nil)
+            terminateFromRunLoop()
         } catch {
             DiagnosticsLog.shared.log(
                 "App",
@@ -1334,7 +1342,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 sourceFrameInScreen: sourceFrame.isEmpty ? nil : sourceFrame
             )
         case .alertThirdButtonReturn:
-            NSApp.terminate(nil)
+            terminateFromRunLoop()
         default:
             // Not Now: stay in the menu bar; Screen Recording Help… reopens this.
             break
@@ -1383,9 +1391,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             alert.addButton(withTitle: "OK")
             NSApp.activate(ignoringOtherApps: true)
             alert.runModal()
-            // This runs inside setupCaptureTask, which applicationShouldTerminate
-            // awaits; terminating synchronously here would deadlock the quit.
-            DispatchQueue.main.async { NSApp.terminate(nil) }
+            terminateFromRunLoop()
             return
         }
 
