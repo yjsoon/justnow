@@ -1383,7 +1383,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             alert.addButton(withTitle: "OK")
             NSApp.activate(ignoringOtherApps: true)
             alert.runModal()
-            NSApp.terminate(nil)
+            // This runs inside setupCaptureTask, which applicationShouldTerminate
+            // awaits; terminating synchronously here would deadlock the quit.
+            DispatchQueue.main.async { NSApp.terminate(nil) }
             return
         }
 
