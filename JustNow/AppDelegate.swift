@@ -125,6 +125,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     private var screenRecordingPermission = ScreenRecordingPermissionState()
     private var captureRecoveryNeedsAttention = false
     private var hasPresentedPersistentCaptureRecoveryAlert = false
+    /// Activation changes while a permission alert is modal can request
+    /// another one; never stack a second copy on top.
+    private var isPresentingPermissionAlert = false
     private var lastCaptureStatusText = "Starting..."
     private let capturePolicyController = CapturePolicyController()
     private let captureStartController = CaptureStartController()
@@ -249,10 +252,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         return .terminateLater
     }
 
+    /// Alerts shown from main-actor Tasks run inside a main-queue callout.
+    /// Terminating there parks AppKit's terminateLater loop, which cannot drain
+    /// the main queue again, so the flush Task never replies and the app hangs.
+    /// A run-loop timer calls terminate: outside that callout.
+    private func terminateFromRunLoop() {
+        NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
+    }
+
     private func relaunchApp() {
         do {
             guard try relaunchCoordinator.prepareRelaunch() else { return }
-            NSApp.terminate(nil)
+            terminateFromRunLoop()
         } catch {
             DiagnosticsLog.shared.log(
                 "App",
@@ -1292,7 +1303,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     private func showPermissionAlert(force: Bool = false) {
-        guard screenRecordingPermission.consumePermissionAlertPresentation(force: force) else { return }
+        guard !isPresentingPermissionAlert,
+              screenRecordingPermission.consumePermissionAlertPresentation(force: force) else { return }
 
         DiagnosticsLog.shared.log(
             "Permission",
@@ -1300,32 +1312,41 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         )
 
         let alert = NSAlert()
-        alert.messageText = "Screen Recording Permission Required"
+        alert.messageText = "Allow Screen Recording"
         alert.informativeText = """
-        JustNow needs Screen Recording permission to capture your screen history.
+        JustNow needs Screen Recording permission to keep a history of your screen. The history stays on this Mac.
 
-        Open System Settings → Privacy & Security → Screen Recording and allow JustNow.
+        1. Click Open System Settings.
+        2. In Privacy & Security → Screen & System Audio Recording, turn on JustNow. If JustNow is not in that list, click + and choose JustNow from Applications.
+        3. When macOS asks, click Quit & Reopen. If it does not ask, JustNow will offer to relaunch.
 
-        After enabling JustNow, quit and reopen the app once so capture can restart cleanly with the new permission.
-
-        If JustNow is already enabled there but capture still fails after a recent build, signing, or notarisation change, remove the JustNow entry from Screen Recording and relaunch once so macOS can create a fresh permission record.
+        Already turned on but still not recording? Select JustNow in that list, click − to remove it, then add it again.
         """
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Open System Settings")
-        alert.addButton(withTitle: "Quit")
+        let notNowButton = alert.addButton(withTitle: "Not Now")
+        notNowButton.keyEquivalent = "\u{1b}"
+        alert.addButton(withTitle: "Quit JustNow")
 
         NSApp.activate(ignoringOtherApps: true)
 
-        if alert.runModal() == .alertFirstButtonReturn {
+        isPresentingPermissionAlert = true
+        let response = alert.runModal()
+        isPresentingPermissionAlert = false
+
+        switch response {
+        case .alertFirstButtonReturn:
             let sourceFrame = alert.window.frame
             PermisoAssistant.shared.present(
                 panel: .screenRecording,
                 sourceFrameInScreen: sourceFrame.isEmpty ? nil : sourceFrame
             )
-            return
+        case .alertThirdButtonReturn:
+            terminateFromRunLoop()
+        default:
+            // Not Now: stay in the menu bar; Screen Recording Help… reopens this.
+            break
         }
-
-        NSApp.terminate(nil)
     }
 
     private func showPermissionRestartAlert() {
@@ -1337,24 +1358,43 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         )
 
         let alert = NSAlert()
-        alert.messageText = "Restart JustNow to Start Capture"
+        alert.messageText = "Relaunch JustNow to Start Recording"
         alert.informativeText = """
-        Screen Recording is now enabled for JustNow.
+        Screen Recording is now turned on for JustNow.
 
-        Quit and reopen the app once so capture can restart cleanly with the new permission.
+        JustNow must relaunch once before it can use the new permission. It quits and opens again by itself.
         """
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "Quit JustNow")
+        alert.addButton(withTitle: "Relaunch JustNow")
         alert.addButton(withTitle: "Later")
 
         NSApp.activate(ignoringOtherApps: true)
 
-        if alert.runModal() == .alertFirstButtonReturn {
-            NSApp.terminate(nil)
+        isPresentingPermissionAlert = true
+        let response = alert.runModal()
+        isPresentingPermissionAlert = false
+
+        if response == .alertFirstButtonReturn {
+            relaunchApp()
         }
     }
 
     private func showErrorAlert(_ error: Error) {
+        if case FrameStoreError.storeInUse = error {
+            // Another JustNow process holds the history lock, so this copy can
+            // never record. Explain and leave the running copy in charge.
+            DiagnosticsLog.shared.log("App", "Another JustNow instance owns the history store; quitting this copy")
+            let alert = NSAlert()
+            alert.messageText = "JustNow Is Already Running"
+            alert.informativeText = "Another copy of JustNow is already running and keeping your history. Use its icon in the menu bar or your rewind shortcut. This copy will now quit."
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+            terminateFromRunLoop()
+            return
+        }
+
         let alert = NSAlert()
         alert.messageText = "Capture Error"
         alert.informativeText = error.localizedDescription
