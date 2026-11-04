@@ -32,17 +32,6 @@ Prefer simple, forward-moving implementations while preserving users' settings a
 
 ## Task references
 
-Read the reference relevant to the task, not every document or the whole repository:
-
-- App behavior and UI: [JustNow/AGENTS.md](JustNow/AGENTS.md).
 - Build, test, install, and TCC troubleshooting: [local development](Docs/local-development.md).
-- Official artifacts and publication: [release and distribution](Docs/release-and-distribution.md).
-- Static site generation and preview: [site and updates](Docs/site-and-updates.md).
-- Website deployment and target checks: [Cloudflare Pages](Docs/cloudflare-pages.md).
-
-## Ownership entry points
-
-- `JustNow/AppDelegate.swift` and `JustNow/Capture/`: lifecycle, capture coordination, frame buffering, retention handoff, and OCR queueing.
-- `JustNow/Storage/FrameStore.swift`, `FrameDatabase.swift`, `HybridFrameRepository.swift`, and `TextCache.swift`: durable images/SQLite, memory-resident recent history, and OCR/search data.
-- `JustNow/UI/`: overlay presentation, timeline/search, drag actions, Settings, and menu bar controls.
-- `.github/workflows/unit-tests.yml`: macOS test command. `.github/workflows/release.yml`: stable tag-triggered app/site/feed publication via `Scripts/ci-release-publish.py`. Older workflows under `.github/archived-workflows/` are historical references only.
+- Official artifacts and publication: [release and distribution](Docs/release-and-distribution.md). Stable releases are tag-triggered in CI; workflows under `.github/archived-workflows/` are historical only.
+- Website generation, preview and deployment: [site and updates](Docs/site-and-updates.md), [Cloudflare Pages](Docs/cloudflare-pages.md).

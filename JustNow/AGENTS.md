@@ -1,7 +1,5 @@
 # App Guidance
 
-Follow the root guidance for privacy, authorization, and verification; see [local development](../Docs/local-development.md) for build/test/install procedures.
-
 ## Capture and storage
 
 - Use `ScreenCaptureKit`, not deprecated `CGWindowListCreateImage`.
@@ -21,4 +19,4 @@ Follow the root guidance for privacy, authorization, and verification; see [loca
 - Keep timeline recent-detail boundaries and label priority aligned with the configured recent window, not a hard-coded cutoff.
 - Check capture-interval copy against adaptive throttling and deduplicated browsing; a nominal interval is not a guarantee of distinct stored frames.
 
-Use the relevant classes in `JustNowTests/` for focused verification. Shared storage/capture/lifecycle changes need broader coverage; inspect representative rendered states for appearance changes, including alternate drag modes or Settings entry points when affected.
+For appearance changes, inspect alternate drag modes or Settings entry points when affected.
