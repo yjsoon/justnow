@@ -19,4 +19,4 @@
 - Keep timeline recent-detail boundaries and label priority aligned with the configured recent window, not a hard-coded cutoff.
 - Check capture-interval copy against adaptive throttling and deduplicated browsing; a nominal interval is not a guarantee of distinct stored frames.
 
-For appearance changes, inspect alternate drag modes or Settings entry points when affected.
+Use the relevant classes in `JustNowTests/` for focused verification. Shared storage/capture/lifecycle changes need broader coverage. For appearance changes, inspect alternate drag modes or Settings entry points when affected.
