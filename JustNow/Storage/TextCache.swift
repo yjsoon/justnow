@@ -404,6 +404,9 @@ actor TextCache {
         try withTransaction {
             try execute("DELETE FROM frame_search_layout;")
             try execute("DELETE FROM frame_text_fts;")
+            // FTS5 deletes only add tombstones; the old index segments keep
+            // every token until the index is rebuilt.
+            try execute("INSERT INTO frame_text_fts(frame_text_fts) VALUES('rebuild');")
             try execute("DELETE FROM frame_text;")
         }
         let remainingRows = try ["frame_search_layout", "frame_text_fts", "frame_text"].reduce(0) {
