@@ -735,6 +735,10 @@ nonisolated final class FrameDatabase: @unchecked Sendable {
             try execute("DELETE FROM frames;")
             try execute("DELETE FROM capture_sessions;")
         }
+        // Rewrite the file so cleared rows do not linger in free pages or the
+        // WAL. The delete has committed, so compaction is best-effort.
+        try? execute("VACUUM;")
+        try? execute("PRAGMA wal_checkpoint(TRUNCATE);")
     }
 
     func storageStatistics(

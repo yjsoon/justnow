@@ -420,6 +420,14 @@ actor TextCache {
                 "OCR cache clear verification found \(remainingRows) remaining row(s)"
             )
         }
+        // Deleted rows stay readable in free pages and the WAL until the file
+        // is rewritten. The clear has committed, so compaction is best-effort.
+        do {
+            try execute("VACUUM;")
+            try execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        } catch {
+            Self.logger.error("OCR cache compaction after clear failed: \(error.localizedDescription)")
+        }
     }
 
     var count: Int {

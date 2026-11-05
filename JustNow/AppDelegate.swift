@@ -128,6 +128,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     /// Activation changes while a permission alert is modal can request
     /// another one; never stack a second copy on top.
     private var isPresentingPermissionAlert = false
+    private var hasStartedUpdater = false
     private var lastCaptureStatusText = "Starting..."
     private let capturePolicyController = CapturePolicyController()
     private let captureStartController = CaptureStartController()
@@ -196,7 +197,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         migrateLegacyDefaultSettingsIfNeeded()
         DiagnosticsLog.shared.logSessionStart()
         setupStatusItem()
-        updaterController.startUpdater()
         registerHotKeys()
         setupCapture()
         setupTimers()
@@ -866,6 +866,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
 
     private func handleSuccessfulCaptureStart(successMessage: String? = nil) {
         updateCaptureStatus("Active")
+        startUpdaterIfNeeded()
         capturePolicyController.resetAppliedPolicy()
         updateCapturePolicy()
         scheduleIdleTransitionCheck()
@@ -1060,7 +1061,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     @objc private func checkForUpdates(_ sender: Any?) {
+        startUpdaterIfNeeded()
         updaterController.checkForUpdates(sender)
+    }
+
+    /// Sparkle's first-run "check automatically?" prompt used to land in the
+    /// middle of the Screen Recording flow, and duplicate copies showed it too.
+    /// Start it once recording works, or when the user asks for an update.
+    private func startUpdaterIfNeeded() {
+        guard !hasStartedUpdater else { return }
+        hasStartedUpdater = true
+        updaterController.startUpdater()
     }
 
     @objc private func quitApp() {
@@ -1253,7 +1264,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     private func updatePermissionHelpMenuItem() {
+        // macOS can keep reporting the grant after it is revoked mid-run, so a
+        // capture stuck recovering also gets the help item.
         let needsPermissionHelp = captureRecoveryNeedsAttention
+            || lastCaptureStatusText == "Recovering…"
             || !ScreenCaptureManager.hasScreenRecordingPermission()
         statusItemController?.setPermissionHelpVisible(needsPermissionHelp)
     }
@@ -1317,7 +1331,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         JustNow needs Screen Recording permission to keep a history of your screen. The history stays on this Mac.
 
         1. Click Open System Settings.
-        2. In Privacy & Security → Screen & System Audio Recording, turn on JustNow. If JustNow is not in that list, click + and choose JustNow from Applications.
+        2. In Privacy & Security → Screen & System Audio Recording, turn on JustNow. If JustNow is not in that list, click +, choose Applications in the sidebar, then select JustNow.
         3. When macOS asks, click Quit & Reopen. If it does not ask, JustNow will offer to relaunch.
 
         Already turned on but still not recording? Select JustNow in that list, click − to remove it, then add it again.
