@@ -132,11 +132,9 @@ final class CaptureRequestBroker {
         return false
     }
 
-    /// Seconds until the open circuit's cooldown expires, or nil when it is
-    /// not cooling down.
-    func remainingCooldown() -> TimeInterval? {
-        guard let deadline = openCircuitMonotonicDeadline else { return nil }
-        return max(0, deadline - monotonicNow())
+    /// Seconds until `deadline` on the broker's monotonic clock, never negative.
+    func remainingCooldown(until deadline: TimeInterval) -> TimeInterval {
+        max(0, deadline - monotonicNow())
     }
 
     /// Runs a single one-shot request after process-wide admission.

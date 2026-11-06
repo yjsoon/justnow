@@ -412,19 +412,22 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
                 } else {
                     isPermissionDenied = false
                 }
+                let cooldownDeadline = self.captureRequestBroker.openCircuitMonotonicDeadline
                 switch Self.backgroundReconcileRecoveryAction(
                     isRunning: self.isRunning,
                     isCapturing: self.isCapturing,
                     errorIsCancellation: error is CancellationError,
                     errorIsPermissionDenied: isPermissionDenied,
-                    hasOpenCircuit: self.captureRequestBroker.openCircuitMonotonicDeadline != nil
+                    hasOpenCircuit: cooldownDeadline != nil
                 ) {
                 case .notifyPermissionFlow:
                     // A revocation found during a system-event reconcile must
                     // reach the app's restart/permission flow, not vanish.
                     self.delegate?.captureCoordinatorDidStopUnexpectedly(self)
                 case .retryAfterCooldown:
-                    self.scheduleCooldownRestart()
+                    if let cooldownDeadline {
+                        self.scheduleCooldownRestart(until: cooldownDeadline)
+                    }
                 case .retryFallback:
                     let detail = DiagnosticsLogFormat.describe(error)
                     captureLogger.error("Display reconciliation failed; scheduling fallback retry: \(detail, privacy: .public)")
@@ -456,15 +459,18 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
         // few seconds. If the shared circuit is already open, do not treat
         // that as a real revoke or we show the permission alert and the user
         // quits, which wipes the in-memory cooldown.
+        // Read the clock-dependent deadline once so the gate and the retry
+        // it schedules agree even if the cooldown expires in between.
+        let gateDeadline = captureRequestBroker.openCircuitMonotonicDeadline
         switch CapturePermissionGate.resolve(
             hasPermission: hasScreenRecordingPermission(),
-            circuitIsOpen: captureRequestBroker.openCircuitMonotonicDeadline != nil
+            circuitIsOpen: gateDeadline != nil
         ) {
         case .allowed:
             break
         case .coolingDown:
-            if let deadline = captureRequestBroker.openCircuitMonotonicDeadline {
-                scheduleCooldownRestart()
+            if let deadline = gateDeadline {
+                scheduleCooldownRestart(until: deadline)
                 throw CaptureRequestBrokerError.cooldown(untilMonotonicTime: deadline)
             }
             throw CaptureError.permissionDenied
@@ -480,16 +486,17 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
                 try await self.discoverDisplays()
             }
         } catch {
+            let failureDeadline = captureRequestBroker.openCircuitMonotonicDeadline
             if CaptureFailureRecovery.isPermissionDenial(error) {
                 switch CapturePermissionGate.resolve(
                     hasPermission: hasScreenRecordingPermission(),
-                    circuitIsOpen: captureRequestBroker.openCircuitMonotonicDeadline != nil
+                    circuitIsOpen: failureDeadline != nil
                 ) {
                 case .denied:
                     throw CaptureError.permissionDenied
                 case .coolingDown:
-                    if let deadline = captureRequestBroker.openCircuitMonotonicDeadline {
-                        scheduleCooldownRestart()
+                    if let deadline = failureDeadline {
+                        scheduleCooldownRestart(until: deadline)
                         throw CaptureRequestBrokerError.cooldown(untilMonotonicTime: deadline)
                     }
                     throw CaptureError.permissionDenied
@@ -498,8 +505,8 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
                 }
             }
             if !(error is CancellationError),
-               let deadline = captureRequestBroker.openCircuitMonotonicDeadline {
-                scheduleCooldownRestart()
+               let deadline = failureDeadline {
+                scheduleCooldownRestart(until: deadline)
                 throw CaptureRequestBrokerError.cooldown(untilMonotonicTime: deadline)
             }
             throw error
@@ -577,11 +584,11 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
                         // false-denial episode happens to be open.
                         if !isPermissionDenied,
                            !(error is CancellationError),
-                           captureRequestBroker.openCircuitMonotonicDeadline != nil {
+                           let deadline = captureRequestBroker.openCircuitMonotonicDeadline {
                             // The shared circuit opened (or was already open); the
                             // broker has logged it. Defer this display to the
                             // cooldown restart instead of counting a hard failure.
-                            scheduleCooldownRestart()
+                            scheduleCooldownRestart(until: deadline)
                             continue
                         }
                         let detail = DiagnosticsLogFormat.describe(error)
@@ -683,13 +690,15 @@ final class CaptureCoordinator: NSObject, ScreenCaptureDelegate {
     /// cooldown expires. Bounded by design: if the retry's probe fails again,
     /// the broker reopens the circuit with an escalated cooldown and this
     /// reschedules for the new, later deadline.
-    private func scheduleCooldownRestart() {
+    ///
+    /// Takes the deadline the caller already read: the broker's deadline
+    /// getter returns nil once it expires, so re-reading it here could drop
+    /// the retry while the caller still defers to the cooldown.
+    private func scheduleCooldownRestart(until deadline: TimeInterval) {
         guard isRunning else { return }
-        guard let deadline = captureRequestBroker.openCircuitMonotonicDeadline,
-              let remaining = captureRequestBroker.remainingCooldown() else { return }
         guard cooldownRestartScheduler.scheduledDeadline != deadline else { return }
 
-        let delay = remaining + 1
+        let delay = captureRequestBroker.remainingCooldown(until: deadline) + 1
         DiagnosticsLog.shared.log(
             "Capture",
             "Capture start deferred; retrying in \(Int(delay)) seconds when the shared ScreenCaptureKit circuit cooldown ends"
