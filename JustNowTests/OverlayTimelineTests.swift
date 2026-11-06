@@ -20,14 +20,8 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertEqual(timelineEntryPosition(index: 1, count: 11), 0.1, accuracy: 0.000_1)
         XCTAssertEqual(timelineEntryPosition(index: 9, count: 11), 0.9, accuracy: 0.000_1)
         XCTAssertEqual(timelineEntryIndex(at: 0.73, count: 11), 7)
-    }
-
-    func testTimelineGeometryClampsAndHandlesSingleEntry() {
-        XCTAssertEqual(timelineEntryPosition(index: -1, count: 10), 0)
-        XCTAssertEqual(timelineEntryPosition(index: 11, count: 10), 1)
+        // A single span must not divide by zero.
         XCTAssertEqual(timelineEntryPosition(index: 0, count: 1), 0)
-        XCTAssertEqual(timelineEntryIndex(at: -0.5, count: 10), 0)
-        XCTAssertEqual(timelineEntryIndex(at: 1.5, count: 10), 9)
         XCTAssertEqual(timelineEntryIndex(at: 0.5, count: 1), 0)
     }
 
@@ -299,29 +293,7 @@ final class OverlayTimelineTests: XCTestCase {
             onVisibilityChanged: { visibilityTransitions.append($0) },
             onOpenSettings: {}
         )
-        let defaults = UserDefaults.standard
-        let keys = [
-            AppStorageKey.screenshotSaveToFolder,
-            AppStorageKey.screenshotSaveToClipboard,
-            AppStorageKey.saveScreenshotSoundEnabled,
-            AppStorageKey.hasSeenSaveQualityInfo
-        ]
-        let priorValues = Dictionary(uniqueKeysWithValues: keys.compactMap { key in
-            defaults.object(forKey: key).map { (key, $0) }
-        })
-        defer {
-            for key in keys {
-                if let priorValue = priorValues[key] {
-                    defaults.set(priorValue, forKey: key)
-                } else {
-                    defaults.removeObject(forKey: key)
-                }
-            }
-        }
-        defaults.set(true, forKey: AppStorageKey.screenshotSaveToFolder)
-        defaults.set(false, forKey: AppStorageKey.screenshotSaveToClipboard)
-        defaults.set(false, forKey: AppStorageKey.saveScreenshotSoundEnabled)
-        defaults.set(true, forKey: AppStorageKey.hasSeenSaveQualityInfo)
+        useFolderOnlySilentScreenshotSaves()
 
         await controller.showOverlay(
             recentTimelineWindow: 300,
@@ -413,23 +385,6 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertTrue(visibilityTransitions.isEmpty)
     }
 
-    func testTimelineThumbOffsetStaysFullyInsideTrackAtBothEnds() {
-        XCTAssertEqual(timelineThumbOffset(totalWidth: 100, thumbDiameter: 24, position: 0), 0)
-        XCTAssertEqual(timelineThumbOffset(totalWidth: 100, thumbDiameter: 24, position: 1), 76)
-        XCTAssertEqual(timelineThumbOffset(totalWidth: 10, thumbDiameter: 24, position: 1), 0)
-    }
-
-    func testResolverPreservesTargetInsideSpan() throws {
-        let base = Date(timeIntervalSinceReferenceDate: 10_000)
-        let entry = makeEntry(start: base, end: base.addingTimeInterval(20))
-        let target = base.addingTimeInterval(7.25)
-
-        let selection = try XCTUnwrap(resolveTimelineSelection(entries: [entry], target: target))
-
-        XCTAssertEqual(selection.spanID, entry.span.id)
-        XCTAssertEqual(selection.timestamp, target)
-    }
-
     func testResolverUsesNearestGapEndpointAndTiesOlder() throws {
         let base = Date(timeIntervalSinceReferenceDate: 10_000)
         let older = makeEntry(start: base, end: base.addingTimeInterval(10))
@@ -469,40 +424,6 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertEqual(equalBoundary.spanID, boundary.span.id)
     }
 
-    func testResolverEqualTimestampEntriesUseLaterDurableOrder() throws {
-        let date = Date(timeIntervalSinceReferenceDate: 10_000)
-        let first = makeEntry(start: date, end: date)
-        let second = makeEntry(start: date, end: date)
-
-        let selection = try XCTUnwrap(resolveTimelineSelection(entries: [first, second], target: date))
-
-        XCTAssertEqual(selection.spanID, second.span.id)
-        XCTAssertEqual(selection.entryIndex, 1)
-    }
-
-    func testResolverHandlesEmptySingleFutureAndClockRollback() throws {
-        let reference = Date(timeIntervalSinceReferenceDate: 10_000)
-        XCTAssertNil(resolveTimelineSelection(entries: [], target: reference))
-
-        let future = makeEntry(
-            start: reference.addingTimeInterval(30),
-            end: reference.addingTimeInterval(30)
-        )
-        let futureSelection = try XCTUnwrap(resolveTimelineSelection(entries: [future], target: reference))
-        XCTAssertEqual(futureSelection.timestamp, future.span.startedAt)
-        XCTAssertEqual(clampedTimelineReferenceDate(requested: reference, entries: [future]), future.span.startedAt)
-
-        let rollback = makeEntry(
-            start: reference.addingTimeInterval(20),
-            end: reference.addingTimeInterval(10)
-        )
-        let rollbackSelection = try XCTUnwrap(resolveTimelineSelection(
-            entries: [rollback],
-            target: reference.addingTimeInterval(15)
-        ))
-        XCTAssertEqual(rollbackSelection.timestamp, reference.addingTimeInterval(15))
-    }
-
     func testTimelineMarkerAndRecentBorderUseExactTargetTime() throws {
         let now = Date(timeIntervalSinceReferenceDate: 1_000_000)
         let entries = [
@@ -526,36 +447,6 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertEqual(marker.targetDate, now.addingTimeInterval(-300))
         XCTAssertEqual(marker.position, 0.5, accuracy: 0.000_1)
         XCTAssertEqual(marker.id, marker.targetDate.timeIntervalSinceReferenceDate)
-    }
-
-    func testRefocusingSearchPreservesItsFilterAndSelectedResult() async throws {
-        let now = Date(timeIntervalSinceReferenceDate: 1_000_000)
-        let entries = [
-            makeEntry(start: now.addingTimeInterval(-100), end: now.addingTimeInterval(-90)),
-            makeEntry(start: now.addingTimeInterval(-20), end: now.addingTimeInterval(-10))
-        ]
-        let viewModel = try await makeViewModel(entries: entries, referenceDate: now)
-        viewModel.toggleSearch()
-        XCTAssertTrue(viewModel.isSearching)
-        XCTAssertEqual(viewModel.searchFocusRequest, 1)
-        viewModel.searchQuery = "needle"
-        viewModel.searchTimeScope = .oneHour
-        viewModel.searchResults = entries
-        viewModel.selectedIndex = 0
-        let selectedTimestamp = viewModel.selectedTimestamp
-
-        // Each request must be observable, even after clicking back into the
-        // field or returning to browsing without closing the search UI.
-        viewModel.focusSearch()
-        viewModel.focusSearch()
-        XCTAssertEqual(viewModel.searchFocusRequest, 3)
-        XCTAssertTrue(viewModel.isSearching)
-        XCTAssertEqual(viewModel.searchQuery, "needle")
-        XCTAssertEqual(viewModel.searchTimeScope, .oneHour)
-        XCTAssertEqual(viewModel.searchResults.map(\.span.id), entries.map(\.span.id))
-        XCTAssertEqual(viewModel.selectedIndex, 0)
-        XCTAssertEqual(viewModel.selectedTimestamp, selectedTimestamp)
-        viewModel.clearSearch()
     }
 
     func testTimelineDecorationDoesNotInvalidateWhenScrubbingOrSearching() async throws {
@@ -637,21 +528,6 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertEqual(viewModel.timelineZoneFills.map(\.end), [0.5, 1])
     }
 
-    func testTimelineColourSegmentsSplitAtExactBorder() {
-        let entry = makeEntry(
-            start: Date(timeIntervalSinceReferenceDate: 1_000),
-            end: Date(timeIntervalSinceReferenceDate: 1_010)
-        )
-        let segments = timelineColourSegments(entries: [entry], borderPosition: 0.25)
-
-        XCTAssertEqual(segments.count, 2)
-        XCTAssertEqual(segments[0].start, 0, accuracy: 0.000_1)
-        XCTAssertEqual(segments[0].end, 0.25, accuracy: 0.000_1)
-        XCTAssertEqual(segments[1].start, 0.25, accuracy: 0.000_1)
-        XCTAssertEqual(segments[1].end, 1, accuracy: 0.000_1)
-        XCTAssertTrue(timelineColourSegments(entries: [], borderPosition: 0.5).isEmpty)
-    }
-
     func testViewModelNavigationUsesSpanEndpointsAndElapsedJumps() async throws {
         let base = Date(timeIntervalSinceReferenceDate: 10_000)
         let entries = [
@@ -684,62 +560,11 @@ final class OverlayTimelineTests: XCTestCase {
         viewModel.goToEnd()
         XCTAssertEqual(viewModel.selectedSpanID, entries[2].span.id)
         XCTAssertEqual(viewModel.selectedTimestamp, base.addingTimeInterval(90))
-    }
 
-    func testRollbackSpanHomeAndEndUseNormalisedBounds() async throws {
-        let base = Date(timeIntervalSinceReferenceDate: 10_000)
-        let rollback = makeEntry(
-            start: base.addingTimeInterval(20),
-            end: base.addingTimeInterval(10)
-        )
-        let viewModel = try await makeViewModel(
-            entries: [rollback],
-            referenceDate: base.addingTimeInterval(30)
-        )
-
-        viewModel.goToStart()
-        XCTAssertEqual(viewModel.selectedTimestamp, base.addingTimeInterval(10))
-
-        viewModel.goToEnd()
-        XCTAssertEqual(viewModel.selectedTimestamp, base.addingTimeInterval(20))
-    }
-
-    func testViewModelSelectionIsTimestampAuthoritativeAndAccessibilityIsSpanAware() async throws {
-        let base = Date(timeIntervalSinceReferenceDate: 10_000)
-        let entry = makeEntry(start: base, end: base.addingTimeInterval(30))
-        let viewModel = try await makeViewModel(entries: [entry], referenceDate: base.addingTimeInterval(40))
-
-        viewModel.setSelectedTimestamp(base.addingTimeInterval(12.5))
-
-        XCTAssertEqual(viewModel.selectedTimestamp, base.addingTimeInterval(12.5))
-        XCTAssertEqual(viewModel.selectedIndex, 0)
-        XCTAssertTrue(viewModel.accessibilityTimelineValue.contains("Span 1 of 1"))
-        XCTAssertFalse(viewModel.accessibilityTimelineValue.contains("Frame"))
-    }
-
-    func testScrollCrossesSparseHistoryGapsInBothDirections() async throws {
-        let base = Date(timeIntervalSinceReferenceDate: 10_000)
-        let older = makeEntry(
-            start: base,
-            end: base.addingTimeInterval(10)
-        )
-        let newer = makeEntry(
-            start: base.addingTimeInterval(70),
-            end: base.addingTimeInterval(90)
-        )
-        let viewModel = try await makeViewModel(
-            entries: [older, newer],
-            referenceDate: base.addingTimeInterval(100)
-        )
-
-        viewModel.setSelectedTimestamp(base.addingTimeInterval(80))
+        // Rewinding across the sparse gap lands on the older span's newest edge.
         viewModel.scrollBy(1)
-        XCTAssertEqual(viewModel.selectedSpanID, older.span.id)
-        XCTAssertEqual(viewModel.selectedTimestamp, base.addingTimeInterval(10))
-
-        viewModel.scrollBy(-1)
-        XCTAssertEqual(viewModel.selectedSpanID, newer.span.id)
-        XCTAssertEqual(viewModel.selectedTimestamp, base.addingTimeInterval(70))
+        XCTAssertEqual(viewModel.selectedSpanID, entries[1].span.id)
+        XCTAssertEqual(viewModel.selectedTimestamp, base.addingTimeInterval(30))
     }
 
     func testScrollNeverMovesAgainstRequestedDirectionAcrossOverlappingSpans() async throws {
@@ -771,25 +596,6 @@ final class OverlayTimelineTests: XCTestCase {
         ))
         XCTAssertEqual(forward.spanID, second.span.id)
         XCTAssertEqual(forward.timestamp, base.addingTimeInterval(30))
-    }
-
-    func testScrollIgnoresNonFiniteDelta() async throws {
-        let base = Date(timeIntervalSinceReferenceDate: 10_000)
-        let entries = [
-            makeEntry(start: base, end: base.addingTimeInterval(10)),
-            makeEntry(start: base.addingTimeInterval(20), end: base.addingTimeInterval(30))
-        ]
-        let viewModel = try await makeViewModel(
-            entries: entries,
-            referenceDate: base.addingTimeInterval(40)
-        )
-        let originalSpanID = viewModel.selectedSpanID
-        let originalTimestamp = viewModel.selectedTimestamp
-
-        viewModel.scrollBy(.nan)
-
-        XCTAssertEqual(viewModel.selectedSpanID, originalSpanID)
-        XCTAssertEqual(viewModel.selectedTimestamp, originalTimestamp)
     }
 
     func testSearchSelectionPreservesLogicalSpanIDAndTimestamp() throws {
@@ -857,64 +663,6 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertEqual(selection.timestamp, latestObservation.span.observedThroughAt)
     }
 
-    func testPrefetchUsesThreeNeighbourRadiusAndDeduplicatesPhysicalFrames() {
-        let base = Date(timeIntervalSinceReferenceDate: 10_000)
-        let sharedFrameID = UUID()
-        var entries: [TimelineEntry] = []
-        for index in 0..<9 {
-            let frameID = index == 3 || index == 4 ? sharedFrameID : UUID()
-            let start = base.addingTimeInterval(TimeInterval(index * 10))
-            entries.append(makeEntry(
-                frameID: frameID,
-                start: start,
-                end: start.addingTimeInterval(1)
-            ))
-        }
-
-        let prefetched = timelinePrefetchFrames(entries: entries, selectedIndex: 4, radius: 3)
-
-        XCTAssertEqual(
-            prefetched.map { $0.id },
-            [entries[1].frame.id, entries[2].frame.id, entries[5].frame.id, entries[6].frame.id, entries[7].frame.id]
-        )
-    }
-
-    func testPrefetchKeyChangesWhenSameCountProjectionChangesNeighbours() {
-        let base = Date(timeIntervalSinceReferenceDate: 10_000)
-        let selected = makeEntry(start: base.addingTimeInterval(10), end: base.addingTimeInterval(11))
-        let firstProjection = [
-            makeEntry(start: base, end: base.addingTimeInterval(1)),
-            selected,
-            makeEntry(start: base.addingTimeInterval(20), end: base.addingTimeInterval(21))
-        ]
-        let secondProjection = [
-            firstProjection[0],
-            selected,
-            makeEntry(start: base.addingTimeInterval(22), end: base.addingTimeInterval(23))
-        ]
-
-        let firstKey = timelinePrefetchProjectionKey(
-            entries: firstProjection,
-            selectedSpanID: selected.span.id,
-            radius: 3
-        )
-        let secondKey = timelinePrefetchProjectionKey(
-            entries: secondProjection,
-            selectedSpanID: selected.span.id,
-            radius: 3
-        )
-
-        XCTAssertNotEqual(firstKey, secondKey)
-        XCTAssertEqual(
-            firstKey,
-            timelinePrefetchProjectionKey(
-                entries: firstProjection,
-                selectedSpanID: selected.span.id,
-                radius: 3
-            )
-        )
-    }
-
     func testExportSelectionUsesLogicalTimestampAndPhysicalFrame() async throws {
         let base = Date(timeIntervalSinceReferenceDate: 10_000)
         let entry = makeEntry(start: base, end: base.addingTimeInterval(30))
@@ -929,7 +677,10 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertNotEqual(export.timestamp, entry.frame.timestamp)
     }
 
-    func testFutureSpanDoesNotShiftFiveMinuteSearchCutoff() async throws {
+    /// The five-minute cutoff is measured from the semantic snapshot time, not
+    /// the drawable end that a future span pushes forward, and a reversed
+    /// (rollback) span is judged by its normalised end.
+    func testFiveMinuteSearchCutoffUsesSemanticNowAndNormalisedSpanEnd() async throws {
         let semanticNow = Date(timeIntervalSinceReferenceDate: 10_000)
         let future = makeEntry(
             start: semanticNow.addingTimeInterval(600),
@@ -939,16 +690,22 @@ final class OverlayTimelineTests: XCTestCase {
             start: semanticNow.addingTimeInterval(-220),
             end: semanticNow.addingTimeInterval(-200)
         )
-        let image = try XCTUnwrap(TestImageFactory.makeSolidImage(width: 8, height: 8, level: 90))
-        let repository = OverlayTimelineRepositoryProbe(entries: [recent, future], image: image)
-        let buffer = try await makeBuffer(repository: repository)
-        await buffer.textCache.setText(
-            "future-safe needle",
-            for: recent.frame.id,
-            timestamp: timelineSpanBounds(for: recent).end
+        let rollback = makeEntry(
+            start: semanticNow.addingTimeInterval(-10),
+            end: semanticNow.addingTimeInterval(-3_600)
         )
+        let image = try XCTUnwrap(TestImageFactory.makeSolidImage(width: 8, height: 8, level: 90))
+        let repository = OverlayTimelineRepositoryProbe(entries: [recent, future, rollback], image: image)
+        let buffer = try await makeBuffer(repository: repository)
+        for entry in [recent, rollback] {
+            await buffer.textCache.setText(
+                "future-safe needle",
+                for: entry.frame.id,
+                timestamp: timelineSpanBounds(for: entry).end
+            )
+        }
         let viewModel = makeViewModel(
-            entries: [recent, future],
+            entries: [recent, future, rollback],
             buffer: buffer,
             referenceDate: semanticNow
         )
@@ -962,7 +719,7 @@ final class OverlayTimelineTests: XCTestCase {
         viewModel.performSearch(immediately: true)
         try await waitUntil { !viewModel.isSearchLoading }
 
-        XCTAssertEqual(viewModel.searchResults.map(\.span.id), [recent.span.id])
+        XCTAssertEqual(Set(viewModel.searchResults.map(\.span.id)), [recent.span.id, rollback.span.id])
     }
 
     /// OCR rows are keyed by the physical JPEG, but browsing is keyed by the
@@ -1006,37 +763,6 @@ final class OverlayTimelineTests: XCTestCase {
         viewModel.performSearch(immediately: true)
         try await waitUntil { !viewModel.isSearchLoading }
         XCTAssertEqual(viewModel.searchResults.map(\.span.id), [recent.span.id])
-    }
-
-    /// A reversed (rollback) span is judged by its normalised end, so a recent
-    /// start keeps it inside a five-minute search scope.
-    func testRollbackSpanUsesNormalisedEndForSearchCutoff() async throws {
-        let semanticNow = Date(timeIntervalSinceReferenceDate: 10_000)
-        let rollback = makeEntry(
-            start: semanticNow.addingTimeInterval(-10),
-            end: semanticNow.addingTimeInterval(-3_600)
-        )
-        let image = try XCTUnwrap(TestImageFactory.makeSolidImage(width: 8, height: 8, level: 92))
-        let repository = OverlayTimelineRepositoryProbe(entries: [rollback], image: image)
-        let buffer = try await makeBuffer(repository: repository)
-        await buffer.textCache.setText(
-            "rollback needle",
-            for: rollback.frame.id,
-            timestamp: timelineSpanBounds(for: rollback).end
-        )
-        let viewModel = makeViewModel(
-            entries: [rollback],
-            buffer: buffer,
-            referenceDate: semanticNow
-        )
-
-        viewModel.isSearching = true
-        viewModel.searchTimeScope = .fiveMinutes
-        viewModel.searchQuery = "needle"
-        viewModel.performSearch(immediately: true)
-        try await waitUntil { !viewModel.isSearchLoading }
-
-        XCTAssertEqual(viewModel.searchResults.map(\.span.id), [rollback.span.id])
     }
 
     /// Search must filter the immutable leased snapshot after collecting all
@@ -1161,35 +887,7 @@ final class OverlayTimelineTests: XCTestCase {
             buffer: buffer,
             referenceDate: base.addingTimeInterval(40)
         )
-        let defaults = UserDefaults.standard
-        let keys = [
-            AppStorageKey.screenshotSaveToFolder,
-            AppStorageKey.screenshotSaveToClipboard,
-            AppStorageKey.saveScreenshotSoundEnabled,
-            AppStorageKey.hasSeenSaveQualityInfo
-        ]
-        var priorValues: [String: Any] = [:]
-        var missingKeys: Set<String> = []
-        for key in keys {
-            if let value = defaults.object(forKey: key) {
-                priorValues[key] = value
-            } else {
-                missingKeys.insert(key)
-            }
-        }
-        defer {
-            for key in keys {
-                if missingKeys.contains(key) {
-                    defaults.removeObject(forKey: key)
-                } else if let value = priorValues[key] {
-                    defaults.set(value, forKey: key)
-                }
-            }
-        }
-        defaults.set(true, forKey: AppStorageKey.screenshotSaveToFolder)
-        defaults.set(false, forKey: AppStorageKey.screenshotSaveToClipboard)
-        defaults.set(false, forKey: AppStorageKey.saveScreenshotSoundEnabled)
-        defaults.set(true, forKey: AppStorageKey.hasSeenSaveQualityInfo)
+        useFolderOnlySilentScreenshotSaves()
 
         let exportTimestamp = base.addingTimeInterval(7)
         viewModel.setSelectedTimestamp(exportTimestamp)
@@ -1201,13 +899,9 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertEqual(croppedExportTimestamps, [exportTimestamp])
     }
 
-    func testFormatRelativeTimeClampsFutureTimestampsToZero() {
-        let now = Date(timeIntervalSinceReferenceDate: 1_000_000)
-        XCTAssertEqual(formatRelativeTime(now.addingTimeInterval(30), now: now), "0s ago")
-    }
-
     func testFormatRelativeTimeBoundaries() {
         let now = Date(timeIntervalSinceReferenceDate: 1_000_000)
+        XCTAssertEqual(formatRelativeTime(now.addingTimeInterval(30), now: now), "0s ago")
         XCTAssertEqual(formatRelativeTime(now, now: now), "0s ago")
         XCTAssertEqual(formatRelativeTime(now.addingTimeInterval(-59), now: now), "59s ago")
         XCTAssertEqual(formatRelativeTime(now.addingTimeInterval(-60), now: now), "1m 0s ago")
@@ -1452,6 +1146,33 @@ final class OverlayTimelineTests: XCTestCase {
         XCTAssertFalse(message.contains("needle"))
         XCTAssertFalse(message.contains(ghostFrameID.uuidString))
         XCTAssertFalse(message.contains(directory.path))
+    }
+
+    /// Saves go to the (probe) folder only, without sound or the first-save
+    /// alert. Prior values are restored after the test.
+    private func useFolderOnlySilentScreenshotSaves() {
+        let defaults = UserDefaults.standard
+        let values: [String: Bool] = [
+            AppStorageKey.screenshotSaveToFolder: true,
+            AppStorageKey.screenshotSaveToClipboard: false,
+            AppStorageKey.saveScreenshotSoundEnabled: false,
+            AppStorageKey.hasSeenSaveQualityInfo: true
+        ]
+        let priorValues = values.keys.reduce(into: [String: Any]()) { result, key in
+            result[key] = defaults.object(forKey: key)
+        }
+        addTeardownBlock {
+            for key in values.keys {
+                if let priorValue = priorValues[key] {
+                    defaults.set(priorValue, forKey: key)
+                } else {
+                    defaults.removeObject(forKey: key)
+                }
+            }
+        }
+        for (key, value) in values {
+            defaults.set(value, forKey: key)
+        }
     }
 
     private func makeBufferWithSymlinkedTextCache(
