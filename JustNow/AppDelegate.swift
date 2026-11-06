@@ -294,7 +294,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         // return to the overlay rather than open Settings over it.
         guard !isOverlayVisible else { return true }
         // Reopening JustNow is an explicit return from System Settings.
-        ScreenRecordingSettingsGuide.shared.close()
+        ScreenRecordingSettingsGuide.shared.close(.reopen)
         // During Screen Recording setup, reopening JustNow means returning from
         // System Settings. Answer with the permission alert, which offers
         // Relaunch JustNow, rather than opening Settings (and Sparkle) behind it.
@@ -1003,7 +1003,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         guard let frameBuffer = frameBuffer else { return }
         guard overlayPresentationTask == nil else { return }
         // Opening the timeline is an explicit return to JustNow.
-        ScreenRecordingSettingsGuide.shared.close()
+        ScreenRecordingSettingsGuide.shared.close(.timeline)
 
         overlayPresentationTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -1106,9 +1106,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     private func handleStatusMenuWillOpen() {
-        // Opening the menu bar menu does not activate JustNow, so the guide's
-        // activation check misses this way back from System Settings.
-        ScreenRecordingSettingsGuide.shared.close()
+        // Opening the menu bar menu is an explicit return to JustNow, though it
+        // does not activate the app.
+        ScreenRecordingSettingsGuide.shared.close(.statusMenu)
         updateFrameCountMenuItem()
         updatePauseMenuItem()
         updatePermissionHelpMenuItem()
@@ -1286,7 +1286,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         case .none:
             return
         case .showRestartAlert:
-            ScreenRecordingSettingsGuide.shared.close()
+            ScreenRecordingSettingsGuide.shared.close(.restartAlert)
             updateCaptureStatus("Restart Required")
             showPermissionRestartAlert()
         case .showPermissionAlert:
@@ -1294,7 +1294,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             // already returned to JustNow without granting. Close the guide and
             // force the alert even if it already ran from the launch path, so the
             // user is never stuck without visible guidance.
-            ScreenRecordingSettingsGuide.shared.close()
+            ScreenRecordingSettingsGuide.shared.close(.permissionAlert)
             updateCaptureStatus("No Permission")
             showPermissionAlert(force: true)
         }
@@ -1360,7 +1360,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     private func showPermissionAlert(force: Bool = false) -> Bool {
         guard !isPresentingPermissionAlert,
               screenRecordingPermission.consumePermissionAlertPresentation(force: force) else { return false }
-        ScreenRecordingSettingsGuide.shared.close()
+        ScreenRecordingSettingsGuide.shared.close(.permissionAlert)
 
         DiagnosticsLog.shared.log(
             "Permission",
@@ -1423,7 +1423,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
 
     private func showPermissionRestartAlert() {
         guard screenRecordingPermission.consumeRestartAlertPresentation() else { return }
-        ScreenRecordingSettingsGuide.shared.close()
+        ScreenRecordingSettingsGuide.shared.close(.restartAlert)
 
         DiagnosticsLog.shared.log(
             "Permission",

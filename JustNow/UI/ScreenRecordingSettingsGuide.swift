@@ -7,9 +7,9 @@ import SwiftUI
 ///
 /// It only shows while System Settings is frontmost. It closes when the user
 /// explicitly comes back to JustNow (reopening it, its menu, or its alerts),
-/// not when JustNow merely becomes active: macOS does not report a grant to the
-/// running process (preflight stays false until relaunch), and system sheets
-/// during the grant can shift activation without the user leaving Settings.
+/// not when JustNow merely becomes active or a grant seems to land: the running
+/// process cannot rely on preflight mid-grant, and system sheets during the
+/// grant can shift activation without the user leaving Settings.
 @MainActor
 final class ScreenRecordingSettingsGuide {
     static let shared = ScreenRecordingSettingsGuide()
@@ -26,26 +26,30 @@ final class ScreenRecordingSettingsGuide {
     /// The alert's frame; the first placement grows out of it.
     private var launchFrame: CGRect?
     private var isAnimatingIn = false
-    /// Recovery guidance opens while macOS already reports a grant; only a
-    /// guide opened without permission closes when the grant arrives.
-    private var closesOnGrant = false
     /// A drag from the guide's row is in flight. Hiding or closing the panel
     /// then would cancel the drop, so both wait until it ends.
     var isDragging = false {
         didSet {
-            guard !isDragging, closeAfterDrag else { return }
-            closeAfterDrag = false
-            close()
+            guard !isDragging, let reason = closeAfterDrag else { return }
+            closeAfterDrag = nil
+            close(reason)
         }
     }
-    private var closeAfterDrag = false
+    private var closeAfterDrag: CloseReason?
+
+    /// Why the guide closed, logged without content so a report shows which
+    /// path ended it. Only explicit returns to JustNow and × close it: macOS
+    /// does not apply a grant to the running process, and preflight can read
+    /// true briefly mid-grant, so the grant itself is not a reason.
+    enum CloseReason: String {
+        case replaced, closeButton, reopen, statusMenu, timeline, permissionAlert, restartAlert
+    }
 
     /// Opens the Screen Recording pane and starts following its window.
     func show(launchingFrom alertFrame: CGRect?) {
-        close()
+        close(.replaced)
         launchFrame = alertFrame.flatMap { $0.isEmpty ? nil : $0 }
-        closesOnGrant = !ScreenCaptureManager.hasScreenRecordingPermission()
-        panel = Self.makePanel(onClose: { [weak self] in self?.close() })
+        panel = Self.makePanel(onClose: { [weak self] in self?.close(.closeButton) })
         // Poll for as long as the guide is open, including while it is hidden:
         // focus can return to Settings without an activation notification (for
         // example after a system sheet), and frontmostApplication can lag one.
@@ -56,11 +60,14 @@ final class ScreenRecordingSettingsGuide {
         follow()
     }
 
-    func close() {
+    func close(_ reason: CloseReason) {
+        guard panel != nil else { return }
         guard !isDragging else {
-            closeAfterDrag = panel != nil
+            closeAfterDrag = reason
+            DiagnosticsLog.shared.log("Permission", "Screen Recording guide close deferred until drag ends; reason=\(reason.rawValue)")
             return
         }
+        DiagnosticsLog.shared.log("Permission", "Screen Recording guide closed; reason=\(reason.rawValue)")
         followTimer?.invalidate()
         followTimer = nil
         panel?.orderOut(nil)
@@ -74,11 +81,6 @@ final class ScreenRecordingSettingsGuide {
 
         guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Self.systemSettingsBundleID else {
             panel.orderOut(nil)
-            return
-        }
-
-        if closesOnGrant, ScreenCaptureManager.hasScreenRecordingPermission() {
-            close()
             return
         }
 
