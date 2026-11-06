@@ -66,6 +66,19 @@ Rebuilding the signed feed outside publication uses:
 
 Replace the tag with the intended release. This is a signing operation using the Sparkle keychain account, not a harmless HTML preview command; it needs the corresponding authorization and signed ZIP in `dist/`.
 
+### Crawl delivery checks
+
+`site/robots.txt` advertises `site/sitemap.xml`, which lists the public page URLs. Keep `site/404.html` at the deploy root: its presence disables Cloudflare Pages' default SPA fallback so unknown paths return HTTP 404 instead of the homepage. No sitemap index is needed for this small site; `/sitemap-index.xml` should return 404.
+
+Use the Pages runtime, not a generic static server, to verify routing, redirects and content types. The checker requires Python 3.11+; macOS's system Python 3.9 does not follow Pages' HTTP 308 redirects, so use an installed newer interpreter there.
+
+```bash
+amp orb service start justnow-crawl --command 'npx wrangler pages dev site --ip 0.0.0.0 --port 8788' --port 8788 --portal
+python3 Scripts/test-site-delivery.py
+```
+
+The check covers crawl files, nested missing paths, existing page aliases, all public file bytes, and Sparkle feed headers. It accepts a different local preview base URL as its first argument. Do not run it against production with unreleased local content.
+
 ## URL and hosting constraints
 
 - Keep the appcast at a stable public URL such as `/appcast.xml`, even if the website structure changes later.
