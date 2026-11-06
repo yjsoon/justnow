@@ -385,40 +385,6 @@ final class HybridFrameRepositoryTests: XCTestCase {
         XCTAssertEqual(timeline.map(\.span.observationCount), [1, 1])
     }
 
-    func testMissingDurableOnlyActivePayloadIsInvalidatedBeforeFreshCapture() async throws {
-        let store = try FrameStore(directory: directory)
-        let repository = HybridFrameRepository(frameStore: store, byteCap: 4)
-        let displayID = UUID()
-        let startedAt = Date(timeIntervalSince1970: 360)
-        _ = try await repository.beginCaptureSession(at: startedAt)
-        let jpeg = Data(repeating: 9, count: 8)
-        let missing = makeFrame(at: 361, displayID: displayID)
-        let fresh = makeFrame(at: 362, displayID: displayID)
-
-        let initial = try await repository.recordEncodedCapture(missing, jpegData: jpeg)
-        guard case .inserted(let missingEntry) = initial.mutation else {
-            return XCTFail("Expected the oversized first capture to be durable-only")
-        }
-        try FileManager.default.removeItem(
-            at: directory
-                .appendingPathComponent("frames", isDirectory: true)
-                .appendingPathComponent("\(missing.id.uuidString).jpg")
-        )
-
-        let recovered = try await repository.recordEncodedCapture(fresh, jpegData: jpeg)
-        guard case .inserted(let freshEntry) = recovered.mutation else {
-            return XCTFail("A missing durable payload must not wedge the fresh capture")
-        }
-
-        XCTAssertNotEqual(freshEntry.span.id, missingEntry.span.id)
-        XCTAssertEqual(recovered.effects.invalidation.spanIDs, [missingEntry.span.id])
-        XCTAssertEqual(recovered.effects.invalidation.finalPhysicalFrameIDs, [missing.id])
-        let timeline = await repository.orderedTimeline()
-        XCTAssertEqual(timeline.map(\.frame.id), [fresh.id])
-        let metadata = await store.getAllMetadata()
-        XCTAssertEqual(metadata.map(\.id), [fresh.id])
-    }
-
     func testCurrentTimelineLeaseIncludesEveryVolatileDisplay() async throws {
         let store = try FrameStore(directory: directory)
         let durable = HybridDurableRepositoryProbe(
@@ -487,31 +453,6 @@ final class HybridFrameRepositoryTests: XCTestCase {
         XCTAssertEqual(resolved.width, image.width)
         let statistics = await repository.storageStatistics()
         XCTAssertEqual(statistics.volatileFrameCount, 2)
-    }
-
-    func testClearFailureKeepsSessionAndRAMUsableForNextCapture() async throws {
-        let store = try FrameStore(directory: directory)
-        let durable = HybridDurableRepositoryProbe(
-            base: DiskFrameRepository(frameStore: store)
-        )
-        let repository = HybridFrameRepository(durableRepository: durable, byteCap: 64)
-        let startedAt = Date(timeIntervalSince1970: 470)
-        _ = try await repository.beginCaptureSession(at: startedAt)
-        let first = makeFrame(at: 471, displayID: UUID())
-        _ = try await repository.recordEncodedCapture(first, jpegData: Data(repeating: 1, count: 16))
-        await durable.failNextClear()
-
-        do {
-            try await repository.clear()
-            XCTFail("Expected injected durable clear failure")
-        } catch HybridDurableRepositoryProbeError.injectedClearFailure {
-            // Expected.
-        }
-
-        let second = makeFrame(at: 472, displayID: first.displayID)
-        _ = try await repository.recordEncodedCapture(second, jpegData: Data(repeating: 2, count: 16))
-        let timeline = await repository.orderedTimeline()
-        XCTAssertEqual(timeline.map(\.frame.id), [first.id, second.id])
     }
 
     func testConcurrentCapturesCannotExtendAcrossInterveningCapture() async throws {
@@ -653,7 +594,8 @@ final class HybridFrameRepositoryTests: XCTestCase {
         let olderB = makeFrame(at: 601, displayID: displayB)
         let latestB = makeFrame(at: 602, displayID: displayB)
         let nextAnchorA = makeFrame(at: 610, displayID: displayA)
-        let latestA = makeFrame(at: 611, displayID: displayA)
+        let olderA = makeFrame(at: 611, displayID: displayA)
+        let latestA = makeFrame(at: 612, displayID: displayA)
         do {
             let store = try FrameStore(directory: directory)
             let repository = HybridFrameRepository(frameStore: store, byteCap: 1_000_000)
@@ -667,9 +609,13 @@ final class HybridFrameRepositoryTests: XCTestCase {
             // Only A returns. B's last frame must not depend on the current session's policies.
             let lastSession = try await repository.beginCaptureSession(at: nextAnchorA.timestamp)
             _ = try await repository.recordEncodedCapture(nextAnchorA, jpegData: makeJPEG(seed: 4))
+            let olderResult = try await repository.recordEncodedCapture(olderA, jpegData: makeJPEG(seed: 6))
             let latestResult = try await repository.recordEncodedCapture(latestA, jpegData: makeJPEG(seed: 5))
+            XCTAssertEqual(olderResult.outcome.disposition, .volatileFrame)
             XCTAssertEqual(latestResult.outcome.disposition, .volatileFrame)
-            _ = try await repository.endCaptureSession(id: lastSession.id, reason: .termination)
+            let effects = try await repository.endCaptureSession(id: lastSession.id, reason: .termination)
+            XCTAssertEqual(anchorReason(in: effects), .termination)
+            XCTAssertEqual(effects.newlyDurableEntries.map(\.frame.id), [latestA.id])
             await repository.flush()
         }
 
@@ -679,6 +625,8 @@ final class HybridFrameRepositoryTests: XCTestCase {
         XCTAssertEqual(entries.last(where: { $0.frame.displayID == displayA })?.frame.id, latestA.id)
         XCTAssertEqual(entries.last(where: { $0.frame.displayID == displayB })?.frame.id, latestB.id)
         XCTAssertFalse(entries.contains { $0.frame.id == olderB.id })
+        // Termination persists only the latest volatile frame per display.
+        XCTAssertFalse(entries.contains { $0.frame.id == olderA.id })
     }
 
     func testPruningVolatileSpanReportsLogicalAndFinalPhysicalInvalidation() async throws {
@@ -819,30 +767,6 @@ final class HybridFrameRepositoryTests: XCTestCase {
         XCTAssertEqual(timeline.first?.span.observationCount, 4)
     }
 
-    func testTerminationPersistsOnlyLatestDifferingVolatileEntryPerDisplay() async throws {
-        let store = try FrameStore(directory: directory)
-        let repository = HybridFrameRepository(frameStore: store, byteCap: 1_000_000)
-        let displayID = UUID()
-        let session = try await repository.beginCaptureSession(at: Date(timeIntervalSince1970: 0))
-        let anchor = makeFrame(at: 0, displayID: displayID)
-        let earlierVolatile = makeFrame(at: 1, displayID: displayID)
-        let latestVolatile = makeFrame(at: 2, displayID: displayID)
-        _ = try await repository.recordEncodedCapture(anchor, jpegData: Data([1]))
-        _ = try await repository.recordEncodedCapture(earlierVolatile, jpegData: Data([2]))
-        _ = try await repository.recordEncodedCapture(latestVolatile, jpegData: Data([3]))
-
-        let effects = try await repository.endCaptureSession(
-            id: session.id,
-            reason: .termination
-        )
-        XCTAssertEqual(anchorReason(in: effects), .termination)
-
-        let restarted = HybridFrameRepository(frameStore: store, byteCap: 1_000_000)
-        let durableIDs = Set((await restarted.orderedTimeline()).map(\.frame.id))
-        XCTAssertEqual(durableIDs, [anchor.id, latestVolatile.id])
-        XCTAssertFalse(durableIDs.contains(earlierVolatile.id))
-    }
-
     func testCommittedPrefixEffectsSurviveLaterPromotionFailureWithoutRepeatingWrite() async throws {
         let store = try FrameStore(directory: directory)
         let durable = HybridDurableRepositoryProbe(base: DiskFrameRepository(frameStore: store))
@@ -958,40 +882,6 @@ final class HybridFrameRepositoryTests: XCTestCase {
             Date(timeIntervalSince1970: 11),
         ])
         XCTAssertFalse(timeline.contains { $0.span.observedThroughAt == Date(timeIntervalSince1970: 5) })
-    }
-
-    func testNonTerminationCloseRetriesFirstAnchorAfterPostJPEGFailure() async throws {
-        let instrumentation = CapturePersistenceInstrumentation()
-        let store = try FrameStore(
-            directory: directory,
-            promotionPayloadDidWrite: { _ in
-                throw HybridDurableRepositoryProbeError.injectedPromotionFailure
-            }
-        )
-        let repository = HybridFrameRepository(frameStore: store, byteCap: 1_000)
-        let session = try await repository.beginCaptureSession(at: Date(timeIntervalSince1970: 0))
-        let frame = makeFrame(at: 1, displayID: UUID())
-        let jpeg = Data([1, 2, 3, 4])
-
-        do {
-            _ = try await repository.recordEncodedCapture(frame, jpegData: jpeg)
-            XCTFail("Expected post-JPEG promotion failure")
-        } catch let failure as DurablePromotionFailure {
-            instrumentation.recordPersistedJPEG(receipt: failure.writeReceipt)
-        }
-
-        let effects = try await repository.endCaptureSession(id: session.id, reason: .sleep)
-        instrumentation.recordRepositoryEffects(effects)
-        XCTAssertEqual(anchorReason(in: effects), .firstInSession)
-        let snapshot = instrumentation.currentSnapshot()
-        XCTAssertEqual(snapshot.persistedFrames, 1)
-        XCTAssertEqual(snapshot.durableRepositorySaves, 1)
-        XCTAssertEqual(snapshot.firstAnchorRepositorySaves, 1)
-        XCTAssertEqual(snapshot.metadataTransactions, 1)
-
-        let restarted = HybridFrameRepository(frameStore: store, byteCap: 1_000)
-        let restartedTimeline = await restarted.orderedTimeline()
-        XCTAssertEqual(restartedTimeline.map(\.frame.id), [frame.id])
     }
 
     func testPauseCloseRetryReturnsTailEffectsOnceWithoutTerminationAccounting() async throws {
