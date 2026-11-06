@@ -293,6 +293,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         // While the overlay is open JustNow has a Dock icon; clicking it should
         // return to the overlay rather than open Settings over it.
         guard !isOverlayVisible else { return true }
+        // During Screen Recording setup, reopening JustNow means returning from
+        // System Settings. Answer with the permission alert, which offers
+        // Relaunch JustNow, rather than opening Settings (and Sparkle) behind it.
+        if isPresentingPermissionAlert || screenRecordingPermission.isAwaitingPromptResolution {
+            return false
+        }
+        if screenRecordingPermission.mayHaveGrantedThisLaunch,
+           !ScreenCaptureManager.hasScreenRecordingPermission() {
+            if showPermissionAlert(force: true) {
+                showSettings()
+            }
+            return false
+        }
         showSettings()
         return false
     }
@@ -332,6 +345,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 checkForUpdates: { [weak self] in self?.checkForUpdates(nil) },
                 quitApp: { [weak self] in self?.quitApp() },
                 showScreenRecordingHelp: { [weak self] in self?.showScreenRecordingHelp() },
+                relaunch: { [weak self] in self?.relaunchApp() },
                 menuWillOpen: { [weak self] in self?.handleStatusMenuWillOpen() }
             )
         )
@@ -1286,6 +1300,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             || isRecoveringFromPermissionDenial
             || !ScreenCaptureManager.hasScreenRecordingPermission()
         statusItemController?.setPermissionHelpVisible(needsPermissionHelp)
+        // A grant made in System Settings reaches JustNow only after a relaunch,
+        // and clicking the menu bar icon does not bring the permission alert back.
+        statusItemController?.setRelaunchVisible(
+            screenRecordingPermission.mayHaveGrantedThisLaunch
+                && !ScreenCaptureManager.hasScreenRecordingPermission()
+        )
     }
 
     private func showPersistentCaptureRecoveryAlert() {
@@ -1332,9 +1352,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         showPermissionAlert()
     }
 
-    private func showPermissionAlert(force: Bool = false) {
+    /// Returns true when the user chose Not Now.
+    @discardableResult
+    private func showPermissionAlert(force: Bool = false) -> Bool {
         guard !isPresentingPermissionAlert,
-              screenRecordingPermission.consumePermissionAlertPresentation(force: force) else { return }
+              screenRecordingPermission.consumePermissionAlertPresentation(force: force) else { return false }
 
         DiagnosticsLog.shared.log(
             "Permission",
@@ -1373,7 +1395,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
 
         if let relaunchButton, chosenButton === relaunchButton {
             relaunchApp()
-            return
+            return false
         } else if chosenButton === settingsButton {
             if !ScreenCaptureManager.hasScreenRecordingPermission() {
                 screenRecordingPermission.noteOpenedPermissionSettings()
@@ -1385,7 +1407,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             )
         } else if let quitButton, chosenButton === quitButton {
             terminateFromRunLoop()
-            return
+            return false
         } else {
             // Not Now: stay in the menu bar; Screen Recording Help… reopens this.
             // Permission setup is over for now, so updates can run.
@@ -1395,7 +1417,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         if ScreenCaptureManager.hasScreenRecordingPermission() {
             handlePendingPermissionPromptResolutionIfNeeded()
         }
+        return chosenButton === notNowButton
     }
+
 
     private func showPermissionRestartAlert() {
         guard screenRecordingPermission.consumeRestartAlertPresentation() else { return }

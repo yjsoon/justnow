@@ -46,6 +46,7 @@ struct ScreenRecordingPermissionState {
     mutating func noteApplicationDidResignActive() {
         guard isAwaitingPromptResolution else { return }
         didDeactivateForPromptThisLaunch = true
+        mayHaveGrantedThisLaunch = true
     }
 
     mutating func resolvePendingPrompt(hasPermission: Bool) -> ScreenRecordingPermissionPromptResolution {
@@ -61,7 +62,6 @@ struct ScreenRecordingPermissionState {
         }
 
         isAwaitingPromptResolution = false
-        mayHaveGrantedThisLaunch = true
         return .showPermissionAlert
     }
 

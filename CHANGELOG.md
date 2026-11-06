@@ -12,7 +12,7 @@ All notable changes to JustNow will be documented in this file.
 
 ### Fixed
 - Make the Screen Recording permission alert dismissable with Not Now, name the current System Settings pane, and give numbered steps without developer-only wording. It no longer stacks a second copy when JustNow becomes active again.
-- Offer Relaunch JustNow in the Screen Recording alert once you return from System Settings, because macOS applies a new grant only after JustNow reopens and the running app cannot tell it was granted.
+- Offer Relaunch JustNow once you return from System Settings, in the Screen Recording alert and the menu bar menu, because macOS applies a new grant only after JustNow reopens and the running app cannot tell it was granted. Reopening JustNow during setup shows that alert instead of opening Settings behind it.
 - Notarise and staple the app itself before packaging, so the ZIP, Sparkle updates, and copies installed from the DMG open without waiting on Gatekeeper's online check.
 - Show Screen Recording Help… in the menu while capture is stuck recovering, such as after permission is revoked mid-run.
 - Wait until recording works before Sparkle asks whether to check for updates automatically, so the prompt no longer interrupts Screen Recording setup.

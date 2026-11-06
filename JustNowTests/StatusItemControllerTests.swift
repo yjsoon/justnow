@@ -40,6 +40,8 @@ final class StatusItemControllerTests: XCTestCase {
         controller.setFrameCount(42)
         controller.setCaptureStatus("Active")
         controller.setPermissionHelpVisible(true)
+        XCTAssertTrue(try XCTUnwrap(controller.item(for: .relaunchForPermission)).isHidden)
+        controller.setRelaunchVisible(true)
 
         XCTAssertEqual(
             try XCTUnwrap(controller.item(for: .frameCount)).title,
@@ -50,6 +52,7 @@ final class StatusItemControllerTests: XCTestCase {
             "Capture: Active"
         )
         XCTAssertFalse(try XCTUnwrap(controller.item(for: .permissionHelp)).isHidden)
+        XCTAssertFalse(try XCTUnwrap(controller.item(for: .relaunchForPermission)).isHidden)
     }
 
     func testMenuWillOpenInvokesRefreshCallback() {
@@ -98,6 +101,7 @@ final class StatusItemControllerTests: XCTestCase {
                 checkForUpdates: {},
                 quitApp: {},
                 showScreenRecordingHelp: {},
+                relaunch: {},
                 menuWillOpen: menuWillOpen
             )
         )
