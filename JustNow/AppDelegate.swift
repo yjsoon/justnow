@@ -129,6 +129,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     /// another one; never stack a second copy on top.
     private var isPresentingPermissionAlert = false
     private var hasStartedUpdater = false
+    /// Set while capture is retrying after a ScreenCaptureKit permission
+    /// denial (a mid-run revoke or a false denial), not for display loss.
+    private var isRecoveringFromPermissionDenial = false
     private var lastCaptureStatusText = "Starting..."
     private let capturePolicyController = CapturePolicyController()
     private let captureStartController = CaptureStartController()
@@ -547,7 +550,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 await startCaptureForGrantedLaunchPermission(allowPermissionRetry: false)
             } else {
                 captureStartController.beginDeferredStart()
-                updateCaptureStatus("Recovering…")
+                updateCaptureStatus(permissionRecoveryStatus())
             }
         } catch CaptureError.noDisplay {
             captureStartController.beginDeferredStart()
@@ -565,7 +568,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             )
             captureStartController.beginDeferredStart()
             updateCaptureStatus(
-                captureRecoveryNeedsAttention ? "Capture Help Needed" : "Recovering…"
+                permissionRecoveryStatus()
             )
         } catch {
             DiagnosticsLog.shared.log(
@@ -826,7 +829,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 "\(failurePrefix): deferred while the shared ScreenCaptureKit circuit cools down"
             )
             updateCaptureStatus(
-                captureRecoveryNeedsAttention ? "Capture Help Needed" : "Recovering…"
+                permissionRecoveryStatus()
             )
             if captureRecoveryNeedsAttention {
                 schedulePersistentCaptureRecoveryAlert()
@@ -865,6 +868,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     private func handleSuccessfulCaptureStart(successMessage: String? = nil) {
+        isRecoveringFromPermissionDenial = false
         updateCaptureStatus("Active")
         startUpdaterIfNeeded()
         capturePolicyController.resetAppliedPolicy()
@@ -948,7 +952,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             if captureEventController.blockedStatus() == nil {
                 captureStartController.beginDeferredStart()
                 updateCaptureStatus(
-                    captureRecoveryNeedsAttention ? "Capture Help Needed" : "Recovering…"
+                    permissionRecoveryStatus()
                 )
             }
         case .needsAttention:
@@ -1057,6 +1061,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     @objc private func showSettings() {
+        startUpdaterIfNeeded()
         settingsWindowCoordinator.show()
     }
 
@@ -1180,12 +1185,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         idleTransitionTimer?.tolerance = min(remaining * 0.2, 5.0)
     }
 
+    private func permissionRecoveryStatus() -> String {
+        isRecoveringFromPermissionDenial = true
+        updatePermissionHelpMenuItem()
+        return captureRecoveryNeedsAttention ? "Capture Help Needed" : "Recovering…"
+    }
+
     private func updateFrameCountMenuItem() {
         statusItemController?.setFrameCount(frameBuffer?.frameCount ?? 0)
     }
 
     private func updateCaptureStatus(_ status: String) {
         lastCaptureStatusText = status
+        if ["Recovering…", "Capture Help Needed", "Error"].contains(status) {
+            // Capture is not starting soon; don't leave updates disabled.
+            startUpdaterIfNeeded()
+        }
         statusItemController?.setCaptureStatus(status)
         refreshStatusItemCaptureState()
     }
@@ -1242,6 +1257,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     private func handlePendingPermissionPromptResolutionIfNeeded() {
+        guard !isPresentingPermissionAlert else { return }
         let resolution = screenRecordingPermission.resolvePendingPrompt(
             hasPermission: ScreenCaptureManager.hasScreenRecordingPermission()
         )
@@ -1267,7 +1283,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         // macOS can keep reporting the grant after it is revoked mid-run, so a
         // capture stuck recovering also gets the help item.
         let needsPermissionHelp = captureRecoveryNeedsAttention
-            || lastCaptureStatusText == "Recovering…"
+            || isRecoveringFromPermissionDenial
             || !ScreenCaptureManager.hasScreenRecordingPermission()
         statusItemController?.setPermissionHelpVisible(needsPermissionHelp)
     }
@@ -1359,7 +1375,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             terminateFromRunLoop()
         default:
             // Not Now: stay in the menu bar; Screen Recording Help… reopens this.
-            break
+            // Permission setup is over for now, so updates can run.
+            startUpdaterIfNeeded()
+        }
+        // A grant made while this alert was modal deferred its resolution.
+        if ScreenCaptureManager.hasScreenRecordingPermission() {
+            handlePendingPermissionPromptResolutionIfNeeded()
         }
     }
 
@@ -1390,6 +1411,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
 
         if response == .alertFirstButtonReturn {
             relaunchApp()
+        } else {
+            startUpdaterIfNeeded()
         }
     }
 

@@ -277,9 +277,11 @@ if [ "${USE_NOTARIZATION}" = "true" ]; then
   # of the DMG open offline instead of waiting on Gatekeeper's online check.
   APP_NOTARY_ZIP="dist/${APP_NAME}-${VERSION}-notary.zip"
   rm -f "${APP_NOTARY_ZIP}"
+  trap 'rm -f "${APP_NOTARY_ZIP}"' EXIT
   ditto -c -k --sequesterRsrc --keepParent "${APP_PATH}" "${APP_NOTARY_ZIP}"
   notarize "${APP_NOTARY_ZIP}"
   rm -f "${APP_NOTARY_ZIP}"
+  trap - EXIT
   xcrun stapler staple "${APP_PATH}"
   xcrun stapler validate "${APP_PATH}"
 fi
