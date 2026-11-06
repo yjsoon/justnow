@@ -8,6 +8,7 @@ All notable changes to JustNow will be documented in this file.
 - Link to the new privacy policy at justnow.tk.sg/privacy from Settings → General.
 
 ### Changed
+- Replace the Screen Recording drag guide shown over System Settings with JustNow's own implementation. The previous guide was adapted from a project that declares no licence. It still offers JustNow to drag into the list, hides while System Settings is in the background, and now closes by itself once access is granted.
 - Stop monitoring global keyboard events. Adaptive capture now notices typing from the system idle time and returns to its normal cadence within a few seconds; mouse and scroll activity still wake it immediately.
 
 ### Fixed

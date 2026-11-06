@@ -523,8 +523,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             }
             await startCaptureForGrantedLaunchPermission()
         case .requestedThisLaunch:
-            // Intro alert first — clicking "Open System Settings" fires the Permiso
-            // coach, so users who dismiss the alert aren't surprised by a floating
+            // Intro alert first — clicking "Open System Settings" shows the drag
+            // guide, so users who dismiss the alert aren't surprised by a floating
             // panel appearing over System Settings out of nowhere.
             presentPermissionAlert(status: "Awaiting Permission")
         case .deniedPreviously:
@@ -1279,15 +1279,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         case .none:
             return
         case .showRestartAlert:
-            PermisoAssistant.shared.dismiss()
+            ScreenRecordingSettingsGuide.shared.close()
             updateCaptureStatus("Restart Required")
             showPermissionRestartAlert()
         case .showPermissionAlert:
             // This branch is one-shot per launch: by the time it fires the user has
-            // already returned to JustNow without granting. Tear down the coach and
+            // already returned to JustNow without granting. Close the guide and
             // force the alert even if it already ran from the launch path, so the
             // user is never stuck without visible guidance.
-            PermisoAssistant.shared.dismiss()
+            ScreenRecordingSettingsGuide.shared.close()
             updateCaptureStatus("No Permission")
             showPermissionAlert(force: true)
         }
@@ -1331,11 +1331,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
-        let sourceFrame = alert.window.frame
-        PermisoAssistant.shared.present(
-            panel: .screenRecording,
-            sourceFrameInScreen: sourceFrame.isEmpty ? nil : sourceFrame
-        )
+        ScreenRecordingSettingsGuide.shared.show(launchingFrom: alert.window.frame)
     }
 
     private func schedulePersistentCaptureRecoveryAlert() {
@@ -1400,11 +1396,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             if !ScreenCaptureManager.hasScreenRecordingPermission() {
                 screenRecordingPermission.noteOpenedPermissionSettings()
             }
-            let sourceFrame = alert.window.frame
-            PermisoAssistant.shared.present(
-                panel: .screenRecording,
-                sourceFrameInScreen: sourceFrame.isEmpty ? nil : sourceFrame
-            )
+            ScreenRecordingSettingsGuide.shared.show(launchingFrom: alert.window.frame)
         } else if let quitButton, chosenButton === quitButton {
             terminateFromRunLoop()
             return false
