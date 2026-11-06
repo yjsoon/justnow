@@ -5,9 +5,11 @@ import SwiftUI
 /// grants Screen Recording. Its JustNow row can be dragged into the app list,
 /// which adds JustNow without the `+` file picker.
 ///
-/// It only shows while System Settings is frontmost, and closes when the user
-/// comes back to JustNow. macOS does not report a grant to the running process
-/// (preflight stays false until relaunch), so returning is the reliable signal.
+/// It only shows while System Settings is frontmost. It closes when the user
+/// explicitly comes back to JustNow (reopening it, its menu, or its alerts),
+/// not when JustNow merely becomes active: macOS does not report a grant to the
+/// running process (preflight stays false until relaunch), and system sheets
+/// during the grant can shift activation without the user leaving Settings.
 @MainActor
 final class ScreenRecordingSettingsGuide {
     static let shared = ScreenRecordingSettingsGuide()
@@ -21,13 +23,22 @@ final class ScreenRecordingSettingsGuide {
 
     private var panel: NSPanel?
     private var followTimer: Timer?
-    private var activationObserver: NSObjectProtocol?
     /// The alert's frame; the first placement grows out of it.
     private var launchFrame: CGRect?
     private var isAnimatingIn = false
     /// Recovery guidance opens while macOS already reports a grant; only a
     /// guide opened without permission closes when the grant arrives.
     private var closesOnGrant = false
+    /// A drag from the guide's row is in flight. Hiding or closing the panel
+    /// then would cancel the drop, so both wait until it ends.
+    var isDragging = false {
+        didSet {
+            guard !isDragging, closeAfterDrag else { return }
+            closeAfterDrag = false
+            close()
+        }
+    }
+    private var closeAfterDrag = false
 
     /// Opens the Screen Recording pane and starts following its window.
     func show(launchingFrom alertFrame: CGRect?) {
@@ -35,48 +46,33 @@ final class ScreenRecordingSettingsGuide {
         launchFrame = alertFrame.flatMap { $0.isEmpty ? nil : $0 }
         closesOnGrant = !ScreenCaptureManager.hasScreenRecordingPermission()
         panel = Self.makePanel(onClose: { [weak self] in self?.close() })
-        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            // frontmostApplication can still name the previous app when this
-            // arrives, so trust the app the notification names.
-            let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            MainActor.assumeIsolated {
-                // Returning to JustNow (reopening it, or its Relaunch alert)
-                // ends the Settings step.
-                if app == NSRunningApplication.current {
-                    self?.close()
-                } else {
-                    self?.follow(frontmostBundleID: app?.bundleIdentifier)
-                }
-            }
+        // Poll for as long as the guide is open, including while it is hidden:
+        // focus can return to Settings without an activation notification (for
+        // example after a system sheet), and frontmostApplication can lag one.
+        followTimer = Timer.scheduledTimer(withTimeInterval: Self.followInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.follow() }
         }
         NSWorkspace.shared.open(Self.screenRecordingSettingsURL)
         follow()
     }
 
     func close() {
+        guard !isDragging else {
+            closeAfterDrag = panel != nil
+            return
+        }
         followTimer?.invalidate()
         followTimer = nil
-        if let activationObserver {
-            NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
-        }
-        activationObserver = nil
         panel?.orderOut(nil)
         panel = nil
         launchFrame = nil
         isAnimatingIn = false
     }
 
-    private func follow(frontmostBundleID: String? = NSWorkspace.shared.frontmostApplication?.bundleIdentifier) {
-        guard let panel else { return }
+    private func follow() {
+        guard let panel, !isDragging else { return }
 
-        guard frontmostBundleID == Self.systemSettingsBundleID else {
-            // Idle while the user is elsewhere; activation wakes us again.
-            followTimer?.invalidate()
-            followTimer = nil
+        guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Self.systemSettingsBundleID else {
             panel.orderOut(nil)
             return
         }
@@ -84,14 +80,6 @@ final class ScreenRecordingSettingsGuide {
         if closesOnGrant, ScreenCaptureManager.hasScreenRecordingPermission() {
             close()
             return
-        }
-
-        // Settings can be frontmost before its window is listed, and the window
-        // moves while dragged, so poll while it is in front.
-        if followTimer == nil {
-            followTimer = Timer.scheduledTimer(withTimeInterval: Self.followInterval, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.follow() }
-            }
         }
 
         guard let window = Self.systemSettingsWindow() else {
@@ -322,6 +310,14 @@ private struct AppBundleDragSource: NSViewRepresentable {
                 contents: icon
             )
             beginDraggingSession(with: [item], event: event, source: self)
+        }
+
+        func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
+            ScreenRecordingSettingsGuide.shared.isDragging = true
+        }
+
+        func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+            ScreenRecordingSettingsGuide.shared.isDragging = false
         }
 
         func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {

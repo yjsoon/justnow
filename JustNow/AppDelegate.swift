@@ -293,6 +293,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         // While the overlay is open JustNow has a Dock icon; clicking it should
         // return to the overlay rather than open Settings over it.
         guard !isOverlayVisible else { return true }
+        // Reopening JustNow is an explicit return from System Settings.
+        ScreenRecordingSettingsGuide.shared.close()
         // During Screen Recording setup, reopening JustNow means returning from
         // System Settings. Answer with the permission alert, which offers
         // Relaunch JustNow, rather than opening Settings (and Sparkle) behind it.
