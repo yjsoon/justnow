@@ -1002,6 +1002,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     @objc private func showOverlay() {
         guard let frameBuffer = frameBuffer else { return }
         guard overlayPresentationTask == nil else { return }
+        // Opening the timeline is an explicit return to JustNow.
+        ScreenRecordingSettingsGuide.shared.close()
 
         overlayPresentationTask = Task { @MainActor [weak self] in
             guard let self else { return }
