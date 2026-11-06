@@ -143,6 +143,8 @@ final class TimelineScrollDirectionTests: XCTestCase {
         ))
     }
 
+    // Also witnesses OverlayViewModel.scrollBy never receiving non-finite deltas
+    // from the scroll monitor (see Docs/testing-policy.md).
     func testNonFiniteDirectionInputIsRejected() {
         XCTAssertNil(TimelineScrollDirection.upToRewind.navigationDelta(
             horizontalDelta: .nan,

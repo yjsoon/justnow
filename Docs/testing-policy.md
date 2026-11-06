@@ -19,11 +19,21 @@ Other classes, such as overlay presentation, navigation feel, copy, and prefetch
 - Pruning stays paused, and the overlay's payload lease stays held, while the overlay is open (see `JustNow/AGENTS.md`). Overlay lifecycle tests around the lease, pruning pause, and capture resume are protected under stored history and capture liveness.
 - Validate on a Mac with Xcode: the affected test class with `-only-testing`, then the full suite, using the commands in [local development](local-development.md).
 
-## Candidate rules from the OverlayTimelineTests pilot
+## Cross-file witnesses
 
-These came out of the first round and still need independent review before they guide other files.
+Removed tests rely on these retained tests in other files. Do not prune or weaken them without rechecking the original removal.
 
-- **In-app validation boundary.** When the only caller validates an input first, that boundary's test witnesses the callee's defensive guard. Example: `TimelineScrollDirection.navigationDelta` rejects non-finite deltas before `OverlayViewModel.scrollBy`, so the view model's NaN test was removed.
-- **Hosted native tests as witnesses.** A hosted AppKit/SwiftUI test that drives the same view-model call and asserts the same state counts as a witness. Example: `NativeSwiftUIValidationTests` refocuses search and checks selection, query, and results, replacing the view-model-only refocus test.
-- **Clock-rollback normalisation.** Keep one consumer witness per subsystem that relies on `timelineSpanBounds` normalising reversed spans (overlay search scope), and accept the loss for presentation-only consumers (Home/End, resolver containment).
-- **Performance-only contracts.** Prefetch window and key tests were accepted losses because images still load on demand. A deliberate performance design with a unique witness that guards against an easy refactor (cached timeline decoration not re-observed on scrub) was kept.
+| Witness | Covers removed test | Contract |
+|---|---|---|
+| `NativeSwiftUIValidationTests.testSearchCaretScrubRefocusAndSubmitWithoutActivatingWindow` | `OverlayTimelineTests.testRefocusingSearchPreservesItsFilterAndSelectedResult` | `focusSearch()` while searching re-requests focus and keeps the selection, query, scope and results. |
+| `TimelineScrollDirectionTests.testNonFiniteDirectionInputIsRejected` | `OverlayTimelineTests.testScrollIgnoresNonFiniteDelta` | Non-finite scroll deltas never reach `OverlayViewModel.scrollBy`. |
+
+## Candidate rules
+
+These came out of the OverlayTimelineTests pilot and were revised after its independent review. They are still candidates.
+
+1. **In-app validation boundary.** A validation boundary's test can witness a callee's defensive guard only when a search confirms that the caller is the callee's sole caller, the input is produced in-process, and the guard protects no protected class. Guards on data read from disk, SQLite, ScreenCaptureKit, restored state or a legacy manifest keep their own witness. Example: the scroll monitor passes deltas through `TimelineScrollDirection.navigationDelta` and `TimelineScrollAccumulator.navigationStep` before `OverlayViewModel.scrollBy`, so the view model's NaN test was removed.
+2. **Hosted native tests as witnesses.** A hosted AppKit/SwiftUI test counts as a witness when it cannot be skipped and asserts the same state after the same view-model call. Any assertion of the removed test that the witness does not cover is listed as an accepted loss, or added to the witness. Do not use this rule to claim durability or crash safety unless the witness reopens the store; in-process calls do not prove either.
+3. **Clock-rollback normalisation.** For presentation, keep one consumer witness per subsystem that relies on `timelineSpanBounds` normalising reversed spans, and accept losses in the other presentation consumers (Home/End, resolver containment). In storage (`FrameBuffer`, `FrameDatabase`, `HybridFrameRepository`, `CompressedFrameRing`), every point where normalised bounds decide retention, pruning, recovery or eviction keeps its own witness.
+4. **Performance-only contracts.** Only latency optimisations with a bounded fallback qualify as performance-only accepted losses. Example: image prefetch into the cost-limited full-image cache, where images still load on demand. This rule excludes memory bounds (cache costs, ring capacity, pressure trimming), disk growth and compaction, capture cadence and throttling, and anything that fails as unbounded growth or a stall. Keep a deliberate performance design that has a unique witness against an easy refactor, such as cached timeline decoration not being re-observed while scrubbing.
+5. **Mutation evidence for redundancy.** From round 2 on, every redundancy claim needs a mutation that the named witness kills, run against the full suite so cross-file witnesses show up.

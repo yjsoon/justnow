@@ -56,6 +56,7 @@ final class NativeSwiftUIValidationTests: XCTestCase {
             onDismiss: {}, onOpenSettings: {})
         vm.isSearching = true
         vm.searchQuery = "synthetic"
+        vm.searchTimeScope = .oneHour
         vm.performSearch(immediately: true)
         let domain = "sg.tk.JustNow.NativeValidation.\(UUID())"
         preferenceDomains.append(domain)
@@ -118,10 +119,13 @@ final class NativeSwiftUIValidationTests: XCTestCase {
         assertNonActivating(panel)
         let timelineResponder = try XCTUnwrap(panel.firstResponder)
 
+        // Also witnesses OverlayViewModel.focusSearch() preserving search state
+        // (pruned OverlayTimelineTests refocus test; see Docs/testing-policy.md).
         vm.focusSearch()
         try await waitUntil { (panel.firstResponder as? NSTextView)?.isEditable == true }
         assertNonActivating(panel)
         XCTAssertEqual(vm.selectedIndex, 1, "Refocusing must preserve the selected result")
+        XCTAssertEqual(vm.searchTimeScope, .oneHour, "Refocusing must preserve the search scope")
         panel.sendEvent(try key(kVK_Return, window: panel, characters: "\r"))
         try await waitUntil { panel.firstResponder === timelineResponder }
         assertNonActivating(panel)
