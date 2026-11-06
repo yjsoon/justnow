@@ -1353,6 +1353,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     private func showPermissionAlert(force: Bool = false) -> Bool {
         guard !isPresentingPermissionAlert,
               screenRecordingPermission.consumePermissionAlertPresentation(force: force) else { return false }
+        ScreenRecordingSettingsGuide.shared.close()
 
         DiagnosticsLog.shared.log(
             "Permission",
@@ -1415,6 +1416,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
 
     private func showPermissionRestartAlert() {
         guard screenRecordingPermission.consumeRestartAlertPresentation() else { return }
+        ScreenRecordingSettingsGuide.shared.close()
 
         DiagnosticsLog.shared.log(
             "Permission",

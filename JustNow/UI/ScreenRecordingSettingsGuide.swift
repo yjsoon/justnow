@@ -5,8 +5,9 @@ import SwiftUI
 /// grants Screen Recording. Its JustNow row can be dragged into the app list,
 /// which adds JustNow without the `+` file picker.
 ///
-/// It only shows while System Settings is frontmost, and closes itself once the
-/// grant lands so it never sits over macOS's own Quit & Reopen prompt.
+/// It only shows while System Settings is frontmost, and closes when the user
+/// comes back to JustNow. macOS does not report a grant to the running process
+/// (preflight stays false until relaunch), so returning is the reliable signal.
 @MainActor
 final class ScreenRecordingSettingsGuide {
     static let shared = ScreenRecordingSettingsGuide()
@@ -42,7 +43,15 @@ final class ScreenRecordingSettingsGuide {
             // frontmostApplication can still name the previous app when this
             // arrives, so trust the app the notification names.
             let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            MainActor.assumeIsolated { self?.follow(frontmostBundleID: app?.bundleIdentifier) }
+            MainActor.assumeIsolated {
+                // Returning to JustNow (reopening it, or its Relaunch alert)
+                // ends the Settings step.
+                if app == NSRunningApplication.current {
+                    self?.close()
+                } else {
+                    self?.follow(frontmostBundleID: app?.bundleIdentifier)
+                }
+            }
         }
         NSWorkspace.shared.open(Self.screenRecordingSettingsURL)
         follow()
