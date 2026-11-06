@@ -337,7 +337,7 @@ final class NativeSwiftUIValidationTests: XCTestCase {
     }
 
     private func makeWindow(size: NSSize) -> NSWindow {
-        let window = NSWindow(contentRect: NSRect(origin: NSPoint(x: 100, y: 100), size: size),
+        let window = NativeValidationKeyLoopWindow(contentRect: NSRect(origin: NSPoint(x: 100, y: 100), size: size),
             styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.title = "Synthetic native validation"
@@ -365,6 +365,17 @@ private final class NativeValidationNonActivatingPanel: NSPanel {
 /// the host accepts it. The real overlay is key when clicked.
 private final class NativeValidationFirstMouseHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+/// AppKit runs the Tab key view loop only for the key window of the active
+/// app. A test host behind another frontmost app (such as a headless Mac)
+/// never activates, so finish a Tab that reached the window unconsumed the
+/// way the key window would. Views that swallow Tab never get here.
+private final class NativeValidationKeyLoopWindow: NSWindow {
+    override func keyDown(with event: NSEvent) {
+        guard !isKeyWindow, event.keyCode == UInt16(kVK_Tab) else { return super.keyDown(with: event) }
+        if event.modifierFlags.contains(.shift) { selectPreviousKeyView(nil) } else { selectNextKeyView(nil) }
+    }
 }
 
 private final class NativeValidationScrollEvent: NSEvent {
