@@ -762,6 +762,13 @@ actor FrameStore {
         } catch {
             throw FrameStoreError.database(String(describing: error))
         }
+        // The delete has committed, so compaction failure must not report the
+        // clear as failed; record it for diagnostics instead.
+        do {
+            try database.compactAfterClear()
+        } catch {
+            Self.logStorageDiagnostic("Clear could not compact the history database: \(error)")
+        }
 
         let cleanupCandidates = pendingClearURLs
             + payloadFiles

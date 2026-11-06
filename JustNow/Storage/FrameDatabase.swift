@@ -107,8 +107,9 @@ nonisolated final class FrameDatabase: @unchecked Sendable {
         self.db = nil
     }
 
-    func checkpoint() throws {
-        try withPreparedStatement("PRAGMA wal_checkpoint(FULL);") { statement in
+    func checkpoint(truncate: Bool = false) throws {
+        let mode = truncate ? "TRUNCATE" : "FULL"
+        try withPreparedStatement("PRAGMA wal_checkpoint(\(mode));") { statement in
             guard sqlite3_step(statement) == SQLITE_ROW else {
                 throw sqliteError(message: "Failed to checkpoint frame database")
             }
@@ -735,10 +736,15 @@ nonisolated final class FrameDatabase: @unchecked Sendable {
             try execute("DELETE FROM frames;")
             try execute("DELETE FROM capture_sessions;")
         }
-        // Rewrite the file so cleared rows do not linger in free pages or the
-        // WAL. The delete has committed, so compaction is best-effort.
-        try? execute("VACUUM;")
-        try? execute("PRAGMA wal_checkpoint(TRUNCATE);")
+    }
+
+    /// Rewrites the file and empties the WAL so cleared rows do not linger in
+    /// free pages or the log. Both steps always run; the first failure throws.
+    func compactAfterClear() throws {
+        var firstError: Error?
+        do { try execute("VACUUM;") } catch { firstError = error }
+        do { try checkpoint(truncate: true) } catch { firstError = firstError ?? error }
+        if let firstError { throw firstError }
     }
 
     func storageStatistics(
