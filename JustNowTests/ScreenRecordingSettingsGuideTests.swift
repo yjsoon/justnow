@@ -31,6 +31,17 @@ final class ScreenRecordingSettingsGuideTests: XCTestCase {
         XCTAssertEqual(frame, CGRect(x: 280, y: 466, width: 440, height: 110))
     }
 
+    func testNarrowSettingsWindowUsesAThirdForTheSidebar() {
+        let frame = ScreenRecordingSettingsGuideLayout.guideFrame(
+            size: CGSize(width: 440, height: 110),
+            settingsWindow: CGRect(x: 100, y: 450, width: 300, height: 400),
+            visibleFrame: CGRect(x: 0, y: 0, width: 1440, height: 875)
+        )
+        // Sidebar is 100 wide (not 200), so content spans x 200...400 and the
+        // wider guide centres on it at x 80.
+        XCTAssertEqual(frame, CGRect(x: 80, y: 466, width: 440, height: 110))
+    }
+
     func testGuideStaysOnScreenWhenSettingsHangsOffTheEdge() {
         let frame = ScreenRecordingSettingsGuideLayout.guideFrame(
             size: CGSize(width: 440, height: 110),

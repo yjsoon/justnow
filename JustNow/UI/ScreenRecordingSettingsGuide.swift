@@ -107,7 +107,11 @@ final class ScreenRecordingSettingsGuide {
                 panel.animator().setFrame(target, display: true)
                 panel.animator().alphaValue = 1
             } completionHandler: { [weak self] in
-                MainActor.assumeIsolated { self?.isAnimatingIn = false }
+                // A guide shown again mid-animation has a new panel; leave its flag alone.
+                MainActor.assumeIsolated {
+                    guard let self, self.panel === panel else { return }
+                    self.isAnimatingIn = false
+                }
             }
             return
         }
@@ -296,10 +300,6 @@ private struct AppBundleDragSource: NSViewRepresentable {
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-        override func resetCursorRects() {
-            addCursorRect(bounds, cursor: .openHand)
-        }
 
         // Keep the press here so the drag events that follow come to this view.
         override func mouseDown(with event: NSEvent) {}

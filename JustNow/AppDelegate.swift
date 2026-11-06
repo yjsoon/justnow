@@ -1369,7 +1369,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         JustNow needs Screen Recording permission to keep a history of your screen. The history stays on this Mac.
         \(offersRelaunch ? "\nAlready turned on JustNow? Click Relaunch JustNow. The permission works only after JustNow opens again.\n" : "")
         1. Click Open System Settings.
-        2. In Privacy & Security → Screen & System Audio Recording, turn on JustNow. If JustNow is not in that list, click +, choose Applications in the sidebar, then select JustNow.
+        2. In Privacy & Security → Screen & System Audio Recording, turn on JustNow. If JustNow is not in that list, drag it in from the panel JustNow shows below the list, or click +, choose Applications in the sidebar, then select JustNow.
         3. When macOS asks, click Quit & Reopen. If it does not ask, open JustNow again and click Relaunch JustNow.
 
         Already turned on but still not recording? Select JustNow in that list, click − to remove it, then add it again.
