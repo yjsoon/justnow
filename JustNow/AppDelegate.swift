@@ -125,6 +125,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     private var screenRecordingPermission = ScreenRecordingPermissionState()
     private var captureRecoveryNeedsAttention = false
     private var hasPresentedPersistentCaptureRecoveryAlert = false
+    /// Activation changes while a permission alert is modal can request
+    /// another one; never stack a second copy on top.
+    private var isPresentingPermissionAlert = false
+    private var hasStartedUpdater = false
+    /// Set while capture is retrying after a ScreenCaptureKit permission
+    /// denial (a mid-run revoke or a false denial), not for display loss.
+    private var isRecoveringFromPermissionDenial = false
     private var lastCaptureStatusText = "Starting..."
     private let capturePolicyController = CapturePolicyController()
     private let captureStartController = CaptureStartController()
@@ -193,7 +200,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         migrateLegacyDefaultSettingsIfNeeded()
         DiagnosticsLog.shared.logSessionStart()
         setupStatusItem()
-        updaterController.startUpdater()
         registerHotKeys()
         setupCapture()
         setupTimers()
@@ -249,10 +255,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         return .terminateLater
     }
 
+    /// Alerts shown from main-actor Tasks run inside a main-queue callout.
+    /// Terminating there parks AppKit's terminateLater loop, which cannot drain
+    /// the main queue again, so the flush Task never replies and the app hangs.
+    /// A run-loop timer calls terminate: outside that callout.
+    private func terminateFromRunLoop() {
+        NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
+    }
+
     private func relaunchApp() {
         do {
             guard try relaunchCoordinator.prepareRelaunch() else { return }
-            NSApp.terminate(nil)
+            terminateFromRunLoop()
         } catch {
             DiagnosticsLog.shared.log(
                 "App",
@@ -279,6 +293,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         // While the overlay is open JustNow has a Dock icon; clicking it should
         // return to the overlay rather than open Settings over it.
         guard !isOverlayVisible else { return true }
+        // During Screen Recording setup, reopening JustNow means returning from
+        // System Settings. Answer with the permission alert, which offers
+        // Relaunch JustNow, rather than opening Settings (and Sparkle) behind it.
+        if isPresentingPermissionAlert || screenRecordingPermission.isAwaitingPromptResolution {
+            return false
+        }
+        if screenRecordingPermission.mayHaveGrantedThisLaunch,
+           !ScreenCaptureManager.hasScreenRecordingPermission() {
+            if showPermissionAlert(force: true) {
+                showSettings()
+            }
+            return false
+        }
         showSettings()
         return false
     }
@@ -318,6 +345,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 checkForUpdates: { [weak self] in self?.checkForUpdates(nil) },
                 quitApp: { [weak self] in self?.quitApp() },
                 showScreenRecordingHelp: { [weak self] in self?.showScreenRecordingHelp() },
+                relaunch: { [weak self] in self?.relaunchApp() },
                 menuWillOpen: { [weak self] in self?.handleStatusMenuWillOpen() }
             )
         )
@@ -536,7 +564,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 await startCaptureForGrantedLaunchPermission(allowPermissionRetry: false)
             } else {
                 captureStartController.beginDeferredStart()
-                updateCaptureStatus("Recovering…")
+                updateCaptureStatus(permissionRecoveryStatus())
             }
         } catch CaptureError.noDisplay {
             captureStartController.beginDeferredStart()
@@ -554,7 +582,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             )
             captureStartController.beginDeferredStart()
             updateCaptureStatus(
-                captureRecoveryNeedsAttention ? "Capture Help Needed" : "Recovering…"
+                permissionRecoveryStatus()
             )
         } catch {
             DiagnosticsLog.shared.log(
@@ -815,7 +843,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
                 "\(failurePrefix): deferred while the shared ScreenCaptureKit circuit cools down"
             )
             updateCaptureStatus(
-                captureRecoveryNeedsAttention ? "Capture Help Needed" : "Recovering…"
+                permissionRecoveryStatus()
             )
             if captureRecoveryNeedsAttention {
                 schedulePersistentCaptureRecoveryAlert()
@@ -854,7 +882,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     private func handleSuccessfulCaptureStart(successMessage: String? = nil) {
+        isRecoveringFromPermissionDenial = false
         updateCaptureStatus("Active")
+        startUpdaterIfNeeded()
         capturePolicyController.resetAppliedPolicy()
         updateCapturePolicy()
         scheduleIdleTransitionCheck()
@@ -936,7 +966,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             if captureEventController.blockedStatus() == nil {
                 captureStartController.beginDeferredStart()
                 updateCaptureStatus(
-                    captureRecoveryNeedsAttention ? "Capture Help Needed" : "Recovering…"
+                    permissionRecoveryStatus()
                 )
             }
         case .needsAttention:
@@ -1045,11 +1075,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     @objc private func showSettings() {
+        startUpdaterIfNeeded()
         settingsWindowCoordinator.show()
     }
 
     @objc private func checkForUpdates(_ sender: Any?) {
+        startUpdaterIfNeeded()
         updaterController.checkForUpdates(sender)
+    }
+
+    /// Sparkle's first-run "check automatically?" prompt used to land in the
+    /// middle of the Screen Recording flow, and duplicate copies showed it too.
+    /// Start it once recording works, or when the user asks for an update.
+    private func startUpdaterIfNeeded() {
+        guard !hasStartedUpdater else { return }
+        hasStartedUpdater = true
+        updaterController.startUpdater()
     }
 
     @objc private func quitApp() {
@@ -1158,12 +1199,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         idleTransitionTimer?.tolerance = min(remaining * 0.2, 5.0)
     }
 
+    private func permissionRecoveryStatus() -> String {
+        isRecoveringFromPermissionDenial = true
+        updatePermissionHelpMenuItem()
+        return captureRecoveryNeedsAttention ? "Capture Help Needed" : "Recovering…"
+    }
+
     private func updateFrameCountMenuItem() {
         statusItemController?.setFrameCount(frameBuffer?.frameCount ?? 0)
     }
 
     private func updateCaptureStatus(_ status: String) {
         lastCaptureStatusText = status
+        if ["Recovering…", "Capture Help Needed", "Error"].contains(status) {
+            // Capture is not starting soon; don't leave updates disabled.
+            startUpdaterIfNeeded()
+        }
         statusItemController?.setCaptureStatus(status)
         refreshStatusItemCaptureState()
     }
@@ -1220,6 +1271,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     private func handlePendingPermissionPromptResolutionIfNeeded() {
+        guard !isPresentingPermissionAlert else { return }
         let resolution = screenRecordingPermission.resolvePendingPrompt(
             hasPermission: ScreenCaptureManager.hasScreenRecordingPermission()
         )
@@ -1242,9 +1294,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     private func updatePermissionHelpMenuItem() {
+        // macOS can keep reporting the grant after it is revoked mid-run, so a
+        // capture stuck recovering also gets the help item.
         let needsPermissionHelp = captureRecoveryNeedsAttention
+            || isRecoveringFromPermissionDenial
             || !ScreenCaptureManager.hasScreenRecordingPermission()
         statusItemController?.setPermissionHelpVisible(needsPermissionHelp)
+        // A grant made in System Settings reaches JustNow only after a relaunch,
+        // and clicking the menu bar icon does not bring the permission alert back.
+        statusItemController?.setRelaunchVisible(
+            screenRecordingPermission.mayHaveGrantedThisLaunch
+                && !ScreenCaptureManager.hasScreenRecordingPermission()
+        )
     }
 
     private func showPersistentCaptureRecoveryAlert() {
@@ -1291,42 +1352,74 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         showPermissionAlert()
     }
 
-    private func showPermissionAlert(force: Bool = false) {
-        guard screenRecordingPermission.consumePermissionAlertPresentation(force: force) else { return }
+    /// Returns true when the user chose Not Now.
+    @discardableResult
+    private func showPermissionAlert(force: Bool = false) -> Bool {
+        guard !isPresentingPermissionAlert,
+              screenRecordingPermission.consumePermissionAlertPresentation(force: force) else { return false }
 
         DiagnosticsLog.shared.log(
             "Permission",
             "Presenting Screen Recording permission alert; \(CaptureSystemState.summary())"
         )
 
+        // macOS applies a grant made while JustNow runs only after a relaunch, and
+        // this process cannot detect it, so once the user has been to System
+        // Settings, offer Relaunch JustNow first.
+        let offersRelaunch = screenRecordingPermission.mayHaveGrantedThisLaunch
         let alert = NSAlert()
-        alert.messageText = "Screen Recording Permission Required"
+        alert.messageText = "Allow Screen Recording"
         alert.informativeText = """
-        JustNow needs Screen Recording permission to capture your screen history.
+        JustNow needs Screen Recording permission to keep a history of your screen. The history stays on this Mac.
+        \(offersRelaunch ? "\nAlready turned on JustNow? Click Relaunch JustNow. The permission works only after JustNow opens again.\n" : "")
+        1. Click Open System Settings.
+        2. In Privacy & Security → Screen & System Audio Recording, turn on JustNow. If JustNow is not in that list, click +, choose Applications in the sidebar, then select JustNow.
+        3. When macOS asks, click Quit & Reopen. If it does not ask, open JustNow again and click Relaunch JustNow.
 
-        Open System Settings → Privacy & Security → Screen Recording and allow JustNow.
-
-        After enabling JustNow, quit and reopen the app once so capture can restart cleanly with the new permission.
-
-        If JustNow is already enabled there but capture still fails after a recent build, signing, or notarisation change, remove the JustNow entry from Screen Recording and relaunch once so macOS can create a fresh permission record.
+        Already turned on but still not recording? Select JustNow in that list, click − to remove it, then add it again.
         """
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Open System Settings")
-        alert.addButton(withTitle: "Quit")
+        let relaunchButton = offersRelaunch ? alert.addButton(withTitle: "Relaunch JustNow") : nil
+        let settingsButton = alert.addButton(withTitle: "Open System Settings")
+        let notNowButton = alert.addButton(withTitle: "Not Now")
+        notNowButton.keyEquivalent = "\u{1b}"
+        let quitButton = offersRelaunch ? nil : alert.addButton(withTitle: "Quit JustNow")
 
         NSApp.activate(ignoringOtherApps: true)
 
-        if alert.runModal() == .alertFirstButtonReturn {
+        isPresentingPermissionAlert = true
+        let response = alert.runModal()
+        isPresentingPermissionAlert = false
+        let buttonIndex = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+        let chosenButton = alert.buttons.indices.contains(buttonIndex) ? alert.buttons[buttonIndex] : nil
+
+        if let relaunchButton, chosenButton === relaunchButton {
+            relaunchApp()
+            return false
+        } else if chosenButton === settingsButton {
+            if !ScreenCaptureManager.hasScreenRecordingPermission() {
+                screenRecordingPermission.noteOpenedPermissionSettings()
+            }
             let sourceFrame = alert.window.frame
             PermisoAssistant.shared.present(
                 panel: .screenRecording,
                 sourceFrameInScreen: sourceFrame.isEmpty ? nil : sourceFrame
             )
-            return
+        } else if let quitButton, chosenButton === quitButton {
+            terminateFromRunLoop()
+            return false
+        } else {
+            // Not Now: stay in the menu bar; Screen Recording Help… reopens this.
+            // Permission setup is over for now, so updates can run.
+            startUpdaterIfNeeded()
         }
-
-        NSApp.terminate(nil)
+        // A grant made while this alert was modal deferred its resolution.
+        if ScreenCaptureManager.hasScreenRecordingPermission() {
+            handlePendingPermissionPromptResolutionIfNeeded()
+        }
+        return chosenButton === notNowButton
     }
+
 
     private func showPermissionRestartAlert() {
         guard screenRecordingPermission.consumeRestartAlertPresentation() else { return }
@@ -1337,24 +1430,45 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         )
 
         let alert = NSAlert()
-        alert.messageText = "Restart JustNow to Start Capture"
+        alert.messageText = "Relaunch JustNow to Start Recording"
         alert.informativeText = """
-        Screen Recording is now enabled for JustNow.
+        Screen Recording is now turned on for JustNow.
 
-        Quit and reopen the app once so capture can restart cleanly with the new permission.
+        JustNow must relaunch once before it can use the new permission. It quits and opens again by itself.
         """
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "Quit JustNow")
+        alert.addButton(withTitle: "Relaunch JustNow")
         alert.addButton(withTitle: "Later")
 
         NSApp.activate(ignoringOtherApps: true)
 
-        if alert.runModal() == .alertFirstButtonReturn {
-            NSApp.terminate(nil)
+        isPresentingPermissionAlert = true
+        let response = alert.runModal()
+        isPresentingPermissionAlert = false
+
+        if response == .alertFirstButtonReturn {
+            relaunchApp()
+        } else {
+            startUpdaterIfNeeded()
         }
     }
 
     private func showErrorAlert(_ error: Error) {
+        if case FrameStoreError.storeInUse = error {
+            // Another JustNow process holds the history lock, so this copy can
+            // never record. Explain and leave the running copy in charge.
+            DiagnosticsLog.shared.log("App", "Another JustNow instance owns the history store; quitting this copy")
+            let alert = NSAlert()
+            alert.messageText = "JustNow Is Already Running"
+            alert.informativeText = "Another copy of JustNow is already running and keeping your history. Use its icon in the menu bar or your rewind shortcut. This copy will now quit."
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+            terminateFromRunLoop()
+            return
+        }
+
         let alert = NSAlert()
         alert.messageText = "Capture Error"
         alert.informativeText = error.localizedDescription

@@ -16,6 +16,10 @@ struct ScreenRecordingPermissionState {
     private(set) var didShowPermissionRestartAlertThisLaunch = false
     private(set) var isAwaitingPromptResolution = false
     private(set) var didDeactivateForPromptThisLaunch = false
+    /// The user has left JustNow for permission setup this launch. A grant made
+    /// then is invisible to this process (preflight stays false until relaunch),
+    /// so the permission alert offers Relaunch JustNow from here on.
+    private(set) var mayHaveGrantedThisLaunch = false
 
     mutating func resolveLaunchState(
         hasPermission: Bool,
@@ -42,6 +46,7 @@ struct ScreenRecordingPermissionState {
     mutating func noteApplicationDidResignActive() {
         guard isAwaitingPromptResolution else { return }
         didDeactivateForPromptThisLaunch = true
+        mayHaveGrantedThisLaunch = true
     }
 
     mutating func resolvePendingPrompt(hasPermission: Bool) -> ScreenRecordingPermissionPromptResolution {
@@ -58,6 +63,13 @@ struct ScreenRecordingPermissionState {
 
         isAwaitingPromptResolution = false
         return .showPermissionAlert
+    }
+
+    /// The user chose Open System Settings without permission: show the alert
+    /// again when they return, since a grant there may not reach this process.
+    mutating func noteOpenedPermissionSettings() {
+        isAwaitingPromptResolution = true
+        didDeactivateForPromptThisLaunch = false
     }
 
     mutating func consumePermissionAlertPresentation(force: Bool = false) -> Bool {

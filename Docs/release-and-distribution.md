@@ -4,7 +4,7 @@ This document is for maintainers preparing official macOS builds for GitHub Rele
 
 Official distribution preparation, notarisation, and publication require authorization for those actions. Routine local-install signing is a separate permission; see [local development](local-development.md). An authorized stable publication includes the release's website metadata, release notes, appcast, and Cloudflare deployment unless the user excludes them. It does not authorize unrelated site/infrastructure changes, tag creation/movement, pushes/merges, or unrequested replacement of existing release assets.
 
-GitHub Actions builds and publishes stable releases, the website, and the signed Sparkle feed on version-tag pushes. Local packaging/publishing remains available as an alternative. Both paths use `Scripts/local-release-build.sh` to sign the app and notarise/staple the DMG.
+GitHub Actions builds and publishes stable releases, the website, and the signed Sparkle feed on version-tag pushes. Local packaging/publishing remains available as an alternative. Both paths use `Scripts/local-release-build.sh` to sign the app, notarise and staple it before packaging, then notarise and staple the DMG.
 
 ## GitHub Actions setup
 
@@ -69,7 +69,7 @@ If export fails, stop and recover the original key. Generating a new key would b
 - Runs share one concurrency group to protect the stable feed; release one version at a time (GitHub can replace an older pending run with a newer pending run). Both the marketing version and build number must advance; an unchanged same-tag/build recovery is allowed. CI reads deployed metadata/feed, disables Sparkle's default three-version pruning, and checks that historical enclosure URLs, sizes, and signatures survive generation.
 - Existing assets are never overwritten. CI can reuse an existing asset only if downloaded bytes exactly match the built artifact. A fresh rebuild may differ because of signing timestamps; inspect partial publication rather than blindly rerunning. Recovery should use the retained exact binaries/generated site and separate explicit authorization where replacement/deployment is needed. Do not combine the local publisher and CI uploads for the same release.
 
-The ZIP contains a signed app, but this packaging flow staples only the DMG. Sparkle verifies the exact ZIP's EdDSA signature; CI compares its downloaded GitHub asset with the signed local ZIP before deploying the feed. It checks public metadata, notes, and feed bytes after deployment. GitHub publication and Cloudflare deployment are not atomic: a failed deployment can leave a published release with the old website/feed; the job reports failure, not complete publication.
+The ZIP contains the signed, notarised, and stapled app (the ZIP archive itself cannot be stapled); the DMG is stapled separately. Sparkle verifies the exact ZIP's EdDSA signature; CI compares its downloaded GitHub asset with the signed local ZIP before deploying the feed. It checks public metadata, notes, and feed bytes after deployment. GitHub publication and Cloudflare deployment are not atomic: a failed deployment can leave a published release with the old website/feed; the job reports failure, not complete publication.
 
 CI retains the generated `site/` artifact for 90 days and does **not** push generated files or rewrite tags. The deployed `releases.json` and `appcast.xml` are the CI release ledger. Reconcile `site/releases.json`, `site/releases/index.html`, and `site/appcast.xml` from the successful run's artifact into source control before unrelated site deployments; otherwise a manual deployment from stale checked-in files can roll back the public feed. Deployment metadata records the tag commit plus dirty generated files, not a fictitious `main` source commit.
 
@@ -117,7 +117,7 @@ To produce a locally notarised and stapled DMG, add App Store Connect API key de
 
 If you are using an Individual App Store Connect API key, omit `--api-issuer`.
 
-The script creates the ZIP before submitting and stapling the DMG. Do not describe the ZIP or its enclosed app as stapled by this flow. If `create-dmg` is unavailable, packaging skips DMG creation and the notarisation block; verify expected artifacts and notarisation results rather than trusting the final success message alone.
+The script notarises and staples the app before creating the ZIP and DMG, so both contain a stapled app that opens without Gatekeeper's online check. The ZIP itself is not stapled (ZIP archives cannot be). The DMG is then notarised and stapled separately. If `create-dmg` is unavailable, packaging skips DMG creation and the DMG notarisation; verify expected artifacts and notarisation results rather than trusting the final success message alone.
 
 Local notarisation prerequisites:
 
@@ -169,7 +169,7 @@ Before invoking the helper, confirm the GitHub repository/account, approved tag 
 For a stable release, complete the release/site outcome even if the script skips or warns:
 
 - Provide nonempty release notes. Empty notes skip metadata, feed, and deployment; drafts/prereleases intentionally leave the stable feed unchanged.
-- Check generated version/build numbers, release notes, enclosure URLs, sizes, and Sparkle signature against the exact uploaded ZIP. Verify expected app/DMG signing and DMG notarisation/stapling evidence. Appcast generation uses the local ZIP, not a freshly downloaded copy of the published asset.
+- Check generated version/build numbers, release notes, enclosure URLs, sizes, and Sparkle signature against the exact uploaded ZIP. Verify expected app/DMG signing and app/DMG notarisation/stapling evidence. Appcast generation uses the local ZIP, not a freshly downloaded copy of the published asset.
 - **Appcast failure is only a warning in the publisher.** It can still deploy a stale or invalid feed. For a validation checkpoint before deployment, use `--skip-site-deploy`, validate the generated files, then deploy explicitly as part of the same authorized stable release. This stages deployment; it does not omit the website update.
 - Review and commit generated `site/releases.json`, `site/releases/`, and `site/appcast.xml` changes as part of the release work. The scripts do not commit them. Push/merge only when authorized. Deploy from the intended committed release state using [Cloudflare target checks](cloudflare-pages.md); if the helper already deployed dirty generated files, redeploy their committed state so deployment metadata matches the released content. Do not label an unrelated branch/commit as `main` merely because the helper defaults to it.
 - Verify the public version, release notes, feed, and asset links after deployment. Report partial publication honestly; do not blindly rerun a command that may overwrite already-published assets.

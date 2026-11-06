@@ -155,7 +155,7 @@ struct SettingsView: View {
                             }
                         }
 
-                    Text("Hides the icon in the macOS menu bar. If you lose access, relaunch JustNow from Finder or Spotlight to reopen Settings, or toggle it back from the rewind overlay.")
+                    Text("Shows JustNow's icon in the macOS menu bar. If you hide it, open JustNow again from Finder or Spotlight to reach Settings, or turn the icon back on from the rewind overlay.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

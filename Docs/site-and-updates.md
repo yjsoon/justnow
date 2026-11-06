@@ -32,7 +32,7 @@ The [Release action](../.github/workflows/release.yml) automates app packaging, 
 
 The alternative local flow is:
 
-1. Build and sign locally; notarise and staple the DMG. The packaging flow does not staple the ZIP or its enclosed app.
+1. Build and sign locally; the packaging flow notarises and staples the app before zipping it, then notarises and staples the DMG.
 2. Upload the signed `.zip` and `.dmg` to GitHub Releases.
 3. Populate `site/releases.json` from the release notes and regenerate the public release notes page.
 4. Generate and validate the Sparkle appcast against the exact uploaded ZIP.

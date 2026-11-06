@@ -404,6 +404,9 @@ actor TextCache {
         try withTransaction {
             try execute("DELETE FROM frame_search_layout;")
             try execute("DELETE FROM frame_text_fts;")
+            // FTS5 deletes only add tombstones; the old index segments keep
+            // every token until the index is rebuilt.
+            try execute("INSERT INTO frame_text_fts(frame_text_fts) VALUES('rebuild');")
             try execute("DELETE FROM frame_text;")
         }
         let remainingRows = try ["frame_search_layout", "frame_text_fts", "frame_text"].reduce(0) {
@@ -419,6 +422,41 @@ actor TextCache {
             throw TextCacheError.sqlite(
                 "OCR cache clear verification found \(remainingRows) remaining row(s)"
             )
+        }
+        // Deleted rows stay readable in free pages and the WAL until the file
+        // is rewritten. The clear has committed, so compaction is best-effort.
+        // Both steps always run.
+        do {
+            try execute("VACUUM;")
+        } catch {
+            Self.logger.error("OCR cache VACUUM after clear failed: \(error.localizedDescription)")
+        }
+        do {
+            try checkpointTruncate()
+        } catch {
+            Self.logger.error("OCR cache WAL truncation after clear failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Same success rule as FrameDatabase.checkpoint(): not busy, and every
+    /// logged frame checkpointed. sqlite3_exec alone ignores the result row.
+    private func checkpointTruncate() throws {
+        try withPreparedStatement("PRAGMA wal_checkpoint(TRUNCATE);") { statement in
+            guard sqlite3_step(statement) == SQLITE_ROW else {
+                throw sqliteError(message: "Failed to checkpoint text cache database")
+            }
+            let busy = sqlite3_column_int(statement, 0)
+            let logFrames = sqlite3_column_int(statement, 1)
+            let checkpointedFrames = sqlite3_column_int(statement, 2)
+            guard busy == 0, checkpointedFrames >= logFrames else {
+                throw TextCacheError.sqlite(
+                    "Text cache checkpoint incomplete " +
+                        "(busy=\(busy), log=\(logFrames), checkpointed=\(checkpointedFrames))"
+                )
+            }
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                throw sqliteError(message: "Failed to finish text cache checkpoint")
+            }
         }
     }
 

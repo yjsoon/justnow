@@ -142,6 +142,7 @@ jobs:
           test -s "dist/JustNow-$RELEASE_TAG-macos.dmg"
           lipo build/Build/Products/Release/JustNow.app/Contents/MacOS/JustNow -verify_arch arm64 x86_64
           codesign --verify --deep --strict build/Build/Products/Release/JustNow.app
+          xcrun stapler validate build/Build/Products/Release/JustNow.app
           xcrun stapler validate "dist/JustNow-$RELEASE_TAG-macos.dmg"
           spctl --assess --type open --context context:primary-signature \
             --verbose=2 "dist/JustNow-$RELEASE_TAG-macos.dmg"

@@ -7,6 +7,7 @@ enum StatusMenuItemTag: Int {
     case pauseToggle = 102
     case permissionHelp = 103
     case showTimeline = 104
+    case relaunchForPermission = 105
 }
 
 struct StatusItemControllerActions {
@@ -16,6 +17,7 @@ struct StatusItemControllerActions {
     let checkForUpdates: () -> Void
     let quitApp: () -> Void
     let showScreenRecordingHelp: () -> Void
+    let relaunch: () -> Void
     let menuWillOpen: () -> Void
 }
 
@@ -176,6 +178,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let frameCountItem: NSMenuItem
     private let captureStatusItem: NSMenuItem
     private let permissionHelpItem: NSMenuItem
+    private let relaunchItem: NSMenuItem
 
     init(
         actions: StatusItemControllerActions,
@@ -191,6 +194,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         frameCountItem = NSMenuItem(title: "Frames: 0", action: nil, keyEquivalent: "")
         captureStatusItem = NSMenuItem(title: "Capture: Starting...", action: nil, keyEquivalent: "")
         permissionHelpItem = NSMenuItem(title: "Screen Recording Help…", action: nil, keyEquivalent: "")
+        relaunchItem = NSMenuItem(title: "Relaunch JustNow", action: nil, keyEquivalent: "")
 
         super.init()
         setupMenu()
@@ -199,6 +203,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         setFrameCount(0)
         setCaptureStatus("Starting...")
         setPermissionHelpVisible(false)
+        setRelaunchVisible(false)
     }
 
     deinit {
@@ -237,6 +242,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     func setPermissionHelpVisible(_ isVisible: Bool) {
         permissionHelpItem.isHidden = !isVisible
         permissionHelpItem.isEnabled = isVisible
+    }
+
+    func setRelaunchVisible(_ isVisible: Bool) {
+        relaunchItem.isHidden = !isVisible
+        relaunchItem.isEnabled = isVisible
     }
 
     func item(for tag: StatusMenuItemTag) -> NSMenuItem? {
@@ -285,6 +295,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         permissionHelpItem.action = #selector(handleShowScreenRecordingHelp)
         permissionHelpItem.tag = StatusMenuItemTag.permissionHelp.rawValue
         menu.addItem(permissionHelpItem)
+
+        relaunchItem.target = self
+        relaunchItem.action = #selector(handleRelaunch)
+        relaunchItem.tag = StatusMenuItemTag.relaunchForPermission.rawValue
+        menu.addItem(relaunchItem)
 
         menu.addItem(.separator())
 
@@ -366,5 +381,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     @objc private func handleShowScreenRecordingHelp() {
         actions.showScreenRecordingHelp()
+    }
+
+    @objc private func handleRelaunch() {
+        actions.relaunch()
     }
 }

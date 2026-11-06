@@ -605,11 +605,21 @@ final class TextCacheTests: XCTestCase {
     func testClearEmptiesTextSearchAndLayouts() async throws {
         let cache = TextCache(directory: directory)
         let frameID = UUID()
-        await cache.setText("something", for: frameID)
+        let marker = "something zqxclearedmarker4815"
+        await cache.setText(marker, for: frameID)
         await cache.setSearchLayout(makeLayout(), for: frameID)
 
         try await cache.clear()
 
+        // Cleared text must not survive in SQLite free pages or the WAL.
+        for suffix in ["", "-wal"] {
+            let url = directory.appendingPathComponent("text_cache.sqlite\(suffix)")
+            guard let bytes = try? Data(contentsOf: url) else { continue }
+            XCTAssertNil(
+                bytes.range(of: Data("zqxclearedmarker4815".utf8)),
+                "Cleared OCR text remains in text_cache.sqlite\(suffix)"
+            )
+        }
         let count = await cache.count
         XCTAssertEqual(count, 0)
         let hits = try await cache.searchFrameIDs(matching: "something", limit: 10)
