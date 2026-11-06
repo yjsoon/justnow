@@ -293,6 +293,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         // While the overlay is open JustNow has a Dock icon; clicking it should
         // return to the overlay rather than open Settings over it.
         guard !isOverlayVisible else { return true }
+        // Reopening JustNow is an explicit return from System Settings.
+        ScreenRecordingSettingsGuide.shared.close(.reopen)
         // During Screen Recording setup, reopening JustNow means returning from
         // System Settings. Answer with the permission alert, which offers
         // Relaunch JustNow, rather than opening Settings (and Sparkle) behind it.
@@ -523,8 +525,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             }
             await startCaptureForGrantedLaunchPermission()
         case .requestedThisLaunch:
-            // Intro alert first — clicking "Open System Settings" fires the Permiso
-            // coach, so users who dismiss the alert aren't surprised by a floating
+            // Intro alert first — clicking "Open System Settings" shows the drag
+            // guide, so users who dismiss the alert aren't surprised by a floating
             // panel appearing over System Settings out of nowhere.
             presentPermissionAlert(status: "Awaiting Permission")
         case .deniedPreviously:
@@ -1000,6 +1002,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     @objc private func showOverlay() {
         guard let frameBuffer = frameBuffer else { return }
         guard overlayPresentationTask == nil else { return }
+        // Opening the timeline is an explicit return to JustNow.
+        ScreenRecordingSettingsGuide.shared.close(.timeline)
 
         overlayPresentationTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -1102,6 +1106,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     private func handleStatusMenuWillOpen() {
+        // Opening the menu bar menu is an explicit return to JustNow, though it
+        // does not activate the app.
+        ScreenRecordingSettingsGuide.shared.close(.statusMenu)
         updateFrameCountMenuItem()
         updatePauseMenuItem()
         updatePermissionHelpMenuItem()
@@ -1279,15 +1286,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         case .none:
             return
         case .showRestartAlert:
-            PermisoAssistant.shared.dismiss()
+            ScreenRecordingSettingsGuide.shared.close(.restartAlert)
             updateCaptureStatus("Restart Required")
             showPermissionRestartAlert()
         case .showPermissionAlert:
             // This branch is one-shot per launch: by the time it fires the user has
-            // already returned to JustNow without granting. Tear down the coach and
+            // already returned to JustNow without granting. Close the guide and
             // force the alert even if it already ran from the launch path, so the
             // user is never stuck without visible guidance.
-            PermisoAssistant.shared.dismiss()
+            ScreenRecordingSettingsGuide.shared.close(.permissionAlert)
             updateCaptureStatus("No Permission")
             showPermissionAlert(force: true)
         }
@@ -1331,11 +1338,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
-        let sourceFrame = alert.window.frame
-        PermisoAssistant.shared.present(
-            panel: .screenRecording,
-            sourceFrameInScreen: sourceFrame.isEmpty ? nil : sourceFrame
-        )
+        ScreenRecordingSettingsGuide.shared.show(launchingFrom: alert.window.frame)
     }
 
     private func schedulePersistentCaptureRecoveryAlert() {
@@ -1357,6 +1360,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     private func showPermissionAlert(force: Bool = false) -> Bool {
         guard !isPresentingPermissionAlert,
               screenRecordingPermission.consumePermissionAlertPresentation(force: force) else { return false }
+        ScreenRecordingSettingsGuide.shared.close(.permissionAlert)
 
         DiagnosticsLog.shared.log(
             "Permission",
@@ -1373,7 +1377,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
         JustNow needs Screen Recording permission to keep a history of your screen. The history stays on this Mac.
         \(offersRelaunch ? "\nAlready turned on JustNow? Click Relaunch JustNow. The permission works only after JustNow opens again.\n" : "")
         1. Click Open System Settings.
-        2. In Privacy & Security → Screen & System Audio Recording, turn on JustNow. If JustNow is not in that list, click +, choose Applications in the sidebar, then select JustNow.
+        2. In Privacy & Security → Screen & System Audio Recording, turn on JustNow. If JustNow is not in that list, drag it in from the panel JustNow shows below the list, or click +, choose Applications in the sidebar, then select JustNow.
         3. When macOS asks, click Quit & Reopen. If it does not ask, open JustNow again and click Relaunch JustNow.
 
         Already turned on but still not recording? Select JustNow in that list, click − to remove it, then add it again.
@@ -1400,11 +1404,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             if !ScreenCaptureManager.hasScreenRecordingPermission() {
                 screenRecordingPermission.noteOpenedPermissionSettings()
             }
-            let sourceFrame = alert.window.frame
-            PermisoAssistant.shared.present(
-                panel: .screenRecording,
-                sourceFrameInScreen: sourceFrame.isEmpty ? nil : sourceFrame
-            )
+            ScreenRecordingSettingsGuide.shared.show(launchingFrom: alert.window.frame)
         } else if let quitButton, chosenButton === quitButton {
             terminateFromRunLoop()
             return false
@@ -1423,6 +1423,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
 
     private func showPermissionRestartAlert() {
         guard screenRecordingPermission.consumeRestartAlertPresentation() else { return }
+        ScreenRecordingSettingsGuide.shared.close(.restartAlert)
 
         DiagnosticsLog.shared.log(
             "Permission",
