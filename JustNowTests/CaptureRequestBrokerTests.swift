@@ -360,6 +360,61 @@ final class CaptureRequestBrokerTests: XCTestCase {
         XCTAssertEqual(osCalls, 1)
     }
 
+    func testRestoredCooldownWithRevokedPermissionReachesPermissionFlowWhenCooldownEnds() async {
+        let clock = BrokerTestClock()
+        let wall = BrokerTestWallClock()
+        let store = InMemoryCaptureCircuitStore()
+        store.snapshot = PersistedCaptureCircuit(
+            openedAt: wall.date.addingTimeInterval(-10),
+            cooldownSeconds: CaptureFailureRecovery.falsePermissionDenialDelay,
+            escalationLevel: 0,
+            recoveredAt: nil
+        )
+        let broker = makeBroker(
+            clock: clock,
+            wallClock: wall,
+            hasScreenRecordingPermission: false,
+            persistence: store
+        )
+        let discovery = CoordinatorDisplayDiscoveryProbe(displays: [coordinatorDisplayA])
+        let sleepGate = BrokerTestGate()
+        let scheduler = CaptureCooldownRestartScheduler { _ in
+            await sleepGate.wait()
+            try Task.checkCancellation()
+        }
+        let coordinator = makeCoordinator(
+            discovery: discovery,
+            factory: CoordinatorCaptureManagerFactoryProbe(),
+            scheduler: scheduler,
+            broker: broker,
+            hasScreenRecordingPermission: false
+        )
+        let delegate = CoordinatorDelegateProbe()
+        coordinator.delegate = delegate
+
+        // Relaunch inside the restored cooldown defers to a scheduled retry.
+        do {
+            try await coordinator.startCapture()
+            XCTFail("Expected the restored cooldown to defer launch capture")
+        } catch {
+            XCTAssertTrue(error is CaptureRequestBrokerError)
+        }
+        await waitUntil { sleepGate.waiterCount == 1 }
+
+        // The cooldown ends while preflight still reports a real revoke.
+        clock.advance(by: CaptureFailureRecovery.falsePermissionDenialDelay)
+        sleepGate.resumeNext()
+
+        await waitUntil { delegate.unexpectedStopCount == 1 }
+        await settleTasks()
+        XCTAssertNil(
+            scheduler.scheduledDeadline,
+            "An expired cooldown must not keep rescheduling 1-second retries"
+        )
+        XCTAssertEqual(sleepGate.waiterCount, 0)
+        await coordinator.stopCapture()
+    }
+
     func testCoordinatorStartReadinessPrefersGlobalCooldownOverPartialCapture() {
         XCTAssertEqual(
             CaptureCoordinator.startReadiness(
@@ -1530,16 +1585,18 @@ final class CaptureRequestBrokerTests: XCTestCase {
     private func makeCoordinator(
         discovery: CoordinatorDisplayDiscoveryProbe,
         factory: CoordinatorCaptureManagerFactoryProbe,
-        scheduler: CaptureCooldownRestartScheduler
+        scheduler: CaptureCooldownRestartScheduler,
+        broker: CaptureRequestBroker? = nil,
+        hasScreenRecordingPermission: Bool = true
     ) -> CaptureCoordinator {
-        let broker = CaptureRequestBroker(
+        let broker = broker ?? CaptureRequestBroker(
             hasScreenRecordingPermission: { true },
             log: { _ in }
         )
         return CaptureCoordinator(
             captureRequestBroker: broker,
             cooldownRestartScheduler: scheduler,
-            hasScreenRecordingPermission: { true },
+            hasScreenRecordingPermission: { hasScreenRecordingPermission },
             discoverDisplays: { try discovery.discover() },
             makeCaptureManager: { displayID, broker in
                 factory.make(displayID: displayID, broker: broker)

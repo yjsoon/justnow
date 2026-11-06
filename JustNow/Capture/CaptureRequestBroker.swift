@@ -110,11 +110,17 @@ final class CaptureRequestBroker {
         restorePersistedCircuitIfNeeded()
     }
 
-    /// Monotonic deadline of the currently open circuit, if any. Callers use
-    /// this to defer restart work until the cooldown has expired instead of
-    /// treating a cooling-down circuit as a hard failure.
+    /// Monotonic deadline of the open circuit while its cooldown is still
+    /// running. Callers use this to defer restart work until the cooldown has
+    /// expired instead of treating a cooling-down circuit as a hard failure.
+    ///
+    /// An expired circuit stays `.open` until the next brokered request makes
+    /// it the half-open probe. Callers that skip the broker (for example when
+    /// preflight reports a real revoke) must not keep deferring to a deadline
+    /// that has already passed, or they reschedule every second forever.
     var openCircuitMonotonicDeadline: TimeInterval? {
-        guard case .open(let monotonicDeadline) = circuitState else { return nil }
+        guard case .open(let monotonicDeadline) = circuitState,
+              monotonicNow() < monotonicDeadline else { return nil }
         return monotonicDeadline
     }
 
@@ -126,10 +132,9 @@ final class CaptureRequestBroker {
         return false
     }
 
-    /// Seconds until the open circuit's cooldown expires, or nil when closed.
-    func remainingCooldown() -> TimeInterval? {
-        guard let deadline = openCircuitMonotonicDeadline else { return nil }
-        return max(0, deadline - monotonicNow())
+    /// Seconds until `deadline` on the broker's monotonic clock, never negative.
+    func remainingCooldown(until deadline: TimeInterval) -> TimeInterval {
+        max(0, deadline - monotonicNow())
     }
 
     /// Runs a single one-shot request after process-wide admission.
