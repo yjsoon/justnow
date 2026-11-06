@@ -1373,6 +1373,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             )
         case .alertThirdButtonReturn:
             terminateFromRunLoop()
+            return
         default:
             // Not Now: stay in the menu bar; Screen Recording Help… reopens this.
             // Permission setup is over for now, so updates can run.
