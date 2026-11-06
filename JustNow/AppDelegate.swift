@@ -1341,40 +1341,52 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
             "Presenting Screen Recording permission alert; \(CaptureSystemState.summary())"
         )
 
+        // macOS applies a grant made while JustNow runs only after a relaunch, and
+        // this process cannot detect it, so once the user has been to System
+        // Settings, offer Relaunch JustNow first.
+        let offersRelaunch = screenRecordingPermission.mayHaveGrantedThisLaunch
         let alert = NSAlert()
         alert.messageText = "Allow Screen Recording"
         alert.informativeText = """
         JustNow needs Screen Recording permission to keep a history of your screen. The history stays on this Mac.
-
+        \(offersRelaunch ? "\nAlready turned on JustNow? Click Relaunch JustNow. The permission works only after JustNow opens again.\n" : "")
         1. Click Open System Settings.
         2. In Privacy & Security → Screen & System Audio Recording, turn on JustNow. If JustNow is not in that list, click +, choose Applications in the sidebar, then select JustNow.
-        3. When macOS asks, click Quit & Reopen. If it does not ask, JustNow will offer to relaunch.
+        3. When macOS asks, click Quit & Reopen. If it does not ask, open JustNow again and click Relaunch JustNow.
 
         Already turned on but still not recording? Select JustNow in that list, click − to remove it, then add it again.
         """
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Open System Settings")
+        let relaunchButton = offersRelaunch ? alert.addButton(withTitle: "Relaunch JustNow") : nil
+        let settingsButton = alert.addButton(withTitle: "Open System Settings")
         let notNowButton = alert.addButton(withTitle: "Not Now")
         notNowButton.keyEquivalent = "\u{1b}"
-        alert.addButton(withTitle: "Quit JustNow")
+        let quitButton = offersRelaunch ? nil : alert.addButton(withTitle: "Quit JustNow")
 
         NSApp.activate(ignoringOtherApps: true)
 
         isPresentingPermissionAlert = true
         let response = alert.runModal()
         isPresentingPermissionAlert = false
+        let buttonIndex = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+        let chosenButton = alert.buttons.indices.contains(buttonIndex) ? alert.buttons[buttonIndex] : nil
 
-        switch response {
-        case .alertFirstButtonReturn:
+        if let relaunchButton, chosenButton === relaunchButton {
+            relaunchApp()
+            return
+        } else if chosenButton === settingsButton {
+            if !ScreenCaptureManager.hasScreenRecordingPermission() {
+                screenRecordingPermission.noteOpenedPermissionSettings()
+            }
             let sourceFrame = alert.window.frame
             PermisoAssistant.shared.present(
                 panel: .screenRecording,
                 sourceFrameInScreen: sourceFrame.isEmpty ? nil : sourceFrame
             )
-        case .alertThirdButtonReturn:
+        } else if let quitButton, chosenButton === quitButton {
             terminateFromRunLoop()
             return
-        default:
+        } else {
             // Not Now: stay in the menu bar; Screen Recording Help… reopens this.
             // Permission setup is over for now, so updates can run.
             startUpdaterIfNeeded()

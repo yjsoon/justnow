@@ -53,6 +53,22 @@ final class ScreenRecordingPermissionStateTests: XCTestCase {
         )
     }
 
+    func testReturningFromSettingsWithoutVisibleGrantOffersRelaunch() {
+        // A live grant leaves preflight false in this process, so returning
+        // from System Settings must offer a relaunch rather than rely on it.
+        var state = ScreenRecordingPermissionState()
+        XCTAssertFalse(state.mayHaveGrantedThisLaunch)
+
+        state.noteOpenedPermissionSettings()
+        XCTAssertEqual(state.resolvePendingPrompt(hasPermission: false), .none)
+        XCTAssertFalse(state.mayHaveGrantedThisLaunch)
+
+        state.noteApplicationDidResignActive()
+        XCTAssertEqual(state.resolvePendingPrompt(hasPermission: false), .showPermissionAlert)
+        XCTAssertTrue(state.mayHaveGrantedThisLaunch)
+        XCTAssertEqual(state.resolvePendingPrompt(hasPermission: false), .none)
+    }
+
     func testPermissionAlertPresentationCanBeForced() {
         var state = ScreenRecordingPermissionState()
 
