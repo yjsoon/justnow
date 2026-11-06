@@ -215,6 +215,8 @@ final class CapturePersistenceInstrumentationTests: XCTestCase {
         XCTAssertEqual(snapshot.repositoryExactDuplicateFrames, 0)
     }
 
+    // Also witnesses the reset that FrameBuffer.clear() relies on to discard
+    // the exact-comparison baseline (see Docs/testing-policy.md).
     func testResetStartsANewEpochAndDiscardsComparisonAndAnchorBaselines() {
         let instrumentation = CapturePersistenceInstrumentation()
         let displayID = UUID()

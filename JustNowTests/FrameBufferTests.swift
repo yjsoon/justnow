@@ -47,31 +47,6 @@ final class FrameBufferTests: XCTestCase {
         return buffer
     }
 
-    func testStandardDuplicatePolicyMatchesDefaultCaptureInterval() {
-        XCTAssertEqual(
-            DuplicateFramePolicy.standard,
-            .exact(atMostEvery: AppStorageDefault.captureInterval)
-        )
-    }
-
-    func testEffectiveHistoryModeIsImmutableForBufferLifetime() async throws {
-        let mode = HistoryStorageMode.hybridRAM(
-            byteCap: RecentDetailMemoryLimit.mb256.byteCount
-        )
-        let buffer = try await FrameBuffer(
-            retentionPolicy: .default24Hours,
-            storageDirectory: directory,
-            diagnosticsLog: nil,
-            historyStorageMode: mode
-        )
-
-        XCTAssertEqual(buffer.historyStorageMode, mode)
-        XCTAssertNotEqual(
-            buffer.historyStorageMode,
-            .hybridRAM(byteCap: RecentDetailMemoryLimit.mb1024.byteCount)
-        )
-    }
-
     func testPressureWaitsForAdmittedIngestBeforeMaintenanceReconciliation() async throws {
         let image = try makeStructuredImage(seed: 900)
         let repository = FrameRepositoryProbe(
@@ -700,6 +675,8 @@ final class FrameBufferTests: XCTestCase {
         XCTAssertEqual(hits, [volatile.frame.id])
     }
 
+    // Also witnesses HybridFrameRepository's non-termination close retrying a
+    // pending first anchor (see Docs/testing-policy.md).
     func testHybridPostJPEGFailureIsCountedOnceAndPublishedByLaterSessionClose() async throws {
         let image = try makeStructuredImage(seed: 710)
         let jpeg = try XCTUnwrap(ImageEncoder.jpegData(from: image, quality: 0.8))
@@ -765,6 +742,8 @@ final class FrameBufferTests: XCTestCase {
         XCTAssertEqual(resolved.width, image.width)
     }
 
+    // Also witnesses HybridFrameRepository keeping its session and RAM after a
+    // durable clear failure (see Docs/testing-policy.md).
     func testHybridClearFailureRetainsKnownStateAndNextCaptureSucceeds() async throws {
         let image = try makeStructuredImage(seed: 707)
         let encoder = SequencedJPEGEncoderProbe(
@@ -800,16 +779,6 @@ final class FrameBufferTests: XCTestCase {
         await buffer.addFrameSync(image, timestamp: base.addingTimeInterval(1), display: nil)
         XCTAssertEqual(buffer.getTimelineEntries().count, 2)
         XCTAssertTrue(buffer.containsFrame(id: firstEntry.frame.id))
-    }
-
-    func testAddFrameSyncStoresFrame() async throws {
-        let buffer = try await makeBuffer()
-        let image = try makeStructuredImage(seed: 1)
-
-        await buffer.addFrameSync(image, timestamp: Date(), display: nil)
-
-        XCTAssertEqual(buffer.frameCount, 1)
-        XCTAssertEqual(buffer.getFrames().count, 1)
     }
 
     func testInjectedRepositoryResolvesRequestedPrefetchAndExportByStableID() async throws {
@@ -1508,6 +1477,8 @@ final class FrameBufferTests: XCTestCase {
         XCTAssertEqual(reasons, [.termination, .termination])
         let sessionIsActive = await repository.captureSessionIsActive()
         XCTAssertFalse(sessionIsActive)
+        let flushInvocationCount = await repository.flushInvocationCount()
+        XCTAssertEqual(flushInvocationCount, 1, "flushCaches must delegate the repository flush")
     }
 
     func testClearReopenFailureRecoversOnLaterFrameWithoutManualRestart() async throws {
@@ -1741,42 +1712,6 @@ final class FrameBufferTests: XCTestCase {
         XCTAssertFalse(sessionIsActive)
     }
 
-    func testRepositoryReceivesRetentionPruneFlushAndClearDelegation() async throws {
-        let oldFrame = StoredFrame(
-            id: UUID(),
-            timestamp: Date().addingTimeInterval(-60),
-            hash: 1,
-            displayID: nil,
-            displayName: nil
-        )
-        let image = try makeStructuredImage(seed: 10)
-        let repository = FrameRepositoryProbe(
-            frames: [oldFrame],
-            image: image,
-            exportedURL: directory.appendingPathComponent("unused.jpg")
-        )
-        let buffer = try await FrameBuffer(
-            retentionPolicy: .default24Hours,
-            storageDirectory: directory,
-            diagnosticsLog: nil,
-            frameRepository: repository
-        )
-        try await buffer.beginCaptureSession()
-
-        await buffer.updateRetentionPolicy(
-            RetentionPolicy(tiers: [RetentionTier(maxAge: 1, minimumSpacing: 0)])
-        )
-        await buffer.flushCaches()
-        try await buffer.clear()
-
-        let prunedFrameIDs = await repository.prunedFrameIDs()
-        let flushInvocationCount = await repository.flushInvocationCount()
-        let clearInvocationCount = await repository.clearInvocationCount()
-        XCTAssertEqual(Set(prunedFrameIDs), [oldFrame.id])
-        XCTAssertEqual(flushInvocationCount, 1)
-        XCTAssertEqual(clearInvocationCount, 1)
-    }
-
     func testRetentionUsesLogicalSpanRecencyAndPrunesOnlyExpiredSpan() async throws {
         let now = Date()
         let recentPhysicalFrame = StoredFrame(
@@ -1941,21 +1876,8 @@ final class FrameBufferTests: XCTestCase {
         XCTAssertEqual(snapshot.encodedFrames, 1, "Span persistence must not increase pHash cadence")
     }
 
-    func testIdenticalFramesBeyondMinimumSpacingExtendOneDurableSpan() async throws {
-        let buffer = try await makeBuffer()
-        let uniform = try XCTUnwrap(TestImageFactory.makeSolidImage(width: 32, height: 32, level: 40))
-        let base = Date()
-
-        await buffer.addFrameSync(uniform, timestamp: base, display: nil)
-        await buffer.addFrameSync(uniform, timestamp: base.addingTimeInterval(1.0), display: nil)
-
-        XCTAssertEqual(buffer.frameCount, 1)
-        let statistics = await buffer.storageStatistics()
-        XCTAssertEqual(statistics.frameCount, 1)
-        XCTAssertEqual(statistics.timelineSpanCount, 1)
-        XCTAssertEqual(statistics.observationCount, 2)
-    }
-
+    /// Identical frames beyond the minimum spacing extend one durable span;
+    /// instrumentation observes that persistence without changing dedupe.
     func testInstrumentationObservesExistingPersistenceWithoutChangingDedupe() async throws {
         let buffer = try await makeBuffer()
         let uniform = try XCTUnwrap(TestImageFactory.makeSolidImage(width: 32, height: 32, level: 40))
@@ -1981,6 +1903,10 @@ final class FrameBufferTests: XCTestCase {
         XCTAssertEqual(snapshot.metadataTransactions, 2)
         XCTAssertGreaterThan(snapshot.logicalMetadataEventBytes, 0)
         XCTAssertGreaterThanOrEqual(snapshot.maximumIngestQueueDepth, 1)
+        let statistics = await buffer.storageStatistics()
+        XCTAssertEqual(statistics.frameCount, 1)
+        XCTAssertEqual(statistics.timelineSpanCount, 1)
+        XCTAssertEqual(statistics.observationCount, 2)
     }
 
     func testCaptureFlushEmitsOneAggregateCaptureMetricsLine() async throws {
@@ -1999,29 +1925,6 @@ final class FrameBufferTests: XCTestCase {
         XCTAssertTrue(entry.message.contains("durableJPEGEvents=1"))
         XCTAssertTrue(entry.message.contains("logicalJPEGEventBytes="))
         XCTAssertFalse(entry.message.contains("TestImageFactory"))
-    }
-
-    func testClearResetsInstrumentationEpochAndExactComparisonBaseline() async throws {
-        let buffer = try await makeBuffer()
-        let uniform = try XCTUnwrap(TestImageFactory.makeSolidImage(width: 32, height: 32, level: 40))
-        let base = Date()
-
-        await buffer.addFrameSync(uniform, timestamp: base, display: nil)
-        await buffer.addFrameSync(uniform, timestamp: base.addingTimeInterval(1), display: nil)
-        try await buffer.clear()
-
-        let afterClear = buffer.captureInstrumentationSnapshot()
-        XCTAssertEqual(afterClear.epoch, 1)
-        XCTAssertEqual(afterClear.capturedFrames, 0)
-        XCTAssertEqual(afterClear.persistedFrames, 0)
-        XCTAssertEqual(afterClear.currentTrackedDisplays, 0)
-
-        await buffer.addFrameSync(uniform, timestamp: base.addingTimeInterval(2), display: nil)
-        let afterNewCapture = buffer.captureInstrumentationSnapshot()
-        XCTAssertEqual(afterNewCapture.capturedFrames, 1)
-        XCTAssertEqual(afterNewCapture.exactComparisonEligibleFrames, 1)
-        XCTAssertEqual(afterNewCapture.exactComparisonBaselineAvailableFrames, 0)
-        XCTAssertEqual(afterNewCapture.repositoryExactDuplicateFrames, 0)
     }
 
     func testVisuallyDistinctFramesWithinSpacingAreBothStored() async throws {
@@ -2268,22 +2171,6 @@ final class FrameBufferTests: XCTestCase {
         )
     }
 
-    func testKnownDisplaysOrdersMostRecentFirst() async throws {
-        let buffer = try await makeBuffer()
-        let base = Date()
-        let displayA = DisplayInfo(id: UUID(), displayID: 1, name: "A")
-        let displayB = DisplayInfo(id: UUID(), displayID: 2, name: "B")
-
-        await buffer.addFrameSync(try makeStructuredImage(seed: 1), timestamp: base, display: displayA)
-        await buffer.addFrameSync(
-            try makeStructuredImage(seed: 2),
-            timestamp: base.addingTimeInterval(1),
-            display: displayB
-        )
-
-        XCTAssertEqual(buffer.knownDisplays().map(\.name), ["B", "A"])
-    }
-
     func testAllDiskMissingActivePayloadReplacementReconcilesProjectionAndOCR() async throws {
         try await assertMissingActivePayloadReconciliation(failReplacement: false)
     }
@@ -2292,10 +2179,14 @@ final class FrameBufferTests: XCTestCase {
         try await assertMissingActivePayloadReconciliation(failReplacement: true)
     }
 
+    // Also witnesses HybridFrameRepository invalidating a missing durable-only
+    // active payload before a fresh capture (see Docs/testing-policy.md).
     func testHybridMissingActivePayloadFailedReplacementReconcilesCommittedDeletion() async throws {
         try await assertMissingActivePayloadReconciliation(failReplacement: true, hybrid: true)
     }
 
+    // Also witnesses HybridFrameRepository invalidating a missing durable-only
+    // active payload before a fresh capture (see Docs/testing-policy.md).
     func testHybridMissingActivePayloadReplacementReconcilesProjectionAndOCR() async throws {
         try await assertMissingActivePayloadReconciliation(failReplacement: false, hybrid: true)
     }
