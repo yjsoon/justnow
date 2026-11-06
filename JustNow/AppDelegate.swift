@@ -1102,6 +1102,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, CaptureCoordinatorDelegate {
     }
 
     private func handleStatusMenuWillOpen() {
+        // Opening the menu bar menu does not activate JustNow, so the guide's
+        // activation check misses this way back from System Settings.
+        ScreenRecordingSettingsGuide.shared.close()
         updateFrameCountMenuItem()
         updatePauseMenuItem()
         updatePermissionHelpMenuItem()
