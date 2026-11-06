@@ -322,7 +322,9 @@ private struct AppBundleDragSource: NSViewRepresentable {
 }
 
 /// The guide never becomes key, so its controls must act on the first click.
-private final class ClickThroughHostingView<Content: View>: NSHostingView<Content> {
+/// Not generic: Swift 6.3.3 (Xcode 26.6) crashes in EarlyPerfInliner on the
+/// deinit of a generic NSHostingView subclass in Release builds.
+private final class ClickThroughHostingView: NSHostingView<ScreenRecordingSettingsGuideView> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
