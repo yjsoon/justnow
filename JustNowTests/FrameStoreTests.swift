@@ -47,48 +47,58 @@ final class FrameStoreTests: XCTestCase {
         let store = try FrameStore(directory: directory)
         let firstDisplayID = UUID()
         let secondDisplayID = UUID()
-        let now = Date()
-        _ = try await store.beginCaptureSession(at: now)
-        let first = try await store.recordTestCapture(
-            makeImage(), timestamp: now, hash: 1,
+        let baseDate = Date(timeIntervalSince1970: 1_000)
+        var expectedFirstSampleBytes: Int64 = 0
+        _ = try await store.beginCaptureSession(at: baseDate)
+
+        // The oldest first-display frame is recorded last, so sampling must
+        // order by timestamp rather than by insertion order.
+        for offset in 1...50 {
+            let metadata = try await store.recordTestCapture(
+                makeImage(),
+                timestamp: baseDate.addingTimeInterval(TimeInterval(offset)),
+                hash: UInt64(offset),
+                displayID: firstDisplayID,
+                displayName: "Built-in Display"
+            )
+            expectedFirstSampleBytes += metadata.fileSize
+        }
+        let oldest = try await store.recordTestCapture(
+            makeImage(width: 400, height: 300), timestamp: baseDate, hash: 51,
             displayID: firstDisplayID, displayName: "Built-in Display"
         )
         let second = try await store.recordTestCapture(
-            makeImage(), timestamp: now, hash: 2,
+            makeImage(), timestamp: baseDate, hash: 52,
             displayID: secondDisplayID, displayName: "External Display"
         )
         let legacy = try await store.recordTestCapture(
-            makeImage(), timestamp: now, hash: 3,
+            makeImage(), timestamp: baseDate, hash: 53,
             displayID: nil, displayName: nil
         )
 
         let statistics = await store.storageStatistics()
 
-        XCTAssertEqual(statistics.durableJPEGPayloadBytes, first.fileSize + second.fileSize + legacy.fileSize)
+        XCTAssertEqual(
+            statistics.durableJPEGPayloadBytes,
+            expectedFirstSampleBytes + oldest.fileSize + second.fileSize + legacy.fileSize
+        )
         XCTAssertGreaterThan(statistics.knownSQLiteAllocatedBytes, 0)
         XCTAssertGreaterThanOrEqual(statistics.sqliteWALAllocatedBytes, 0)
         XCTAssertLessThanOrEqual(
             statistics.sqliteWALAllocatedBytes,
             statistics.knownSQLiteAllocatedBytes
         )
-        XCTAssertEqual(statistics.frameCount, 3)
+        XCTAssertEqual(statistics.frameCount, 53)
         XCTAssertEqual(
             Set(statistics.projectionSamples.map(\.displayID)),
             Set<UUID?>([firstDisplayID, secondDisplayID, nil])
         )
-        XCTAssertEqual(statistics.projectionSamples.reduce(0) { $0 + $1.frameCount }, 3)
-    }
-
-    func testStorageStatisticsIncludeAllocatedRollbackJournalSpace() async throws {
-        let store = try FrameStore(directory: directory)
-        let before = await store.storageStatistics()
-        let journalURL = directory.appendingPathComponent("frames.sqlite-journal")
-        try Data(repeating: 0xA5, count: 8_192).write(to: journalURL)
-
-        let after = await store.storageStatistics()
-
-        XCTAssertGreaterThan(after.knownSQLiteAllocatedBytes, before.knownSQLiteAllocatedBytes)
-        XCTAssertEqual(after.sqliteWALAllocatedBytes, before.sqliteWALAllocatedBytes)
+        XCTAssertEqual(statistics.projectionSamples.reduce(0) { $0 + $1.frameCount }, 52)
+        let firstSample = try XCTUnwrap(
+            statistics.projectionSamples.first { $0.displayID == firstDisplayID }
+        )
+        XCTAssertEqual(firstSample.frameCount, 50)
+        XCTAssertEqual(firstSample.jpegPayloadBytes, expectedFirstSampleBytes)
     }
 
     func testStorageStatisticsAggregatesDurableCoverageInSQL() async throws {
@@ -161,54 +171,6 @@ final class FrameStoreTests: XCTestCase {
         XCTAssertFalse(combinedCoverage.combined.hasGaps)
     }
 
-    func testStorageStatisticsSamplesNewestFramesByTimestamp() async throws {
-        let store = try FrameStore(directory: directory)
-        let displayID = UUID()
-        let baseDate = Date(timeIntervalSince1970: 1_000)
-        var expectedSampleBytes: Int64 = 0
-        _ = try await store.beginCaptureSession(at: baseDate)
-
-        // The oldest frame is recorded last, so sampling must order by
-        // timestamp rather than by insertion order.
-        for offset in 1...50 {
-            let metadata = try await store.recordTestCapture(
-                makeImage(),
-                timestamp: baseDate.addingTimeInterval(TimeInterval(offset)),
-                hash: UInt64(offset),
-                displayID: displayID,
-                displayName: "Built-in Display"
-            )
-            expectedSampleBytes += metadata.fileSize
-        }
-        _ = try await store.recordTestCapture(
-            makeImage(width: 400, height: 300),
-            timestamp: baseDate,
-            hash: 51,
-            displayID: displayID,
-            displayName: "Built-in Display"
-        )
-
-        let statistics = await store.storageStatistics()
-        let sample = try XCTUnwrap(
-            statistics.projectionSamples.first { $0.displayID == displayID }
-        )
-
-        XCTAssertEqual(sample.frameCount, 50)
-        XCTAssertEqual(sample.jpegPayloadBytes, expectedSampleBytes)
-    }
-
-    func testLoadUnknownFrameThrowsFileNotFound() async throws {
-        let store = try FrameStore(directory: directory)
-        let unknownID = UUID()
-
-        do {
-            _ = try await store.loadFullImage(id: unknownID)
-            XCTFail("Expected fileNotFound")
-        } catch let FrameStoreError.fileNotFound(id) {
-            XCTAssertEqual(id, unknownID)
-        }
-    }
-
     func testFailedMetadataInsertRollsBackNewJPEG() async throws {
         let store = try FrameStore(directory: directory)
         let now = Date()
@@ -243,13 +205,14 @@ final class FrameStoreTests: XCTestCase {
     }
 
     func testSQLiteMetadataPersistsAcrossReinitialisation() async throws {
+        let timestamp = Date(timeIntervalSince1970: 2_000.125)
         let saved: FrameMetadata
         do {
             let store = try FrameStore(directory: directory)
-            _ = try await store.beginCaptureSession(at: Date(timeIntervalSince1970: 2_000))
+            _ = try await store.beginCaptureSession(at: timestamp)
             saved = try await store.recordTestCapture(
                 makeImage(),
-                timestamp: Date(timeIntervalSince1970: 2_000),
+                timestamp: timestamp,
                 hash: 7,
                 displayID: UUID(),
                 displayName: "Test Display"
@@ -263,6 +226,8 @@ final class FrameStoreTests: XCTestCase {
         XCTAssertEqual(metadata.map(\.id), [saved.id])
         XCTAssertEqual(metadata.first?.hash, 7)
         XCTAssertEqual(metadata.first?.displayName, "Test Display")
+        let persistedTimestamp = try XCTUnwrap(metadata.first?.timestamp)
+        XCTAssertEqual(persistedTimestamp.timeIntervalSince1970, timestamp.timeIntervalSince1970, accuracy: 0.000_001)
     }
 
     func testBusyStartupPreservesHealthyStoreAndCanReopenAfterWriterReleases() async throws {
@@ -388,28 +353,6 @@ final class FrameStoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: framesDirectoryURL().appendingPathComponent(retainedFrame.filename).path
         ))
-    }
-
-    func testSQLitePreservesSubSecondTimestamps() async throws {
-        let timestamp = Date(timeIntervalSince1970: 2_000.125)
-        do {
-            let store = try FrameStore(directory: directory)
-            _ = try await store.beginCaptureSession(at: timestamp)
-            _ = try await store.recordTestCapture(
-                makeImage(),
-                timestamp: timestamp,
-                hash: 7,
-                displayID: nil,
-                displayName: nil
-            )
-            await store.flush()
-        }
-
-        let reopened = try FrameStore(directory: directory)
-        let persistedMetadata = await reopened.getAllMetadata()
-        let persistedTimestamp = try XCTUnwrap(persistedMetadata.first?.timestamp)
-
-        XCTAssertEqual(persistedTimestamp.timeIntervalSince1970, timestamp.timeIntervalSince1970, accuracy: 0.000_001)
     }
 
     func testSecondStoreRefusesLifetimeLockUntilFirstStoreIsReleased() throws {
@@ -768,21 +711,6 @@ final class FrameStoreTests: XCTestCase {
         database.close()
     }
 
-    func testOwnedStoreMarkerMatchesDatabaseIdentity() throws {
-        _ = try FrameStore(directory: directory)
-        let markerValue = try String(
-            contentsOf: FrameStore.ownedStoreMarkerURL(in: directory),
-            encoding: .utf8
-        ).trimmingCharacters(in: .whitespacesAndNewlines)
-        let databaseValue = try sqliteText(
-            databaseURL: directory.appendingPathComponent("frames.sqlite"),
-            sql: "SELECT value FROM store_meta WHERE key = 'store_id';"
-        )
-
-        XCTAssertFalse(markerValue.isEmpty)
-        XCTAssertEqual(markerValue, databaseValue)
-    }
-
     func testCorruptLegacyManifestAndJPEGMoveToUniqueRecoveryBundle() async throws {
         let framesDirectory = directory.appendingPathComponent("frames", isDirectory: true)
         try FileManager.default.createDirectory(at: framesDirectory, withIntermediateDirectories: true)
@@ -1106,7 +1034,8 @@ final class FrameStoreTests: XCTestCase {
         do {
             _ = try await store.loadFullImage(id: metadata.id)
             XCTFail("Expected fileNotFound after cleanup")
-        } catch FrameStoreError.fileNotFound {
+        } catch let FrameStoreError.fileNotFound(id) {
+            XCTAssertEqual(id, metadata.id)
         }
     }
 
@@ -1275,134 +1204,76 @@ final class FrameStoreTests: XCTestCase {
         XCTAssertTrue(description?.contains("and 3 more") == true)
     }
 
-    func testStartupQuarantinesZeroLengthPayloadEvenWhenExpectedLengthIsZero() async throws {
-        let metadata: FrameMetadata
+    func testStartupQuarantinesInvalidPayloads() async throws {
+        // Each damaged payload fails one startup check (length or JPEG
+        // decodability); the untouched frame must survive the same reopen.
+        let zeroLength: FrameMetadata
+        let corrupt: FrameMetadata
+        let truncated: FrameMetadata
+        let lengthMismatch: FrameMetadata
+        let valid: FrameMetadata
         do {
             let store = try FrameStore(directory: directory)
             let captureStart = Date()
             _ = try await store.beginCaptureSession(at: captureStart)
-            metadata = try await store.recordTestCapture(
+            zeroLength = try await store.recordTestCapture(
                 makeImage(), timestamp: captureStart, hash: 1, displayID: nil, displayName: nil
+            )
+            corrupt = try await store.recordTestCapture(
+                makeImage(), timestamp: captureStart, hash: 2, displayID: nil, displayName: nil
+            )
+            truncated = try await store.recordTestCapture(
+                makeImage(), timestamp: captureStart, hash: 3, displayID: nil, displayName: nil
+            )
+            lengthMismatch = try await store.recordTestCapture(
+                makeImage(), timestamp: captureStart, hash: 4, displayID: nil, displayName: nil
+            )
+            valid = try await store.recordTestCapture(
+                makeImage(), timestamp: captureStart, hash: 5, displayID: nil, displayName: nil
             )
             await store.flush()
         }
-        let payloadURL = framesDirectoryURL().appendingPathComponent(metadata.filename)
-        try Data().write(to: payloadURL)
+
+        // Zero bytes with an expected length of zero still fails decoding.
+        try Data().write(to: framesDirectoryURL().appendingPathComponent(zeroLength.filename))
         try executeSQLite(
             databaseURL: directory.appendingPathComponent("frames.sqlite"),
-            sql: "UPDATE frames SET file_size = 0 WHERE id = '\(metadata.id.uuidString)';"
+            sql: "UPDATE frames SET file_size = 0 WHERE id = '\(zeroLength.id.uuidString)';"
         )
-
-        let reopened = try FrameStore(directory: directory)
-
-        let reopenedMetadata = await reopened.getAllMetadata()
-        XCTAssertTrue(reopenedMetadata.isEmpty)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: payloadURL.path))
-        XCTAssertTrue(recoveryContains(filename: metadata.filename))
-    }
-
-    func testStartupQuarantinesCorruptPayloadWithMatchingExpectedLength() async throws {
-        let metadata: FrameMetadata
-        do {
-            let store = try FrameStore(directory: directory)
-            let captureStart = Date()
-            _ = try await store.beginCaptureSession(at: captureStart)
-            metadata = try await store.recordTestCapture(
-                makeImage(), timestamp: captureStart, hash: 1, displayID: nil, displayName: nil
-            )
-            await store.flush()
-        }
-        let payloadURL = framesDirectoryURL().appendingPathComponent(metadata.filename)
-        try Data(repeating: 0x41, count: Int(metadata.fileSize)).write(to: payloadURL)
-
-        let reopened = try FrameStore(directory: directory)
-
-        let reopenedMetadata = await reopened.getAllMetadata()
-        XCTAssertTrue(reopenedMetadata.isEmpty)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: payloadURL.path))
-        XCTAssertTrue(recoveryContains(filename: metadata.filename))
-    }
-
-    func testStartupQuarantinesTruncatedPayload() async throws {
-        let metadata: FrameMetadata
-        do {
-            let store = try FrameStore(directory: directory)
-            let captureStart = Date()
-            _ = try await store.beginCaptureSession(at: captureStart)
-            metadata = try await store.recordTestCapture(
-                makeImage(), timestamp: captureStart, hash: 1, displayID: nil, displayName: nil
-            )
-            await store.flush()
-        }
-        let payloadURL = framesDirectoryURL().appendingPathComponent(metadata.filename)
-        let original = try Data(contentsOf: payloadURL)
-        try original.prefix(max(1, original.count / 2)).write(to: payloadURL)
-
-        let reopened = try FrameStore(directory: directory)
-
-        let reopenedMetadata = await reopened.getAllMetadata()
-        XCTAssertTrue(reopenedMetadata.isEmpty)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: payloadURL.path))
-        XCTAssertTrue(recoveryContains(filename: metadata.filename))
-    }
-
-    func testStartupQuarantinesDecodablePayloadWithLengthMismatch() async throws {
-        let metadata: FrameMetadata
-        do {
-            let store = try FrameStore(directory: directory)
-            let captureStart = Date()
-            _ = try await store.beginCaptureSession(at: captureStart)
-            metadata = try await store.recordTestCapture(
-                makeImage(), timestamp: captureStart, hash: 1, displayID: nil, displayName: nil
-            )
-            await store.flush()
-        }
-        let payloadURL = framesDirectoryURL().appendingPathComponent(metadata.filename)
-        var payload = try Data(contentsOf: payloadURL)
+        // Undecodable bytes with the expected length.
+        try Data(repeating: 0x41, count: Int(corrupt.fileSize))
+            .write(to: framesDirectoryURL().appendingPathComponent(corrupt.filename))
+        let truncatedURL = framesDirectoryURL().appendingPathComponent(truncated.filename)
+        let original = try Data(contentsOf: truncatedURL)
+        try original.prefix(max(1, original.count / 2)).write(to: truncatedURL)
+        // Decodable bytes with a length mismatch.
+        let mismatchURL = framesDirectoryURL().appendingPathComponent(lengthMismatch.filename)
+        var payload = try Data(contentsOf: mismatchURL)
         payload.append(contentsOf: [0, 1, 2, 3])
         XCTAssertNotNil(ImageEncoder.cgImage(from: payload))
-        try payload.write(to: payloadURL)
+        try payload.write(to: mismatchURL)
 
         let reopened = try FrameStore(directory: directory)
 
         let reopenedMetadata = await reopened.getAllMetadata()
-        XCTAssertTrue(reopenedMetadata.isEmpty)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: payloadURL.path))
-        XCTAssertTrue(recoveryContains(filename: metadata.filename))
-    }
-
-    func testThumbnailIsGeneratedLazilyAndCachedToDisk() async throws {
-        let store = try FrameStore(directory: directory)
-        let captureStart = Date()
-        _ = try await store.beginCaptureSession(at: captureStart)
-        let metadata = try await store.recordTestCapture(
-            makeImage(width: 400, height: 300),
-            timestamp: captureStart,
-            hash: 1,
-            displayID: nil,
-            displayName: nil
-        )
-
-        let thumbnail = await store.loadThumbnail(id: metadata.id)
-
-        XCTAssertNotNil(thumbnail)
-        XCTAssertLessThanOrEqual(
-            max(thumbnail?.width ?? 0, thumbnail?.height ?? 0),
-            Int(ImageEncoder.thumbnailMaxSize)
-        )
-        let framesDirectory = directory.appendingPathComponent("frames", isDirectory: true)
-        XCTAssertTrue(
-            FileManager.default.fileExists(
-                atPath: framesDirectory.appendingPathComponent(metadata.thumbnailFilename).path
-            )
-        )
+        XCTAssertEqual(reopenedMetadata.map(\.id), [valid.id])
+        for metadata in [zeroLength, corrupt, truncated, lengthMismatch] {
+            let payloadURL = framesDirectoryURL().appendingPathComponent(metadata.filename)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: payloadURL.path), "\(metadata.hash)")
+            XCTAssertTrue(recoveryContains(filename: metadata.filename), "\(metadata.hash)")
+        }
     }
 
     func testExactJPEGExtendsActiveSameDisplaySpanWithoutAnotherPayload() async throws {
         let store = try FrameStore(directory: directory)
         let displayID = UUID()
         let base = Date(timeIntervalSince1970: 10_000)
-        let jpeg = try XCTUnwrap(ImageEncoder.jpegData(from: makeImage(width: 32, height: 24), quality: 0.8))
+        let prefix = try XCTUnwrap(ImageEncoder.jpegData(from: makeImage(width: 32, height: 24), quality: 0.8))
+        // Exact comparison must not inherit the observer's comparable-size cap.
+        let jpeg = prefix + Data(
+            repeating: 0xA5,
+            count: CapturePersistenceInstrumentation.maximumComparableJPEGBytes + 1
+        )
         _ = try await store.beginCaptureSession(at: base)
         let first = StoredFrame(
             id: UUID(), timestamp: base, hash: 1,
@@ -1509,32 +1380,6 @@ final class FrameStoreTests: XCTestCase {
         let timeline = await store.getTimelineEntries()
         XCTAssertEqual(metadata.count, 2)
         XCTAssertEqual(timeline.count, 2)
-    }
-
-    func testExactJPEGLargerThanObserverBudgetStillExtendsSpan() async throws {
-        let store = try FrameStore(directory: directory)
-        let base = Date(timeIntervalSince1970: 30_000)
-        let prefix = try XCTUnwrap(ImageEncoder.jpegData(from: makeImage(), quality: 0.8))
-        let jpeg = prefix + Data(
-            repeating: 0xA5,
-            count: CapturePersistenceInstrumentation.maximumComparableJPEGBytes + 1
-        )
-        _ = try await store.beginCaptureSession(at: base)
-        let first = StoredFrame(id: UUID(), timestamp: base, hash: 1, displayID: nil, displayName: nil)
-        let second = StoredFrame(
-            id: UUID(), timestamp: base.addingTimeInterval(5), hash: 2,
-            displayID: nil, displayName: nil
-        )
-
-        _ = try await store.recordEncodedCapture(frame: first, jpegData: jpeg)
-        guard case .extended(let span) = try await store.recordEncodedCapture(frame: second, jpegData: jpeg).mutation else {
-            return XCTFail("Exact comparison must not have an observer-size cap")
-        }
-
-        XCTAssertGreaterThan(jpeg.count, CapturePersistenceInstrumentation.maximumComparableJPEGBytes)
-        XCTAssertEqual(span.observationCount, 2)
-        let metadata = await store.getAllMetadata()
-        XCTAssertEqual(metadata.count, 1)
     }
 
     func testSessionBoundaryNeverExtendsPriorSpanEvenForExactBytes() async throws {

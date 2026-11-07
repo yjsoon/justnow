@@ -518,6 +518,8 @@ final class FrameRepositoryTests: XCTestCase {
         XCTAssertEqual(nilCheckpoint.entry.span.displayName, "Latest Checkpoint Name")
     }
 
+    // Also witnesses the durable row written when a hybrid session close retries a
+    // post-JPEG promotion failure (see Docs/testing-policy.md).
     func testPromotionRetriesAfterPostPayloadPreDatabaseFailureWithoutPhantomTimeline() async throws {
         let instrumentation = CapturePersistenceInstrumentation()
         let store = try FrameStore(
