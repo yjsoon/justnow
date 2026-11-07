@@ -3,6 +3,32 @@
     <channel>
         <title>JustNow</title>
         <item>
+            <title>1.5.7</title>
+            <pubDate>Sat, 07 Nov 2026 01:06:10 +0000</pubDate>
+            <link>https://justnow.tk.sg</link>
+            <sparkle:fullReleaseNotesLink>https://justnow.tk.sg/releases/</sparkle:fullReleaseNotesLink>
+            <sparkle:version>27</sparkle:version>
+            <sparkle:shortVersionString>1.5.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown">- Add a Privacy section to Settings → General with a link to the new privacy policy at justnow.tk.sg/privacy.
+- Explain in Settings → General that macOS may show a privacy indicator while JustNow captures your screen, and that Pause Recording or quitting JustNow stops capture.
+- Replace the Screen Recording drag guide shown over System Settings with JustNow's own implementation. The previous guide was adapted from a project that declares no licence. It still offers JustNow to drag into the list, stays up while you grant access, hides while System Settings is in the background, and closes when you return to JustNow or click its × button.
+- Stop monitoring global keyboard events. Adaptive capture now notices typing from the system idle time and returns to its normal cadence within about 5 seconds; mouse and scroll activity still wake it immediately.
+- Make the Screen Recording permission alert dismissable with Not Now, name the current System Settings pane, and give numbered steps without developer-only wording. It no longer stacks a second copy when JustNow becomes active again.
+- Offer Relaunch JustNow once you return from System Settings, in the Screen Recording alert and the menu bar menu. macOS applies a new grant only after JustNow relaunches, and the running app often cannot tell that you granted it. Reopening JustNow during setup shows that alert instead of opening JustNow's Settings window behind it. When JustNow does detect the new permission, Relaunch JustNow now reopens it for you instead of only quitting.
+- Show the Screen Recording alert when JustNow relaunches without permission while it is waiting to retry capture, instead of staying on Recovering… and retrying every second.
+- Stay paused when you pause JustNow while it is still starting, instead of starting recording or showing a permission alert anyway.
+- Notarise and staple the app itself before packaging, so the ZIP, Sparkle updates, and copies installed from the DMG open without waiting on Gatekeeper's online check.
+- Show Screen Recording Help… in the menu while capture is stuck recovering after permission is revoked mid-run.
+- Wait to ask whether to check for updates automatically until recording works, recording can't start, you set Screen Recording setup aside, or you open Settings or Check for Updates, so the question no longer interrupts setup.
+- Compact the history and search databases after Clear All History, so cleared text no longer stays behind in unused space inside JustNow's database files.
+- Explain when JustNow is already running instead of showing a raw storage error, and quit the extra copy instead of hanging.
+- Find normal-size on-screen text in search. Background indexing now reads each frame at its captured resolution instead of a downscaled copy that fast text recognition could not read. Frames already indexed keep their existing text.
+- Correct the Show menu bar icon description in Settings, which described the opposite setting.
+</description>
+            <enclosure url="https://github.com/yjsoon/justnow/releases/download/v1.5.7/JustNow-v1.5.7-macos.zip" length="7103449" type="application/octet-stream" sparkle:edSignature="q6ktKK3vJQfEBEduVaoVMtfTqa8iRtE9CxqYyK4Aix3rKJv/wbUO9KB6qRR9FA6UI+wK9Wn/fyNEynqcmWSVDA==" />
+        </item>
+        <item>
             <title>1.5.6</title>
             <pubDate>Sun, 11 Oct 2026 08:50:29 +0000</pubDate>
             <link>https://justnow.tk.sg</link>
