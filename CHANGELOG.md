@@ -4,7 +4,7 @@ All notable changes to JustNow will be documented in this file.
 
 ## [Unreleased]
 
-## [1.5.7] - 2026-11-06
+## [1.5.7] - 2026-11-07
 
 ### Added
 - Add a Privacy section to Settings → General with a link to the new privacy policy at justnow.tk.sg/privacy.
